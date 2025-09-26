@@ -9,14 +9,46 @@ import {
   insertContractCollaboratorSchema,
   insertContractSignatureSchema,
   insertUserSchema,
+  insertNegotiationSchema,
+  insertNegotiationConversationSchema,
   activityEventSchema,
   batchActivitiesSchema,
   type ActivityEvent,
-  type BatchActivities
+  type BatchActivities,
+  type Negotiation,
+  type NegotiationConversation
 } from "@shared/schema";
 import { z } from "zod";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
+import OpenAI from "openai";
+
+// Rate limiting storage (in production, use Redis or database)
+const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
+
+// Rate limiting middleware
+function rateLimit(maxRequests: number, windowMs: number) {
+  return (req: any, res: any, next: any) => {
+    const userId = req.user?.claims?.sub;
+    if (!userId) return next();
+    
+    const now = Date.now();
+    const key = `${userId}:messages`;
+    const current = rateLimitStore.get(key);
+    
+    if (!current || now > current.resetTime) {
+      rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+    
+    if (current.count >= maxRequests) {
+      return res.status(429).json({ message: "Too many messages. Please wait before sending more." });
+    }
+    
+    current.count++;
+    next();
+  };
+}
 
 // Initialize Stripe only if secret key is available
 let stripe: Stripe | null = null;
@@ -34,6 +66,74 @@ if (stripeKey) {
   }
 } else {
   console.warn('STRIPE_SECRET_KEY not found - Stripe functionality will be disabled');
+}
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// AI Analysis function
+async function generateAIAnalysis(messages: any[], negotiation: any) {
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("OpenAI API key not configured - skipping AI analysis");
+    return null;
+  }
+
+  // Prepare conversation context
+  const conversationContext = messages.map(msg => 
+    `${msg.messageType === 'ai_suggestion' ? 'AI' : 'User'}: ${msg.message}`
+  ).join('\n');
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are an AI negotiation assistant. Analyze the following negotiation conversation and provide:
+1. A brief summary of the current negotiation state
+2. Key points and concerns raised by each party
+3. Potential areas of compromise
+4. A strategic suggestion for moving forward
+5. Overall sentiment score between -1 (negative) and 1 (positive)
+
+Be concise, objective, and focus on constructive outcomes. End with "Sentiment: [score]"`
+        },
+        {
+          role: "user",
+          content: `Negotiation Title: ${negotiation.title}
+Description: ${negotiation.description || 'No description provided'}
+
+Recent Conversation:
+${conversationContext}
+
+Please provide your analysis and strategic recommendation.`
+        }
+      ],
+      max_tokens: 500,
+      temperature: 0.7,
+    });
+
+    const aiContent = response.choices[0]?.message?.content || "Unable to generate analysis";
+    
+    // Extract sentiment from the main response instead of separate call
+    const sentimentMatch = aiContent.match(/sentiment[:\s]*(-?[0-9]*\.?[0-9]+)/i);
+    const sentimentScore = sentimentMatch ? Math.max(-1, Math.min(1, parseFloat(sentimentMatch[1]))) : 0;
+
+    return {
+      suggestion: aiContent,
+      analysis: {
+        sentimentScore,
+        timestamp: new Date().toISOString(),
+        messageCount: messages.length,
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini"
+      }
+    };
+  } catch (error) {
+    console.error("OpenAI API error:", error);
+    return null; // Graceful degradation - never throw
+  }
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -740,6 +840,187 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to track batch activities" });
     }
   });
+
+  // Negotiation CRUD endpoints
+  
+  // Get all negotiations for user
+  app.get('/api/negotiations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const negotiations = await storage.getNegotiations(userId);
+      res.json(negotiations);
+    } catch (error) {
+      console.error("Error fetching negotiations:", error);
+      res.status(500).json({ message: "Failed to fetch negotiations" });
+    }
+  });
+
+  // Get single negotiation
+  app.get('/api/negotiations/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const negotiationId = req.params.id;
+      const userId = req.user.claims.sub;
+      
+      const negotiation = await storage.getNegotiation(negotiationId);
+      if (!negotiation) {
+        return res.status(404).json({ message: "Negotiation not found" });
+      }
+      
+      // Check access (creator or participant)
+      const hasAccess = negotiation.createdBy === userId || 
+                       (negotiation.participants && negotiation.participants.includes(userId));
+      
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      res.json(negotiation);
+    } catch (error) {
+      console.error("Error fetching negotiation:", error);
+      res.status(500).json({ message: "Failed to fetch negotiation" });
+    }
+  });
+
+  // Create new negotiation
+  app.post('/api/negotiations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const negotiationData = insertNegotiationSchema.parse({
+        ...req.body,
+        createdBy: userId,
+      });
+      
+      const negotiation = await storage.createNegotiation(negotiationData);
+      res.status(201).json(negotiation);
+    } catch (error) {
+      console.error("Error creating negotiation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid negotiation data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create negotiation" });
+    }
+  });
+
+  // Update negotiation
+  app.patch('/api/negotiations/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const negotiationId = req.params.id;
+      const userId = req.user.claims.sub;
+      
+      const negotiation = await storage.getNegotiation(negotiationId);
+      if (!negotiation) {
+        return res.status(404).json({ message: "Negotiation not found" });
+      }
+      
+      // Only creator can update negotiation
+      if (negotiation.createdBy !== userId) {
+        return res.status(403).json({ message: "Only the creator can update this negotiation" });
+      }
+      
+      const updates = req.body;
+      const updatedNegotiation = await storage.updateNegotiation(negotiationId, updates);
+      res.json(updatedNegotiation);
+    } catch (error) {
+      console.error("Error updating negotiation:", error);
+      res.status(500).json({ message: "Failed to update negotiation" });
+    }
+  });
+
+  // Get negotiation conversations
+  app.get('/api/negotiations/:id/conversations', isAuthenticated, async (req: any, res) => {
+    try {
+      const negotiationId = req.params.id;
+      const userId = req.user.claims.sub;
+      
+      const negotiation = await storage.getNegotiation(negotiationId);
+      if (!negotiation) {
+        return res.status(404).json({ message: "Negotiation not found" });
+      }
+      
+      // Check access (creator or participant)
+      const hasAccess = negotiation.createdBy === userId || 
+                       (negotiation.participants && negotiation.participants.includes(userId));
+      
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const conversations = await storage.getNegotiationConversations(negotiationId);
+      res.json(conversations);
+    } catch (error) {
+      console.error("Error fetching conversations:", error);
+      res.status(500).json({ message: "Failed to fetch conversations" });
+    }
+  });
+
+  // Add conversation message (with optional AI analysis)
+  app.post('/api/negotiations/:id/conversations', isAuthenticated, rateLimit(10, 60000), async (req: any, res) => {
+    try {
+      const negotiationId = req.params.id;
+      const userId = req.user.claims.sub;
+      
+      const negotiation = await storage.getNegotiation(negotiationId);
+      if (!negotiation) {
+        return res.status(404).json({ message: "Negotiation not found" });
+      }
+      
+      // Check access (creator or participant)
+      const hasAccess = negotiation.createdBy === userId || 
+                       (negotiation.participants && negotiation.participants.includes(userId));
+      
+      if (!hasAccess) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const conversationData = insertNegotiationConversationSchema.parse({
+        ...req.body,
+        negotiationId,
+        senderId: userId,
+      });
+      
+      // Add the user message
+      const conversation = await storage.addNegotiationConversation(conversationData);
+      
+      // Send response immediately to ensure message delivery is not blocked by AI
+      res.status(201).json(conversation);
+      
+      // Process AI analysis asynchronously if enabled (never blocks message sending)
+      if (negotiation.aiAssistantEnabled && conversationData.messageType === 'text') {
+        setImmediate(async () => {
+          try {
+            // Get recent conversations and limit to last 5 for cost control
+            const conversations = await storage.getNegotiationConversations(negotiationId);
+            const recentMessages = conversations.slice(-5); // Enforce context limit here
+            
+            // Generate AI analysis (gracefully handles missing API key)
+            const analysis = await generateAIAnalysis(recentMessages, negotiation);
+            
+            // Add AI suggestion as a separate message if analysis succeeded
+            if (analysis?.suggestion) {
+              await storage.addNegotiationConversation({
+                negotiationId,
+                senderId: 'ai-assistant',
+                message: analysis.suggestion,
+                messageType: 'ai_suggestion',
+                sentimentScore: analysis.analysis.sentimentScore,
+                aiAnalysis: analysis.analysis,
+              });
+            }
+          } catch (aiError) {
+            console.error("Background AI analysis failed:", aiError);
+            // Error is logged but never affects user message delivery
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error adding conversation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid conversation data", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to add conversation" });
+    }
+  });
+
 
   const httpServer = createServer(app);
   return httpServer;

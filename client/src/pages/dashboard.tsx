@@ -99,6 +99,9 @@ export default function Dashboard() {
               <Link href="/analytics" className="nav-item" data-testid="tab-analytics">
                 <i className="fas fa-chart-bar mr-2"></i>Analytics
               </Link>
+              <Link href="/negotiations" className="nav-item" data-testid="tab-negotiations">
+                <i className="fas fa-handshake mr-2"></i>Negotiations
+              </Link>
               <Link href="/templates" className="nav-item" data-testid="tab-templates">
                 <i className="fas fa-layer-group mr-2"></i>Templates
               </Link>

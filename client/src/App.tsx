@@ -14,6 +14,8 @@ import Templates from "@/pages/templates";
 import Analytics from "@/pages/analytics";
 import Billing from "@/pages/billing";
 import ContractForm from "@/pages/contract-form";
+import Negotiations from "@/pages/negotiations";
+import NegotiationDetail from "@/pages/negotiation-detail";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -33,6 +35,8 @@ function Router() {
           <Route path="/analytics" component={Analytics} />
           <Route path="/templates" component={Templates} />
           <Route path="/billing" component={Billing} />
+          <Route path="/negotiations" component={Negotiations} />
+          <Route path="/negotiations/:id" component={NegotiationDetail} />
           <Route path="/contract/:type" component={ContractForm} />
         </>
       )}
