@@ -77,9 +77,52 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
     }
   };
 
-  const form = useForm({
+  const getDefaultValues = () => {
+    switch (contractType) {
+      case "split-sheet":
+        return {
+          title: "",
+          releaseDate: "",
+          collaborators,
+          performanceRoyalties: "equal",
+          mechanicalRoyalties: "equal",
+          additionalTerms: "",
+        };
+      case "performance":
+        return {
+          title: "",
+          venue: "",
+          eventDate: "",
+          performanceFee: 0,
+          technicalRequirements: "",
+          additionalTerms: "",
+        };
+      case "producer":
+        return {
+          title: "",
+          producerName: "",
+          beatPrice: 0,
+          royaltyPercentage: 0,
+          creditRequirement: "",
+          additionalTerms: "",
+        };
+      case "management":
+        return {
+          title: "",
+          managerName: "",
+          commissionRate: 0,
+          contractDuration: "",
+          responsibilities: "",
+          additionalTerms: "",
+        };
+      default:
+        return {};
+    }
+  };
+
+  const form = useForm<any>({
     resolver: zodResolver(getSchema()),
-    defaultValues: contractType === "split-sheet" ? { collaborators } : {},
+    defaultValues: getDefaultValues(),
   });
 
   const addCollaborator = () => {
@@ -96,7 +139,9 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
     const updated = [...collaborators];
     updated[index] = { ...updated[index], [field]: value };
     setCollaborators(updated);
-    form.setValue("collaborators", updated);
+    if (contractType === "split-sheet") {
+      form.setValue("collaborators", updated);
+    }
   };
 
   const handleSubmit = (data: any) => {
