@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { downloadContractPDF } from "@/lib/pdfGenerator";
 
 export default function Contracts() {
   const { toast } = useToast();
@@ -32,7 +33,16 @@ export default function Contracts() {
     }
   }, [isAuthenticated, isLoading, toast]);
 
-  const { data: contracts, isLoading: contractsLoading } = useQuery({
+  interface Contract {
+    id: string;
+    title: string;
+    type: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+  }
+
+  const { data: contracts, isLoading: contractsLoading } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],
     retry: false,
   });
@@ -50,12 +60,43 @@ export default function Contracts() {
     }
   };
 
-  const filteredContracts = contracts?.filter((contract: any) => {
+  const filteredContracts = contracts?.filter((contract) => {
     const matchesSearch = contract.title.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = typeFilter === "all" || contract.type === typeFilter;
     const matchesStatus = statusFilter === "all" || contract.status === statusFilter;
     return matchesSearch && matchesType && matchesStatus;
   });
+
+  const handleDownloadPDF = async (contract: Contract) => {
+    try {
+      // Fetch the full contract data including form data
+      const response = await fetch(`/api/contracts/${contract.id}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch contract details');
+      }
+      const fullContract = await response.json();
+      
+      // Generate and download PDF
+      downloadContractPDF({
+        title: fullContract.title,
+        type: fullContract.type,
+        data: fullContract.data,
+        createdAt: fullContract.createdAt
+      });
+      
+      toast({
+        title: "PDF Downloaded",
+        description: "Contract PDF has been downloaded successfully.",
+      });
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      toast({
+        title: "Download Error",
+        description: "Failed to download PDF. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
 
   if (isLoading || !isAuthenticated) {
     return (
@@ -177,7 +218,7 @@ export default function Contracts() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredContracts.map((contract: any) => (
+                  {filteredContracts.map((contract) => (
                     <tr key={contract.id} className="border-b border-border" data-testid={`contract-row-${contract.id}`}>
                       <td className="p-4">
                         <div>
@@ -195,7 +236,11 @@ export default function Contracts() {
                           <button className="text-muted-foreground hover:text-foreground" data-testid={`button-view-${contract.id}`}>
                             <i className="fas fa-eye"></i>
                           </button>
-                          <button className="text-muted-foreground hover:text-foreground" data-testid={`button-download-${contract.id}`}>
+                          <button 
+                            className="text-muted-foreground hover:text-foreground" 
+                            onClick={() => handleDownloadPDF(contract)}
+                            data-testid={`button-download-${contract.id}`}
+                          >
                             <i className="fas fa-download"></i>
                           </button>
                           <button className="text-muted-foreground hover:text-foreground" data-testid={`button-share-${contract.id}`}>
