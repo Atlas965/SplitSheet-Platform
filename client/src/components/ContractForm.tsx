@@ -14,18 +14,33 @@ const splitSheetSchema = z.object({
   collaborators: z.array(z.object({
     name: z.string().min(1, "Name is required"),
     role: z.string().min(1, "Role is required"),
-    ownershipPercentage: z.number().min(0).max(100),
+    ownershipPercentage: z.preprocess(
+      (val) => val === "" ? 0 : Number(val),
+      z.number().min(0, "Must be 0 or greater").max(100, "Cannot exceed 100%")
+    ),
   })).min(1, "At least one collaborator is required"),
   performanceRoyalties: z.string().default("equal"),
   mechanicalRoyalties: z.string().default("equal"),
   additionalTerms: z.string().optional(),
-});
+}).refine(
+  (data) => {
+    const total = data.collaborators.reduce((sum, c) => sum + c.ownershipPercentage, 0);
+    return Math.abs(total - 100) < 0.01;
+  },
+  {
+    message: "Total ownership must equal 100%",
+    path: ["collaborators"],
+  }
+);
 
 const performanceSchema = z.object({
   title: z.string().min(1, "Event title is required"),
   venue: z.string().min(1, "Venue is required"),
   eventDate: z.string().min(1, "Event date is required"),
-  performanceFee: z.number().min(0, "Performance fee must be positive"),
+  performanceFee: z.preprocess(
+    (val) => val === "" ? 0 : Number(val),
+    z.number().min(0, "Performance fee must be positive")
+  ),
   technicalRequirements: z.string().optional(),
   additionalTerms: z.string().optional(),
 });
@@ -33,8 +48,14 @@ const performanceSchema = z.object({
 const producerSchema = z.object({
   title: z.string().min(1, "Track title is required"),
   producerName: z.string().min(1, "Producer name is required"),
-  beatPrice: z.number().min(0, "Beat price must be positive"),
-  royaltyPercentage: z.number().min(0).max(100),
+  beatPrice: z.preprocess(
+    (val) => val === "" ? 0 : Number(val),
+    z.number().min(0, "Beat price must be positive")
+  ),
+  royaltyPercentage: z.preprocess(
+    (val) => val === "" ? 0 : Number(val),
+    z.number().min(0, "Must be 0 or greater").max(100, "Cannot exceed 100%")
+  ),
   creditRequirement: z.string().min(1, "Credit requirement is required"),
   additionalTerms: z.string().optional(),
 });
@@ -42,7 +63,10 @@ const producerSchema = z.object({
 const managementSchema = z.object({
   title: z.string().min(1, "Agreement title is required"),
   managerName: z.string().min(1, "Manager name is required"),
-  commissionRate: z.number().min(0).max(100),
+  commissionRate: z.preprocess(
+    (val) => val === "" ? 0 : Number(val),
+    z.number().min(0, "Must be 0 or greater").max(100, "Cannot exceed 100%")
+  ),
   contractDuration: z.string().min(1, "Contract duration is required"),
   responsibilities: z.string().min(1, "Responsibilities are required"),
   additionalTerms: z.string().optional(),
