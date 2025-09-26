@@ -77,14 +77,21 @@ interface ContractFormProps {
   onSubmit: (data: any) => void;
   onCancel: () => void;
   isLoading?: boolean;
+  initialData?: any;
+  isEdit?: boolean;
   "data-testid"?: string;
 }
 
-export default function ContractForm({ contractType, onSubmit, onCancel, isLoading = false, "data-testid": testId }: ContractFormProps) {
-  const [collaborators, setCollaborators] = useState([
-    { name: "", role: "writer", ownershipPercentage: 50 },
-    { name: "", role: "writer", ownershipPercentage: 50 },
-  ]);
+export default function ContractForm({ contractType, onSubmit, onCancel, isLoading = false, initialData, isEdit = false, "data-testid": testId }: ContractFormProps) {
+  const [collaborators, setCollaborators] = useState(() => {
+    if (isEdit && initialData?.collaborators && Array.isArray(initialData.collaborators) && initialData.collaborators.length > 0) {
+      return initialData.collaborators;
+    }
+    return [
+      { name: "", role: "writer", ownershipPercentage: 50 },
+      { name: "", role: "writer", ownershipPercentage: 50 },
+    ];
+  });
 
   const getSchema = () => {
     switch (contractType) {
@@ -102,6 +109,15 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
   };
 
   const getDefaultValues = () => {
+    // If editing and initial data exists, use it
+    if (isEdit && initialData) {
+      return {
+        ...initialData,
+        collaborators: initialData.collaborators || collaborators,
+      };
+    }
+    
+    // Otherwise use default values
     switch (contractType) {
       case "split-sheet":
         return {
@@ -155,7 +171,7 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
 
   const removeCollaborator = (index: number) => {
     if (collaborators.length > 1) {
-      setCollaborators(collaborators.filter((_, i) => i !== index));
+      setCollaborators(collaborators.filter((_: any, i: number) => i !== index));
     }
   };
 

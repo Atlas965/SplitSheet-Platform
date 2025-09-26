@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import Logo from "@/components/Logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,37 @@ export default function Contracts() {
   const { data: contracts, isLoading: contractsLoading } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],
     retry: false,
+  });
+
+  const deleteContractMutation = useMutation({
+    mutationFn: async (contractId: string) => {
+      return await apiRequest("DELETE", `/api/contracts/${contractId}`, {});
+    },
+    onSuccess: () => {
+      toast({
+        title: "Contract Deleted",
+        description: "The contract has been deleted successfully.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: "Failed to delete contract. Please try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   const getStatusBadge = (status: string) => {
@@ -233,9 +265,11 @@ export default function Contracts() {
                       <td className="p-4">{new Date(contract.createdAt).toLocaleDateString()}</td>
                       <td className="p-4">
                         <div className="flex items-center space-x-2">
-                          <button className="text-muted-foreground hover:text-foreground" data-testid={`button-view-${contract.id}`}>
-                            <i className="fas fa-eye"></i>
-                          </button>
+                          <Link href={`/contracts/${contract.id}`}>
+                            <button className="text-muted-foreground hover:text-foreground" data-testid={`button-view-${contract.id}`}>
+                              <i className="fas fa-eye"></i>
+                            </button>
+                          </Link>
                           <button 
                             className="text-muted-foreground hover:text-foreground" 
                             onClick={() => handleDownloadPDF(contract)}
@@ -245,6 +279,18 @@ export default function Contracts() {
                           </button>
                           <button className="text-muted-foreground hover:text-foreground" data-testid={`button-share-${contract.id}`}>
                             <i className="fas fa-share"></i>
+                          </button>
+                          <button 
+                            className="text-muted-foreground hover:text-red-600" 
+                            onClick={() => {
+                              if (window.confirm('Are you sure you want to delete this contract? This action cannot be undone.')) {
+                                deleteContractMutation.mutate(contract.id);
+                              }
+                            }}
+                            disabled={deleteContractMutation.isPending}
+                            data-testid={`button-delete-${contract.id}`}
+                          >
+                            <i className="fas fa-trash"></i>
                           </button>
                         </div>
                       </td>

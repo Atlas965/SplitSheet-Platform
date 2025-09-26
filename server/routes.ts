@@ -81,12 +81,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/contracts/:id', isAuthenticated, async (req, res) => {
+  app.get('/api/contracts/:id', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
+      
+      // Check if user owns this contract or is a collaborator
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const isCollaborator = collaborators.some(c => c.userId === userId);
+        if (!isCollaborator) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      
       res.json(contract);
     } catch (error) {
       console.error("Error fetching contract:", error);
@@ -113,19 +124,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/contracts/:id', isAuthenticated, async (req, res) => {
+  app.patch('/api/contracts/:id', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Check if user owns this contract or is a collaborator with edit permission
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const userCollaborator = collaborators.find(c => c.userId === userId);
+        if (!userCollaborator || userCollaborator.status !== 'accepted') {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      
       const updates = req.body;
-      const contract = await storage.updateContract(req.params.id, updates);
-      res.json(contract);
+      const updatedContract = await storage.updateContract(req.params.id, updates);
+      res.json(updatedContract);
     } catch (error) {
       console.error("Error updating contract:", error);
       res.status(500).json({ message: "Failed to update contract" });
     }
   });
 
-  app.delete('/api/contracts/:id', isAuthenticated, async (req, res) => {
+  app.delete('/api/contracts/:id', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Only the contract owner can delete the contract
+      if (contract.createdBy !== userId) {
+        return res.status(403).json({ message: "Only the contract owner can delete this contract" });
+      }
+      
       await storage.deleteContract(req.params.id);
       res.json({ message: "Contract deleted successfully" });
     } catch (error) {
@@ -135,8 +172,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contract collaborator routes
-  app.get('/api/contracts/:id/collaborators', isAuthenticated, async (req, res) => {
+  app.get('/api/contracts/:id/collaborators', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Check if user owns this contract or is a collaborator
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const isCollaborator = collaborators.some(c => c.userId === userId);
+        if (!isCollaborator) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      
       const collaborators = await storage.getContractCollaborators(req.params.id);
       res.json(collaborators);
     } catch (error) {
@@ -145,8 +197,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/contracts/:id/collaborators', isAuthenticated, async (req, res) => {
+  app.post('/api/contracts/:id/collaborators', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Only the contract owner can add collaborators
+      if (contract.createdBy !== userId) {
+        return res.status(403).json({ message: "Only the contract owner can add collaborators" });
+      }
+      
       const collaboratorData = insertContractCollaboratorSchema.parse({
         ...req.body,
         contractId: req.params.id,
@@ -164,8 +227,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contract signature routes
-  app.get('/api/contracts/:id/signatures', isAuthenticated, async (req, res) => {
+  app.get('/api/contracts/:id/signatures', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Check if user owns this contract or is a collaborator
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const isCollaborator = collaborators.some(c => c.userId === userId);
+        if (!isCollaborator) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      
       const signatures = await storage.getContractSignatures(req.params.id);
       res.json(signatures);
     } catch (error) {
@@ -174,11 +252,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/contracts/:id/signatures', isAuthenticated, async (req, res) => {
+  app.post('/api/contracts/:id/signatures', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+      
+      // Check if user owns this contract or is a collaborator
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const isCollaborator = collaborators.some(c => c.userId === userId);
+        if (!isCollaborator) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+      
       const signatureData = insertContractSignatureSchema.parse({
         ...req.body,
         contractId: req.params.id,
+        userId: userId, // Ensure signature is associated with authenticated user
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
       });
