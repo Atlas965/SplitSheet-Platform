@@ -9,6 +9,7 @@ import Dashboard from "@/pages/dashboard";
 import Contracts from "@/pages/contracts";
 import ContractDetails from "@/pages/contract-details";
 import ContractEdit from "@/pages/contract-edit";
+import Profile from "@/pages/profile";
 import Templates from "@/pages/templates";
 import Billing from "@/pages/billing";
 import ContractForm from "@/pages/contract-form";
@@ -27,6 +28,7 @@ function Router() {
           <Route path="/contracts" component={Contracts} />
           <Route path="/contracts/:id" component={ContractDetails} />
           <Route path="/contracts/:id/edit" component={ContractEdit} />
+          <Route path="/profile" component={Profile} />
           <Route path="/templates" component={Templates} />
           <Route path="/billing" component={Billing} />
           <Route path="/contract/:type" component={ContractForm} />
