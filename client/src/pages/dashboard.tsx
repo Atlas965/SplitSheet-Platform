@@ -6,6 +6,9 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import Logo from "@/components/Logo";
 import StatCard from "@/components/StatCard";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { ChevronDown, Home, User, FileText, Handshake, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu } from "lucide-react";
 
 interface DashboardStats {
   totalContracts: number;
@@ -71,8 +74,8 @@ export default function Dashboard() {
               <span className="text-xl font-bold text-primary">Splitfy</span>
             </div>
             <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground">
-                <i className="fas fa-bell"></i>
+              <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
+                <Bell className="h-4 w-4" />
               </button>
               <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
                 JD
@@ -83,40 +86,127 @@ export default function Dashboard() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Dashboard Tabs */}
+        {/* Navigation Dropdown Menu */}
         <div className="mb-8">
-          <div className="border-b border-border">
-            <nav className="-mb-px flex space-x-8">
-              <Link href="/" className="nav-item nav-active" data-testid="tab-overview">
-                <i className="fas fa-home mr-2"></i>Overview
-              </Link>
-              <Link href="/contracts" className="nav-item" data-testid="tab-contracts">
-                <i className="fas fa-file-contract mr-2"></i>Contracts
-              </Link>
-              <Link href="/profile" className="nav-item" data-testid="tab-profile">
-                <i className="fas fa-user mr-2"></i>Profile
-              </Link>
-              <Link href="/analytics" className="nav-item" data-testid="tab-analytics">
-                <i className="fas fa-chart-bar mr-2"></i>Analytics
-              </Link>
-              <Link href="/negotiations" className="nav-item" data-testid="tab-negotiations">
-                <i className="fas fa-handshake mr-2"></i>Negotiations
-              </Link>
-              <Link href="/matches" className="nav-item" data-testid="tab-matches">
-                <i className="fas fa-users mr-2"></i>Connections
-              </Link>
-              <Link href="/messages" className="nav-item" data-testid="tab-messages">
-                <i className="fas fa-envelope mr-2"></i>Messages
-              </Link>
-              <Link href="/search" className="nav-item" data-testid="tab-search">
-                <i className="fas fa-search mr-2"></i>Search
-              </Link>
-              <Link href="/templates" className="nav-item" data-testid="tab-templates">
-                <i className="fas fa-layer-group mr-2"></i>Templates
-              </Link>
-              <Link href="/billing" className="nav-item" data-testid="tab-billing">
-                <i className="fas fa-credit-card mr-2"></i>Billing
-              </Link>
+          <div className="border-b border-border pb-4">
+            <nav className="relative">
+              {/* Main Navigation Dropdown */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  {/* Primary Action - Dashboard */}
+                  <Link href="/" className="nav-item nav-active" data-testid="tab-overview">
+                    <Home className="mr-2 h-4 w-4" />Dashboard
+                  </Link>
+                  
+                  {/* Navigation Dropdown - Accessible */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="nav-item flex items-center space-x-2" data-testid="nav-dropdown-trigger">
+                        <Menu className="mr-1 h-4 w-4" />
+                        <span>Navigation</span>
+                        <ChevronDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-64" align="start" data-testid="nav-dropdown-menu">
+                      {/* Highest Precedence - Core Functions */}
+                      <DropdownMenuLabel>Core Functions</DropdownMenuLabel>
+                      <DropdownMenuItem asChild data-testid="dropdown-profile">
+                        <Link href="/profile" className="flex items-center w-full">
+                          <User className="mr-3 h-4 w-4" />
+                          <span>Profile</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Essential</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-contracts">
+                        <Link href="/contracts" className="flex items-center w-full">
+                          <FileText className="mr-3 h-4 w-4" />
+                          <span>Contracts</span>
+                          <span className="ml-auto text-xs text-muted-foreground">High</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-negotiations">
+                        <Link href="/negotiations" className="flex items-center w-full">
+                          <Handshake className="mr-3 h-4 w-4" />
+                          <span>Negotiations</span>
+                          <span className="ml-auto text-xs text-muted-foreground">High</span>
+                        </Link>
+                      </DropdownMenuItem>
+
+                      <DropdownMenuSeparator />
+
+                      {/* Medium-High Precedence - Communication */}
+                      <DropdownMenuLabel>Communication</DropdownMenuLabel>
+                      <DropdownMenuItem asChild data-testid="dropdown-messages">
+                        <Link href="/messages" className="flex items-center w-full">
+                          <Mail className="mr-3 h-4 w-4" />
+                          <span>Messages</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-matches">
+                        <Link href="/matches" className="flex items-center w-full">
+                          <Users className="mr-3 h-4 w-4" />
+                          <span>Connections</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-search">
+                        <Link href="/search" className="flex items-center w-full">
+                          <Search className="mr-3 h-4 w-4" />
+                          <span>Search</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
+                        </Link>
+                      </DropdownMenuItem>
+
+                      <DropdownMenuSeparator />
+
+                      {/* Lower Precedence - Tools & Admin */}
+                      <DropdownMenuLabel>Tools & Analytics</DropdownMenuLabel>
+                      <DropdownMenuItem asChild data-testid="dropdown-analytics">
+                        <Link href="/analytics" className="flex items-center w-full">
+                          <BarChart className="mr-3 h-4 w-4" />
+                          <span>Analytics</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-templates">
+                        <Link href="/templates" className="flex items-center w-full">
+                          <Layers className="mr-3 h-4 w-4" />
+                          <span>Templates</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-billing">
+                        <Link href="/billing" className="flex items-center w-full">
+                          <CreditCard className="mr-3 h-4 w-4" />
+                          <span>Billing</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Lowest</span>
+                        </Link>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                
+                {/* Quick Actions */}
+                <div className="flex items-center space-x-3">
+                  <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
+                    <Link href="/contract/new">
+                      <Plus className="mr-1 h-3 w-3" />
+                      New Contract
+                    </Link>
+                  </Button>
+                  <Button variant="ghost" size="sm" asChild data-testid="quick-messages">
+                    <Link href="/messages">
+                      <Mail className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                  <Button variant="ghost" size="sm" asChild data-testid="quick-notifications">
+                    <Link href="/notifications">
+                      <Bell className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
             </nav>
           </div>
         </div>
@@ -202,25 +292,25 @@ export default function Dashboard() {
           <div className="bg-card p-6 rounded-xl border border-border">
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
             <div className="space-y-3">
-              <Link href="/templates" className="block w-full">
-                <button className="w-full flex items-center space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors" data-testid="button-create-contract">
-                  <i className="fas fa-plus"></i>
+              <Button asChild className="w-full justify-start space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90" data-testid="button-create-contract">
+                <Link href="/templates">
+                  <Plus className="h-4 w-4" />
                   <span>Create New Contract</span>
-                </button>
-              </Link>
+                </Link>
+              </Button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-muted/80 transition-colors" data-testid="button-upload-contract">
-                <i className="fas fa-upload"></i>
+              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-upload-contract">
+                <Upload className="h-4 w-4" />
                 <span>Upload Existing Contract</span>
               </button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-muted/80 transition-colors" data-testid="button-invite-collaborator">
-                <i className="fas fa-users"></i>
+              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-invite-collaborator">
+                <Users className="h-4 w-4" />
                 <span>Invite Collaborator</span>
               </button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-muted/80 transition-colors" data-testid="button-export-contracts">
-                <i className="fas fa-download"></i>
+              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-export-contracts">
+                <Download className="h-4 w-4" />
                 <span>Export All Contracts</span>
               </button>
             </div>

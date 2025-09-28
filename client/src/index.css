@@ -105,4 +105,30 @@
   .nav-item {
     @apply text-muted-foreground hover:text-foreground transition-colors cursor-pointer pb-4;
   }
+
+  /* Dropdown Navigation Styles */
+  .dropdown-item {
+    @apply flex items-center space-x-3 px-3 py-2.5 text-sm text-foreground hover:bg-accent hover:text-accent-foreground transition-colors cursor-pointer rounded-none;
+  }
+  
+  .dropdown-item i {
+    @apply text-muted-foreground;
+  }
+  
+  .dropdown-item:hover i {
+    @apply text-accent-foreground;
+  }
+
+  /* Button Styles */
+  .btn {
+    @apply inline-flex items-center justify-center rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50;
+  }
+  
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:opacity-90;
+  }
+  
+  .btn-sm {
+    @apply h-8 px-3 text-xs;
+  }
 }
