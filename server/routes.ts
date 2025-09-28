@@ -442,13 +442,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+      
+      // Validate and clean the profile data with strict allowlist
       const updateData = insertUserSchema.partial().parse(req.body);
-      const updatedUser = await storage.updateUser(userId, updateData);
+      
+      // Remove protected fields that users cannot update
+      const {
+        stripeCustomerId,
+        stripeSubscriptionId,
+        subscriptionStatus,
+        subscriptionTier,
+        role,
+        isActive,
+        ...cleanData
+      } = updateData;
+      
+      const updatedUser = await storage.updateUser(userId, cleanData);
       res.json(updatedUser);
     } catch (error) {
       console.error("Error updating profile:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid profile data", errors: error.errors });
+        return res.status(400).json({ 
+          message: "Invalid profile data", 
+          errors: error.errors.map(e => ({ field: e.path.join('.'), message: e.message }))
+        });
       }
       res.status(500).json({ message: "Failed to update profile" });
     }
@@ -708,7 +725,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Subscription cancelled successfully",
         subscriptionId: subscription.id,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        currentPeriodEnd: subscription.current_period_end,
+        currentPeriodEnd: (subscription as any).current_period_end * 1000,
       });
     } catch (error: any) {
       console.error("Subscription cancellation error:", error);
@@ -742,9 +759,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             status: subscription.status,
             tier: subscription.metadata?.tier || user.subscriptionTier || 'pro',
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
-            currentPeriodStart: subscription.current_period_start,
-            currentPeriodEnd: subscription.current_period_end,
-            nextBillingDate: subscription.current_period_end,
+            currentPeriodStart: (subscription as any).current_period_start * 1000,
+            currentPeriodEnd: (subscription as any).current_period_end * 1000,
+            nextBillingDate: (subscription as any).current_period_end * 1000,
           });
         } catch (stripeError: any) {
           console.error("Stripe API error:", stripeError);

@@ -20,7 +20,14 @@ import { User, insertUserSchema } from "@shared/schema";
 import { Camera, User as UserIcon, Mail, Phone, MapPin, Globe, Plus, X } from "lucide-react";
 import { activityTracker } from "@/lib/activityTracker";
 
-const profileSchema = insertUserSchema.extend({
+const profileSchema = insertUserSchema.omit({
+  stripeCustomerId: true,
+  stripeSubscriptionId: true,
+  subscriptionStatus: true,
+  subscriptionTier: true,
+  role: true,
+  isActive: true,
+}).extend({
   skills: z.array(z.string()).default([]),
   contactInfo: z.object({
     phone: z.string().optional(),
@@ -47,26 +54,43 @@ export default function ProfilePage() {
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
-      firstName: user?.firstName || "",
-      lastName: user?.lastName || "",
-      email: user?.email || "",
-      bio: user?.bio || "",
-      skills: user?.skills || [],
-      contactInfo: user?.contactInfo || { phone: "", location: "", website: "" },
-    },
-    values: {
-      firstName: user?.firstName || "",
-      lastName: user?.lastName || "",
-      email: user?.email || "",
-      bio: user?.bio || "",
-      skills: user?.skills || [],
-      contactInfo: user?.contactInfo || { phone: "", location: "", website: "" },
+      firstName: "",
+      lastName: "",
+      email: "",
+      bio: "",
+      skills: [],
+      contactInfo: { phone: "", location: "", website: "" },
     },
   });
 
+  // Reset form when user data loads
+  React.useEffect(() => {
+    if (user) {
+      form.reset({
+        firstName: user.firstName || "",
+        lastName: user.lastName || "",
+        email: user.email || "",
+        bio: user.bio || "",
+        skills: user.skills || [],
+        contactInfo: user.contactInfo || { phone: "", location: "", website: "" },
+      });
+    }
+  }, [user, form]);
+
   const updateProfileMutation = useMutation({
-    mutationFn: (data: ProfileFormData) => 
-      apiRequest("/api/profile", "PATCH", data),
+    mutationFn: async (data: ProfileFormData) => {
+      // Only send fields that have values (don't send empty strings that could overwrite data)
+      const cleanData: Partial<ProfileFormData> = {};
+      
+      if (data.firstName) cleanData.firstName = data.firstName;
+      if (data.lastName) cleanData.lastName = data.lastName;
+      if (data.email) cleanData.email = data.email;
+      if (data.bio !== undefined) cleanData.bio = data.bio; // Allow empty bio
+      if (data.skills && data.skills.length > 0) cleanData.skills = data.skills;
+      if (data.contactInfo) cleanData.contactInfo = data.contactInfo;
+      
+      return apiRequest("/api/profile", "PATCH", cleanData);
+    },
     onSuccess: () => {
       activityTracker.trackProfileAction('profile_updated', { fieldsUpdated: Object.keys(form.getValues()) });
       toast({
