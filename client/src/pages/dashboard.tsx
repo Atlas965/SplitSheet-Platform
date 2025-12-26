@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -8,7 +8,8 @@ import Logo from "@/components/Logo";
 import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Home, User, FileText, Handshake, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu } from "lucide-react";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { ChevronDown, Home, User, FileText, Handshake, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2 } from "lucide-react";
 
 interface DashboardStats {
   totalContracts: number;
@@ -53,6 +54,25 @@ export default function Dashboard() {
   const { data: contracts, isLoading: contractsLoading } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],
     retry: false,
+  });
+
+  const deleteContractMutation = useMutation({
+    mutationFn: (contractId: string) => apiRequest("/api/contracts/" + contractId, "DELETE"),
+    onSuccess: () => {
+      toast({
+        title: "Contract deleted",
+        description: "The contract has been removed from recent activity.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to delete contract. Please try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   if (isLoading || !isAuthenticated) {
@@ -259,7 +279,7 @@ export default function Dashboard() {
                 </div>
               ) : contracts && contracts.length > 0 ? (
                 contracts.slice(0, 3).map((contract) => (
-                  <div key={contract.id} className="flex items-center space-x-4 p-4 bg-muted rounded-lg">
+                  <div key={contract.id} className="flex items-center space-x-4 p-4 bg-muted rounded-lg group hover:bg-muted/80 transition-colors">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                       contract.status === 'signed' ? 'bg-green-100' : 
                       contract.status === 'pending' ? 'bg-yellow-100' : 'bg-blue-100'
@@ -277,6 +297,15 @@ export default function Dashboard() {
                         {new Date(contract.updatedAt).toLocaleDateString()}
                       </p>
                     </div>
+                    <button
+                      onClick={() => deleteContractMutation.mutate(contract.id)}
+                      disabled={deleteContractMutation.isPending}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-red-100 hover:text-red-600 rounded-lg"
+                      data-testid={`button-delete-contract-${contract.id}`}
+                      title="Delete contract"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
                 ))
               ) : (
