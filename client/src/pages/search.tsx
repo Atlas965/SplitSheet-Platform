@@ -220,7 +220,6 @@ export default function SearchPage() {
                 <SelectValue placeholder="Subscription tier" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All tiers</SelectItem>
                 <SelectItem value="free">Free</SelectItem>
                 <SelectItem value="pro">Pro</SelectItem>
                 <SelectItem value="enterprise">Enterprise</SelectItem>

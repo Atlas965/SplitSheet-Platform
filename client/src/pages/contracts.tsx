@@ -102,9 +102,9 @@ export default function Contracts() {
   const handleDownloadPDF = async (contract: Contract) => {
     try {
       // Fetch the full contract data including form data
-      const response = await fetch(`/api/contracts/${contract.id}`);
+      const response = await fetch(`/api/contracts/${contract.id}`)
       if (!response.ok) {
-        throw new Error('Failed to fetch contract details');
+        throw('Failed to fetch contract details');
       }
       const fullContract = await response.json();
       

@@ -28,7 +28,7 @@ export default function MatchesPage() {
   // Connect with a user
   const connectMutation = useMutation({
     mutationFn: async (data: { matchedUserId: string; matchScore: number; matchReason: string }) => {
-      return await apiRequest("POST", "/api/matches", data);
+      return await apiRequest("POST", "/api/matches", data)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/matches/recommendations'] });
