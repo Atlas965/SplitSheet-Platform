@@ -4,7 +4,7 @@ export default function Logo({ className = "" }: { className?: string }) {
   return (
     <img 
       src={logoImage} 
-      alt="Splitfy Logo" 
+      alt="SplitSheet Logo" 
       className={`w-8 h-8 ${className}`} 
       data-testid="logo"
     />

@@ -1,6 +1,6 @@
 # Overview
 
-Splitfy is a professional music contract management platform designed specifically for indie artists, producers, and music industry professionals. The application enables users to create, manage, and digitally sign various types of music contracts including split sheet agreements, performance contracts, producer agreements, and management contracts. Built with a full-stack architecture, it provides lawyer-informed contract templates with customizable fields and automated PDF generation capabilities.
+SplitSheet is a professional music contract management platform designed specifically for indie artists, producers, and music industry professionals. The application enables users to create, manage, and digitally sign various types of music contracts including split sheet agreements, performance contracts, producer agreements, and management contracts. Built with a full-stack architecture, it provides lawyer-informed contract templates with customizable fields and automated PDF generation capabilities.
 
 # User Preferences
 

@@ -366,7 +366,7 @@ export default function ContractDetails() {
             <div className="flex justify-between items-center h-16">
               <div className="flex items-center space-x-3">
                 <Logo />
-                <span className="text-xl font-bold text-primary">Splitfy</span>
+                <span className="text-xl font-bold text-primary">SplitSheet</span>
               </div>
             </div>
           </div>
@@ -386,7 +386,7 @@ export default function ContractDetails() {
             <div className="flex justify-between items-center h-16">
               <div className="flex items-center space-x-3">
                 <Logo />
-                <span className="text-xl font-bold text-primary">Splitfy</span>
+                <span className="text-xl font-bold text-primary">SplitSheet</span>
               </div>
             </div>
           </div>
@@ -412,7 +412,7 @@ export default function ContractDetails() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
               <Logo />
-              <span className="text-xl font-bold text-primary">Splitfy</span>
+              <span className="text-xl font-bold text-primary">SplitSheet</span>
             </div>
             <div className="flex items-center space-x-4">
               <button className="text-muted-foreground hover:text-foreground">
