@@ -148,7 +148,7 @@ export const userMatches = pgTable("user_matches", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id).notNull(),
   matchedUserId: varchar("matched_user_id").references(() => users.id).notNull(),
-  matchScore: decimal("match_score", { precision: 3, scale: 2 }),
+  matchScore: decimal("match_score", { precision: 5, scale: 2 }),
   matchReason: text("match_reason"),
   status: varchar("status").default("suggested"), // suggested, connected, dismissed
   createdAt: timestamp("created_at").defaultNow(),

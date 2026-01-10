@@ -543,48 +543,97 @@ export default function ContractDetails() {
           </div>
         </div>
 
-        {/* Delete Confirmation Dialog */}
-        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-          <AlertDialogContent data-testid="delete-contract-dialog">
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Contract</AlertDialogTitle>
-            </AlertDialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Are you sure you want to delete <span className="font-semibold">"{contract?.title}"</span>? This action is permanent and cannot be undone.
-              </p>
-              <p className="text-xs text-red-600 font-semibold">
-                All contract data, collaborations, and associated information will be permanently removed.
-              </p>
+        {/* E-Signature Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+          <div className="lg:col-span-2 space-y-6">
+            {/* Contract Content */}
+            <div className="space-y-6">
+              {renderContractContent()}
+
+              {contract.data.additionalTerms && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Additional Terms</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-muted-foreground whitespace-pre-wrap">{contract.data.additionalTerms}</p>
+                  </CardContent>
+                </Card>
+              )}
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
-              <Button
-                variant="destructive"
-                onClick={() => deleteContractMutation.mutate()}
-                disabled={deleteContractMutation.isPending}
-                data-testid="button-confirm-delete"
-              >
-                {deleteContractMutation.isPending ? "Deleting..." : "Delete Contract"}
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          </div>
 
-        {/* Contract Content */}
-        <div className="space-y-6">
-          {renderContractContent()}
-
-          {contract.data.additionalTerms && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Additional Terms</CardTitle>
+          <div className="space-y-6">
+            <Card className="border-primary/20 shadow-md">
+              <CardHeader className="bg-primary/5">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <i className="fas fa-pen-nib text-primary"></i>
+                  Digital Signature
+                </CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-muted-foreground whitespace-pre-wrap">{contract.data.additionalTerms}</p>
+              <CardContent className="pt-6 space-y-4">
+                <div className="p-4 border-2 border-dashed border-muted rounded-lg text-center bg-muted/30">
+                  {contract.status === 'signed' ? (
+                    <div className="space-y-2">
+                      <i className="fas fa-check-circle text-green-500 text-2xl"></i>
+                      <p className="font-semibold text-green-700">Contract Signed</p>
+                      <p className="text-xs text-muted-foreground">
+                        Legally binding digital signature applied
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Click below to apply your legally binding digital signature to this contract.
+                      </p>
+                      <Button 
+                        className="w-full" 
+                        onClick={() => updateStatusMutation.mutate('signed')}
+                        data-testid="button-esign-contract"
+                      >
+                        Sign Contract Now
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="text-[10px] text-muted-foreground space-y-1">
+                  <p className="flex items-center gap-1">
+                    <i className="fas fa-shield-alt"></i>
+                    Secure 256-bit encryption
+                  </p>
+                  <p className="flex items-center gap-1">
+                    <i className="fas fa-gavel"></i>
+                    Compliance: ESIGN & UETA Acts
+                  </p>
+                </div>
               </CardContent>
             </Card>
-          )}
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-medium">Collaboration History</CardTitle>
+              </CardHeader>
+              <CardContent className="text-xs space-y-3">
+                <div className="flex items-start gap-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500 mt-1" />
+                  <div>
+                    <p className="font-medium">Contract Created</p>
+                    <p className="text-muted-foreground">{new Date(contract.createdAt).toLocaleString()}</p>
+                  </div>
+                </div>
+                {contract.status === 'signed' && (
+                  <div className="flex items-start gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-1" />
+                    <div>
+                      <p className="font-medium">Signed by All Parties</p>
+                      <p className="text-muted-foreground">{new Date(contract.updatedAt).toLocaleString()}</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </div>

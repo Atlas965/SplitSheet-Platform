@@ -1106,7 +1106,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body using Zod schema
       const matchData = insertUserMatchSchema.parse({
         ...req.body,
-        userId
+        userId,
+        matchScore: typeof req.body.matchScore === 'number' ? req.body.matchScore.toFixed(2) : String(req.body.matchScore || "0.80")
       });
       
       const { matchedUserId, matchScore, matchReason } = matchData;
@@ -1114,7 +1115,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const match = await storage.createUserMatch(
         userId, 
         matchedUserId, 
-        Number(matchScore) || 0.8, 
+        matchScore, 
         matchReason || "Manual connection"
       );
       
