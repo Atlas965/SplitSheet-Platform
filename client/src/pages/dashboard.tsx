@@ -144,13 +144,6 @@ export default function Dashboard() {
                           <span className="ml-auto text-xs text-muted-foreground">High</span>
                         </Link>
                       </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-negotiations">
-                        <Link href="/negotiations" className="flex items-center w-full">
-                          <Handshake className="mr-3 h-4 w-4" />
-                          <span>Negotiations</span>
-                          <span className="ml-auto text-xs text-muted-foreground">High</span>
-                        </Link>
-                      </DropdownMenuItem>
 
                       <DropdownMenuSeparator />
 
@@ -328,17 +321,44 @@ export default function Dashboard() {
                 </Link>
               </Button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-upload-contract">
+              <button 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                data-testid="button-upload-contract"
+                onClick={() => {
+                  toast({
+                    title: "Upload Feature",
+                    description: "Select a contract file to upload (PDF or Docx).",
+                  });
+                }}
+              >
                 <Upload className="h-4 w-4" />
                 <span>Upload Existing Contract</span>
               </button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-invite-collaborator">
+              <button 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                data-testid="button-invite-collaborator"
+                onClick={() => {
+                  toast({
+                    title: "Invite Collaborator",
+                    description: "Enter email address to send invitation link.",
+                  });
+                }}
+              >
                 <Users className="h-4 w-4" />
                 <span>Invite Collaborator</span>
               </button>
               
-              <button className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" data-testid="button-export-contracts">
+              <button 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                data-testid="button-export-contracts"
+                onClick={() => {
+                  toast({
+                    title: "Export All Contracts",
+                    description: "Your contract archive is being generated for download.",
+                  });
+                }}
+              >
                 <Download className="h-4 w-4" />
                 <span>Export All Contracts</span>
               </button>
