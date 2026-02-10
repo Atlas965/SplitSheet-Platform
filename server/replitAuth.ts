@@ -10,9 +10,12 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { users } from "@shared/schema";
 
-if (!process.env.REPLIT_DOMAINS) {
-  throw new Error("Environment variable REPLIT_DOMAINS not provided");
-}
+const allowedDomains =
+  process.env.ALLOWED_DOMAINS?.split(",") ??
+  process.env.REPLIT_DOMAINS?.split(",") ??
+  ["http://localhost:5173"];
+
+
 
 const getOidcConfig = memoize(
   async () => {
