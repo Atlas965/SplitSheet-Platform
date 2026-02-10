@@ -1315,6 +1315,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to get activity" });
     }
   });
+  app.use(cors({
+  origin: process.env.ALLOWED_DOMAINS?.split(",") || "*",
+}));
+
 
   const httpServer = createServer(app);
   return httpServer;
