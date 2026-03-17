@@ -1,0 +1,54 @@
+You are a venture capital investor and a judge for the LeapIN Business Accelerator Demo Day.
+
+Evaluate my startup idea called "SplitSheet" (a platform for transparent music royalty splitting and payments between collaborators) as if you are deciding whether to invest and whether it deserves to win Demo Day.
+
+Analyze the startup based on the following criteria:
+
+1. Problem Strength  
+- Is the problem real, painful, and urgent?  
+- Who specifically experiences this problem?
+
+2. Solution Quality  
+- Does SplitSheet solve the problem clearly and better than alternatives?  
+- Is the product easy to understand in under 30 seconds?
+
+3. Market Opportunity  
+- How big is the total addressable market (TAM)?  
+- Is this a venture-scale opportunity (can it reach $100M+ revenue)?
+
+4. Product & Technical Feasibility  
+- Can this realistically be built and scaled as a web app (initially built on Replit)?  
+- Are there any major technical risks?
+
+5. Business Model  
+- Is the monetization strategy strong (subscription, transaction fees, licensing)?  
+- Can it generate predictable and scalable revenue?
+
+6. Competitive Advantage  
+- What existing competitors exist (e.g., royalty tools, distribution platforms)?  
+- Does SplitSheet have a strong moat or differentiation?
+
+7. Traction & Validation  
+- What proof would investors expect at this stage?  
+- What is missing right now?
+
+8. Founder-Market Fit  
+- Does the founder (me) have a credible reason to win in this space?
+
+9. Demo Day Readiness  
+- Would this idea impress judges in a 3–5 minute pitch?  
+- What are the biggest weaknesses that could cause rejection?
+
+Then provide:
+
+A. A score out of 10 for each category  
+B. An overall investment score out of 100  
+C. A final verdict:  
+   - YES (strong for Demo Day)  
+   - MAYBE (needs improvement)  
+   - NO (not competitive yet)
+
+D. The top 5 reasons it could FAIL at Demo Day  
+E. The top 5 changes that would make it WIN Demo Day  
+
+Be brutally honest, think like a real investor, and do not sugarcoat the answer.
