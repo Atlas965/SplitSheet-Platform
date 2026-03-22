@@ -1,0 +1,130 @@
+Act as a Senior Staff Engineer and Fintech Systems Architect.
+
+You are working on an existing full-stack TypeScript application (React, Node.js, Express, PostgreSQL, Drizzle ORM) that currently includes:
+- User profiles
+- Messaging
+- Contract management
+- AI negotiation tools
+- Stripe billing integration
+
+Your task is to AUDIT and EXTEND the system to transform it into a “Stripe for music ownership” and “Carta for music rights” platform.
+
+-------------------------------------
+PHASE 1 — SYSTEM AUDIT (CRITICAL)
+-------------------------------------
+Analyze the current architecture and identify gaps in:
+1. Ownership tracking
+2. Financial infrastructure
+3. Royalty distribution
+4. Rights management over time
+
+Explicitly answer:
+- What core systems are missing?
+- What current components can be reused?
+- What is incorrectly designed for financial-grade infrastructure?
+
+-------------------------------------
+PHASE 2 — OWNERSHIP LEDGER SYSTEM
+-------------------------------------
+Design and implement a robust ownership ledger.
+
+Requirements:
+- Track song/project ownership percentages (multiple contributors)
+- Support version history (every change must be recorded)
+- Immutable audit trail (no overwrites, only append)
+- Ability to query ownership at any point in time
+
+Deliver:
+- PostgreSQL schema (tables, relationships)
+- Drizzle ORM models
+- API endpoints:
+  - createOwnershipRecord
+  - updateOwnershipSplit (versioned, not overwrite)
+  - getOwnershipHistory
+  - getCurrentOwnership
+
+-------------------------------------
+PHASE 3 — RIGHTS “CAP TABLE” SYSTEM
+-------------------------------------
+Treat each song like a startup cap table.
+
+Requirements:
+- Each “song” is an asset entity
+- Contributors = stakeholders
+- Ownership = percentage shares
+- Support:
+  - dilution (adding new contributors)
+  - transfer of ownership
+  - split adjustments
+
+Deliver:
+- Schema design for:
+  - assets (songs)
+  - stakeholders
+  - ownership_allocations
+- Functions to:
+  - recalculate percentages safely
+  - validate total ownership = 100%
+
+-------------------------------------
+PHASE 4 — ROYALTY & PAYMENT ENGINE
+-------------------------------------
+Extend Stripe integration into a true payment distribution system.
+
+Requirements:
+- Map ownership percentages → payment splits
+- Automatically distribute incoming revenue
+- Support multiple revenue sources (streams, licenses, etc.)
+- Maintain a financial ledger (credits/debits per user)
+
+Deliver:
+- Payment routing logic using Stripe Connect (conceptual if needed)
+- Database tables:
+  - revenue_events
+  - payout_records
+  - user_balances
+- APIs:
+  - recordRevenueEvent
+  - calculatePayouts
+  - executePayouts
+  - getUserEarnings
+
+-------------------------------------
+PHASE 5 — SYSTEM INTEGRATION
+-------------------------------------
+Integrate new systems with existing features:
+
+- Contracts → automatically generate ownership records
+- Messaging → notify users of ownership changes
+- AI negotiation → suggest fair split percentages
+- Analytics → display earnings + ownership dashboards
+
+-------------------------------------
+PHASE 6 — SECURITY & VALIDATION
+-------------------------------------
+Ensure:
+- No ownership changes without authorization
+- All financial actions are logged
+- Data consistency (ownership always totals 100%)
+- Proper RBAC enforcement
+
+-------------------------------------
+PHASE 7 — OUTPUT FORMAT
+-------------------------------------
+Provide:
+1. Clear architecture diagram (text-based)
+2. Database schema (Drizzle + SQL)
+3. API route definitions
+4. Example request/response payloads
+5. Step-by-step integration plan into existing codebase
+
+-------------------------------------
+IMPORTANT CONSTRAINTS
+-------------------------------------
+- Do NOT rewrite the entire app — extend it
+- Follow existing project structure
+- Keep everything modular and scalable
+- Optimize for real-world production use
+
+Goal:
+Transform this platform from a general SaaS app into financial-grade infrastructure for music ownership, rights, and payments.

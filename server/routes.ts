@@ -424,6 +424,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Owner e-signature endpoint — stores drawn signature as Base64 in contract metadata
+  app.post('/api/contracts/:id/sign', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract not found" });
+      }
+
+      // Only the contract owner or a collaborator may sign
+      if (contract.createdBy !== userId) {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        const isCollaborator = collaborators.some((c) => c.userId === userId);
+        if (!isCollaborator) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const { signatureData } = req.body;
+      if (!signatureData || typeof signatureData !== "string" || !signatureData.startsWith("data:image/")) {
+        return res.status(400).json({ message: "Invalid signature data. Must be a Base64 PNG data URL." });
+      }
+
+      const existingMetadata = (contract.metadata as any) || {};
+      const updatedContract = await storage.updateContract(req.params.id, {
+        status: "signed",
+        metadata: {
+          ...existingMetadata,
+          ownerSignature: signatureData,
+          signedAt: new Date().toISOString(),
+          signedBy: userId,
+          signedIp: req.ip,
+          signedUserAgent: req.get("User-Agent"),
+        },
+      });
+
+      res.json({ contract: updatedContract, signatureData });
+    } catch (error) {
+      console.error("Error saving e-signature:", error);
+      res.status(500).json({ message: "Failed to save signature" });
+    }
+  });
+
   // Profile management routes
   app.get('/api/profile', isAuthenticated, async (req: any, res) => {
     try {

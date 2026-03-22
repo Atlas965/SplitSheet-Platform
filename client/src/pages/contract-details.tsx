@@ -7,6 +7,7 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
 import Logo from "@/components/Logo";
+import SignatureCanvas from "@/components/SignatureCanvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CheckCircle2, RotateCcw } from "lucide-react";
 
 interface Contract {
   id: string;
@@ -35,6 +37,7 @@ export default function ContractDetails() {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [savedSignature, setSavedSignature] = useState<string | null>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -115,6 +118,40 @@ export default function ContractDetails() {
       toast({
         title: "Error",
         description: "Failed to delete contract. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const eSignMutation = useMutation({
+    mutationFn: async (signatureData: string) => {
+      return await apiRequest("POST", `/api/contracts/${id}/sign`, { signatureData });
+    },
+    onSuccess: (_data, signatureData) => {
+      setSavedSignature(signatureData);
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({
+        title: "Contract Signed",
+        description: "Your signature has been saved. The contract is now legally binding.",
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Signing Failed",
+        description: "Could not save your signature. Please try again.",
         variant: "destructive",
       });
     },
@@ -571,40 +608,70 @@ export default function ContractDetails() {
                   Digital Signature
                 </CardTitle>
               </CardHeader>
-              <CardContent className="pt-6 space-y-4">
-                <div className="p-4 border-2 border-dashed border-muted rounded-lg text-center bg-muted/30">
-                  {contract.status === 'signed' ? (
-                    <div className="space-y-2">
-                      <i className="fas fa-check-circle text-green-500 text-2xl"></i>
-                      <p className="font-semibold text-green-700">Contract Signed</p>
-                      <p className="text-xs text-muted-foreground">
-                        Legally binding digital signature applied
-                      </p>
+              <CardContent className="pt-4 space-y-4">
+                {/* Signed confirmation state */}
+                {(contract.status === 'signed' || savedSignature) ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-green-800">Contract Signed</p>
+                        <p className="text-xs text-green-600">Legally binding signature applied</p>
+                      </div>
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <p className="text-sm text-muted-foreground">
-                        Click below to apply your legally binding digital signature to this contract.
-                      </p>
-                      <Button 
-                        className="w-full" 
-                        onClick={() => updateStatusMutation.mutate('signed')}
-                        data-testid="button-esign-contract"
-                      >
-                        Sign Contract Now
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                
-                <div className="text-[10px] text-muted-foreground space-y-1">
+
+                    {/* Display saved signature image */}
+                    {(savedSignature || (contract.metadata as any)?.ownerSignature) && (
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Signature on File</p>
+                        <div className="border border-border rounded-lg bg-white p-3 flex items-center justify-center" style={{ minHeight: "90px" }}>
+                          <img
+                            src={savedSignature || (contract.metadata as any)?.ownerSignature}
+                            alt="Saved signature"
+                            className="max-h-20 max-w-full object-contain"
+                            data-testid="img-saved-signature"
+                          />
+                        </div>
+                        {(contract.metadata as any)?.signedAt && (
+                          <p className="text-[10px] text-muted-foreground">
+                            Signed {new Date((contract.metadata as any).signedAt).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Allow re-signing */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs"
+                      onClick={() => setSavedSignature(null)}
+                      data-testid="button-resign-contract"
+                    >
+                      <RotateCcw className="h-3 w-3 mr-1.5" />
+                      Update Signature
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Draw your signature below using your mouse or finger, then tap <strong>Sign &amp; Save</strong>.
+                    </p>
+                    <SignatureCanvas
+                      onSave={(dataUrl) => eSignMutation.mutate(dataUrl)}
+                      isSaving={eSignMutation.isPending}
+                    />
+                  </div>
+                )}
+
+                <div className="text-[10px] text-muted-foreground space-y-1 pt-1 border-t border-border">
                   <p className="flex items-center gap-1">
                     <i className="fas fa-shield-alt"></i>
                     Secure 256-bit encryption
                   </p>
                   <p className="flex items-center gap-1">
                     <i className="fas fa-gavel"></i>
-                    Compliance: ESIGN & UETA Acts
+                    Compliance: ESIGN &amp; UETA Acts
                   </p>
                 </div>
               </CardContent>
