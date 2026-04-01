@@ -442,25 +442,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const { signatureData } = req.body;
+      const { signatureData, signerName, signerEmail, signerTitle, signedAt, mode } = req.body;
       if (!signatureData || typeof signatureData !== "string" || !signatureData.startsWith("data:image/")) {
         return res.status(400).json({ message: "Invalid signature data. Must be a Base64 PNG data URL." });
       }
 
       const existingMetadata = (contract.metadata as any) || {};
+      const sigRecord = {
+        signatureData,
+        signerName: signerName || "Unknown",
+        signerEmail: signerEmail || "",
+        signerTitle: signerTitle || "",
+        signedAt: signedAt || new Date().toISOString(),
+        signedBy: userId,
+        signedIp: req.ip,
+        signedUserAgent: req.get("User-Agent"),
+        mode: mode || "draw",
+      };
+
+      // Keep an array of all signatures so multi-party signing is supported
+      const existingSignatures: any[] = existingMetadata.signatures || [];
+      const alreadySigned = existingSignatures.find((s: any) => s.signedBy === userId);
+      const updatedSignatures = alreadySigned
+        ? existingSignatures.map((s: any) => (s.signedBy === userId ? sigRecord : s))
+        : [...existingSignatures, sigRecord];
+
       const updatedContract = await storage.updateContract(req.params.id, {
         status: "signed",
         metadata: {
           ...existingMetadata,
           ownerSignature: signatureData,
-          signedAt: new Date().toISOString(),
+          signedAt: sigRecord.signedAt,
           signedBy: userId,
-          signedIp: req.ip,
-          signedUserAgent: req.get("User-Agent"),
+          signatures: updatedSignatures,
         },
       });
 
-      res.json({ contract: updatedContract, signatureData });
+      // Notify contract collaborators that the owner has signed
+      try {
+        const collaborators = await storage.getContractCollaborators(req.params.id);
+        for (const c of collaborators) {
+          if (c.userId && c.userId !== userId) {
+            await storage.createNotification(
+              c.userId,
+              "Contract Signed",
+              `${sigRecord.signerName} has signed "${contract.title}". Your signature may be required.`,
+              "info",
+              `/contracts/${req.params.id}`
+            );
+          }
+        }
+      } catch (_) {}
+
+      res.json({ contract: updatedContract, signatureData, sigRecord });
     } catch (error) {
       console.error("Error saving e-signature:", error);
       res.status(500).json({ message: "Failed to save signature" });

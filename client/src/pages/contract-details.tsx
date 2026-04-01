@@ -7,7 +7,7 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
 import Logo from "@/components/Logo";
-import SignatureCanvas from "@/components/SignatureCanvas";
+import SignatureCanvas, { type SignaturePayload } from "@/components/SignatureCanvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, RotateCcw } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users } from "lucide-react";
 
 interface Contract {
   id: string;
@@ -37,7 +38,7 @@ export default function ContractDetails() {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [savedSignature, setSavedSignature] = useState<string | null>(null);
+  const [savedSignature, setSavedSignature] = useState<SignaturePayload | null>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -124,17 +125,17 @@ export default function ContractDetails() {
   });
 
   const eSignMutation = useMutation({
-    mutationFn: async (signatureData: string) => {
-      return await apiRequest("POST", `/api/contracts/${id}/sign`, { signatureData });
+    mutationFn: async (payload: SignaturePayload) => {
+      return await apiRequest("POST", `/api/contracts/${id}/sign`, payload);
     },
-    onSuccess: (_data, signatureData) => {
-      setSavedSignature(signatureData);
+    onSuccess: (_data, payload) => {
+      setSavedSignature(payload);
       queryClient.invalidateQueries({ queryKey: ["/api/contracts", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/contracts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({
         title: "Contract Signed",
-        description: "Your signature has been saved. The contract is now legally binding.",
+        description: `Signed by ${payload.signerName}. Your signature certificate has been saved.`,
       });
     },
     onError: (error) => {
@@ -601,105 +602,225 @@ export default function ContractDetails() {
           </div>
 
           <div className="space-y-6">
-            <Card className="border-primary/20 shadow-md">
-              <CardHeader className="bg-primary/5">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <i className="fas fa-pen-nib text-primary"></i>
-                  Digital Signature
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4 space-y-4">
-                {/* Signed confirmation state */}
-                {(contract.status === 'signed' || savedSignature) ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />
-                      <div>
-                        <p className="text-sm font-semibold text-green-800">Contract Signed</p>
-                        <p className="text-xs text-green-600">Legally binding signature applied</p>
-                      </div>
-                    </div>
 
-                    {/* Display saved signature image */}
-                    {(savedSignature || (contract.metadata as any)?.ownerSignature) && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Signature on File</p>
-                        <div className="border border-border rounded-lg bg-white p-3 flex items-center justify-center" style={{ minHeight: "90px" }}>
-                          <img
-                            src={savedSignature || (contract.metadata as any)?.ownerSignature}
-                            alt="Saved signature"
-                            className="max-h-20 max-w-full object-contain"
-                            data-testid="img-saved-signature"
-                          />
+            {/* ── SIGNERS ROSTER ─────────────────────────────── */}
+            {(() => {
+              const sigs: any[] = (contract.metadata as any)?.signatures || [];
+              const hasSigs = sigs.length > 0 || savedSignature;
+              return (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Users className="h-4 w-4" />
+                      Signers
+                      {hasSigs && (
+                        <Badge className="ml-auto bg-green-100 text-green-700 text-xs">
+                          {(sigs.length + (savedSignature && !sigs.find((s:any) => s.signedBy === 'current') ? 1 : 0))} signed
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {/* Pending: contract owner (always first) */}
+                    {!savedSignature && contract.status !== 'signed' && (
+                      <div className="flex items-center gap-3 p-3 rounded-lg border border-yellow-200 bg-yellow-50">
+                        <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center">
+                          <Clock className="h-4 w-4 text-yellow-600" />
                         </div>
-                        {(contract.metadata as any)?.signedAt && (
-                          <p className="text-[10px] text-muted-foreground">
-                            Signed {new Date((contract.metadata as any).signedAt).toLocaleString()}
-                          </p>
-                        )}
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">You (Contract Owner)</p>
+                          <p className="text-xs text-muted-foreground">Signature required</p>
+                        </div>
+                        <Badge className="bg-yellow-100 text-yellow-700 text-xs">Pending</Badge>
                       </div>
                     )}
 
-                    {/* Allow re-signing */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full text-xs"
-                      onClick={() => setSavedSignature(null)}
-                      data-testid="button-resign-contract"
-                    >
-                      <RotateCcw className="h-3 w-3 mr-1.5" />
-                      Update Signature
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="text-xs text-muted-foreground">
-                      Draw your signature below using your mouse or finger, then tap <strong>Sign &amp; Save</strong>.
-                    </p>
-                    <SignatureCanvas
-                      onSave={(dataUrl) => eSignMutation.mutate(dataUrl)}
-                      isSaving={eSignMutation.isPending}
-                    />
-                  </div>
+                    {/* Completed signatures from metadata */}
+                    {sigs.map((sig: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3 p-3 rounded-lg border border-green-200 bg-green-50" data-testid={`signer-row-${i}`}>
+                        <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
+                          <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold">{sig.signerName}</p>
+                          <p className="text-xs text-muted-foreground">{sig.signerEmail}{sig.signerTitle ? ` · ${sig.signerTitle}` : ""}</p>
+                          <p className="text-[10px] text-muted-foreground">{new Date(sig.signedAt).toLocaleString()}</p>
+                        </div>
+                        <Badge className="bg-green-100 text-green-700 text-xs">Signed</Badge>
+                      </div>
+                    ))}
+
+                    {/* Local signed state (before page refresh) */}
+                    {savedSignature && !sigs.find((s:any) => s.signerEmail === savedSignature.signerEmail) && (
+                      <div className="flex items-center gap-3 p-3 rounded-lg border border-green-200 bg-green-50">
+                        <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
+                          <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold">{savedSignature.signerName}</p>
+                          <p className="text-xs text-muted-foreground">{savedSignature.signerEmail}{savedSignature.signerTitle ? ` · ${savedSignature.signerTitle}` : ""}</p>
+                          <p className="text-[10px] text-muted-foreground">{new Date(savedSignature.signedAt).toLocaleString()}</p>
+                        </div>
+                        <Badge className="bg-green-100 text-green-700 text-xs">Signed</Badge>
+                      </div>
+                    )}
+
+                    {!hasSigs && contract.status !== 'signed' && (
+                      <p className="text-xs text-muted-foreground text-center py-2">No signatures yet. Use the panel below to sign.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
+            {/* ── SIGNATURE PANEL / CERTIFICATE ──────────────── */}
+            <Card className="border-primary/20 shadow-md">
+              <CardHeader className="bg-primary/5 pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <PenLine className="h-4 w-4 text-primary" />
+                  {(contract.status === 'signed' || savedSignature) ? "Signature Certificate" : "Sign This Contract"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4 space-y-4">
+
+                {/* ── CERTIFICATE (after signing) ── */}
+                {(contract.status === 'signed' || savedSignature) ? (() => {
+                  const meta = contract.metadata as any;
+                  const sig = savedSignature || (meta?.signatures?.[0]) || null;
+                  return (
+                    <div className="space-y-4">
+                      {/* Green banner */}
+                      <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <CheckCircle2 className="h-6 w-6 text-green-600 shrink-0" />
+                        <div>
+                          <p className="text-sm font-bold text-green-800">Contract Signed</p>
+                          <p className="text-xs text-green-600">This document is legally binding under ESIGN & UETA Acts</p>
+                        </div>
+                      </div>
+
+                      {/* Signature image */}
+                      {(sig?.signatureData || meta?.ownerSignature) && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Signature</p>
+                          <div className="border-2 border-border rounded-lg bg-white p-4 flex items-center justify-center" style={{ minHeight: "100px" }}>
+                            <img
+                              src={sig?.signatureData || meta?.ownerSignature}
+                              alt="Saved signature"
+                              className="max-h-20 max-w-full object-contain"
+                              data-testid="img-saved-signature"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Certificate details */}
+                      {sig && (
+                        <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-3 text-xs">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Certificate of Signature</p>
+                          <div className="flex items-center gap-2">
+                            <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            <span className="font-semibold">{sig.signerName}</span>
+                            {sig.signerTitle && <span className="text-muted-foreground">· {sig.signerTitle}</span>}
+                          </div>
+                          {sig.signerEmail && (
+                            <div className="flex items-center gap-2">
+                              <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-muted-foreground">{sig.signerEmail}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            <span className="text-muted-foreground">
+                              {new Date(sig.signedAt || meta?.signedAt).toLocaleString()}
+                            </span>
+                          </div>
+                          {sig.mode && (
+                            <div className="flex items-center gap-2">
+                              <PenLine className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-muted-foreground capitalize">{sig.mode === "draw" ? "Hand-drawn" : "Typed"} signature</span>
+                            </div>
+                          )}
+                          <Separator />
+                          <p className="text-[10px] text-muted-foreground">
+                            Document ID: <span className="font-mono">{contract.id}</span>
+                          </p>
+                        </div>
+                      )}
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full text-xs"
+                        onClick={() => setSavedSignature(null)}
+                        data-testid="button-resign-contract"
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1.5" />
+                        Update / Re-Sign
+                      </Button>
+                    </div>
+                  );
+                })() : (
+                  /* ── SIGNING CANVAS ── */
+                  <SignatureCanvas
+                    onSave={(payload) => eSignMutation.mutate(payload)}
+                    isSaving={eSignMutation.isPending}
+                  />
                 )}
 
-                <div className="text-[10px] text-muted-foreground space-y-1 pt-1 border-t border-border">
-                  <p className="flex items-center gap-1">
-                    <i className="fas fa-shield-alt"></i>
-                    Secure 256-bit encryption
-                  </p>
-                  <p className="flex items-center gap-1">
-                    <i className="fas fa-gavel"></i>
-                    Compliance: ESIGN &amp; UETA Acts
-                  </p>
+                {/* Legal footer */}
+                <div className="text-[10px] text-muted-foreground space-y-1 pt-2 border-t border-border">
+                  <p className="flex items-center gap-1.5"><Shield className="h-3 w-3" /> 256-bit SSL encrypted</p>
+                  <p className="flex items-center gap-1.5"><Gavel className="h-3 w-3" /> Compliant: ESIGN Act & UETA</p>
+                  <p className="flex items-center gap-1.5"><Clock className="h-3 w-3" /> Timestamp & IP logged</p>
                 </div>
               </CardContent>
             </Card>
 
+            {/* ── ACTIVITY TIMELINE ───────────────────────────── */}
             <Card>
-              <CardHeader>
-                <CardTitle className="text-sm font-medium">Collaboration History</CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Clock className="h-3.5 w-3.5" /> Activity Timeline
+                </CardTitle>
               </CardHeader>
               <CardContent className="text-xs space-y-3">
-                <div className="flex items-start gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500 mt-1" />
+                <div className="flex items-start gap-3">
+                  <div className="w-2 h-2 rounded-full bg-primary mt-1.5 shrink-0" />
                   <div>
                     <p className="font-medium">Contract Created</p>
                     <p className="text-muted-foreground">{new Date(contract.createdAt).toLocaleString()}</p>
                   </div>
                 </div>
-                {contract.status === 'signed' && (
-                  <div className="flex items-start gap-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-1" />
+                {((contract.metadata as any)?.signatures || []).map((sig: any, i: number) => (
+                  <div key={i} className="flex items-start gap-3">
+                    <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5 shrink-0" />
                     <div>
-                      <p className="font-medium">Signed by All Parties</p>
-                      <p className="text-muted-foreground">{new Date(contract.updatedAt).toLocaleString()}</p>
+                      <p className="font-medium">Signed by {sig.signerName}</p>
+                      <p className="text-muted-foreground">{sig.signerEmail} · {new Date(sig.signedAt).toLocaleString()}</p>
+                    </div>
+                  </div>
+                ))}
+                {savedSignature && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">Signed by {savedSignature.signerName} (you)</p>
+                      <p className="text-muted-foreground">{savedSignature.signerEmail} · {new Date(savedSignature.signedAt).toLocaleString()}</p>
+                    </div>
+                  </div>
+                )}
+                {contract.status !== 'signed' && !savedSignature && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-2 h-2 rounded-full bg-yellow-400 mt-1.5 shrink-0" />
+                    <div>
+                      <p className="font-medium text-yellow-700">Awaiting Signatures</p>
+                      <p className="text-muted-foreground">Contract pending signing</p>
                     </div>
                   </div>
                 )}
               </CardContent>
             </Card>
+
           </div>
         </div>
       </div>
