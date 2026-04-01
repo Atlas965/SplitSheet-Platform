@@ -20,6 +20,7 @@ import Matches from "@/pages/matches";
 import Messages from "@/pages/messages";
 import Admin from "@/pages/admin";
 import Search from "@/pages/search";
+import Ownership from "@/pages/ownership";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -46,6 +47,8 @@ function Router() {
           <Route path="/messages/:userId" component={Messages} />
           <Route path="/search" component={Search} />
           <Route path="/admin" component={Admin} />
+          <Route path="/ownership" component={Ownership} />
+          <Route path="/ownership/:id" component={Ownership} />
           <Route path="/contract/:type" component={ContractForm} />
         </>
       )}

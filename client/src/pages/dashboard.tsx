@@ -9,7 +9,7 @@ import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Handshake, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2 } from "lucide-react";
+import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen } from "lucide-react";
 
 interface DashboardStats {
   totalContracts: number;
@@ -175,6 +175,13 @@ export default function Dashboard() {
 
                       {/* Lower Precedence - Tools & Admin */}
                       <DropdownMenuLabel>Tools & Analytics</DropdownMenuLabel>
+                      <DropdownMenuItem asChild data-testid="dropdown-ownership">
+                        <Link href="/ownership" className="flex items-center w-full">
+                          <BookOpen className="mr-3 h-4 w-4" />
+                          <span>Rights Ledger</span>
+                          <span className="ml-auto text-xs text-muted-foreground">New</span>
+                        </Link>
+                      </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-analytics">
                         <Link href="/analytics" className="flex items-center w-full">
                           <BarChart className="mr-3 h-4 w-4" />

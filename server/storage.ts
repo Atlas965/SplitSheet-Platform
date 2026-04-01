@@ -11,6 +11,11 @@ import {
   userMatches,
   messages,
   notifications,
+  songAssets,
+  ownershipRecords,
+  revenueEvents,
+  payoutRecords,
+  userBalances,
   type User,
   type UpsertUser,
   type Contract,
@@ -26,9 +31,17 @@ import {
   type Notification,
   type Negotiation,
   type NegotiationConversation,
+  type SongAsset,
+  type InsertSongAsset,
+  type OwnershipRecord,
+  type InsertOwnershipRecord,
+  type RevenueEvent,
+  type InsertRevenueEvent,
+  type PayoutRecord,
+  type UserBalance,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, sql, count, gte, lt } from "drizzle-orm";
+import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
 
 export interface IStorage {
   // User operations
@@ -94,6 +107,28 @@ export interface IStorage {
   updateNegotiation(id: string, updates: any): Promise<any>;
   getNegotiationConversations(negotiationId: string): Promise<any[]>;
   addNegotiationConversation(conversation: any): Promise<any>;
+
+  // Ownership ledger — song assets
+  createSongAsset(asset: InsertSongAsset): Promise<SongAsset>;
+  getSongAssets(userId: string): Promise<SongAsset[]>;
+  getSongAsset(id: string): Promise<SongAsset | undefined>;
+  updateSongAsset(id: string, updates: Partial<SongAsset>): Promise<SongAsset>;
+
+  // Ownership ledger — append-only records
+  createOwnershipRecord(record: InsertOwnershipRecord): Promise<OwnershipRecord>;
+  getCurrentOwnership(assetId: string): Promise<OwnershipRecord[]>;
+  getOwnershipHistory(assetId: string): Promise<OwnershipRecord[]>;
+  updateOwnershipSplit(assetId: string, splits: Array<{ userId: string; ownershipPercentage: string; role: string }>, changedBy: string, changeReason?: string): Promise<OwnershipRecord[]>;
+
+  // Revenue events
+  recordRevenueEvent(event: InsertRevenueEvent): Promise<RevenueEvent>;
+  getRevenueEvents(assetId: string): Promise<RevenueEvent[]>;
+  calculatePayouts(revenueEventId: string): Promise<PayoutRecord[]>;
+  executePayouts(revenueEventId: string): Promise<PayoutRecord[]>;
+
+  // User balances & earnings
+  getUserEarnings(userId: string): Promise<UserBalance | null>;
+  getUserPayouts(userId: string): Promise<PayoutRecord[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -790,6 +825,195 @@ export class DatabaseStorage implements IStorage {
       .values(conversationData)
       .returning();
     return conversation;
+  }
+
+  // ─── OWNERSHIP LEDGER ────────────────────────────────────────────────────
+
+  async createSongAsset(asset: InsertSongAsset): Promise<SongAsset> {
+    const [newAsset] = await db.insert(songAssets).values(asset).returning();
+    return newAsset;
+  }
+
+  async getSongAssets(userId: string): Promise<SongAsset[]> {
+    return await db
+      .select()
+      .from(songAssets)
+      .where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, "active")))
+      .orderBy(desc(songAssets.createdAt));
+  }
+
+  async getSongAsset(id: string): Promise<SongAsset | undefined> {
+    const [asset] = await db.select().from(songAssets).where(eq(songAssets.id, id));
+    return asset;
+  }
+
+  async updateSongAsset(id: string, updates: Partial<SongAsset>): Promise<SongAsset> {
+    const [asset] = await db
+      .update(songAssets)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(songAssets.id, id))
+      .returning();
+    return asset;
+  }
+
+  async createOwnershipRecord(record: InsertOwnershipRecord): Promise<OwnershipRecord> {
+    const [newRecord] = await db.insert(ownershipRecords).values(record).returning();
+    return newRecord;
+  }
+
+  // Return the latest version of each stakeholder's ownership for a given asset
+  async getCurrentOwnership(assetId: string): Promise<OwnershipRecord[]> {
+    const latestVersion = await db
+      .select({ maxVersion: max(ownershipRecords.version) })
+      .from(ownershipRecords)
+      .where(eq(ownershipRecords.assetId, assetId));
+    const maxV = latestVersion[0]?.maxVersion ?? 0;
+    if (!maxV) return [];
+    return await db
+      .select()
+      .from(ownershipRecords)
+      .where(and(eq(ownershipRecords.assetId, assetId), eq(ownershipRecords.version, maxV)))
+      .orderBy(desc(ownershipRecords.ownershipPercentage));
+  }
+
+  // Full immutable audit trail — every version of every ownership change
+  async getOwnershipHistory(assetId: string): Promise<OwnershipRecord[]> {
+    return await db
+      .select()
+      .from(ownershipRecords)
+      .where(eq(ownershipRecords.assetId, assetId))
+      .orderBy(desc(ownershipRecords.version), desc(ownershipRecords.createdAt));
+  }
+
+  // Append a new version for all stakeholders (never overwrites)
+  async updateOwnershipSplit(
+    assetId: string,
+    splits: Array<{ userId: string; ownershipPercentage: string; role: string }>,
+    changedBy: string,
+    changeReason?: string
+  ): Promise<OwnershipRecord[]> {
+    // Validate total = 100%
+    const total = splits.reduce((sum, s) => sum + parseFloat(s.ownershipPercentage), 0);
+    if (Math.abs(total - 100) > 0.01) {
+      throw new Error(`Ownership must total 100%. Current total: ${total.toFixed(2)}%`);
+    }
+
+    const latestVersion = await db
+      .select({ maxVersion: max(ownershipRecords.version) })
+      .from(ownershipRecords)
+      .where(eq(ownershipRecords.assetId, assetId));
+    const nextVersion = (latestVersion[0]?.maxVersion ?? 0) + 1;
+
+    const newRecords = splits.map((s) => ({
+      assetId,
+      userId: s.userId,
+      ownershipPercentage: s.ownershipPercentage,
+      role: s.role,
+      version: nextVersion,
+      changeReason: changeReason ?? null,
+      createdBy: changedBy,
+      effectiveAt: new Date(),
+    }));
+
+    return await db.insert(ownershipRecords).values(newRecords).returning();
+  }
+
+  // ─── REVENUE & PAYOUTS ────────────────────────────────────────────────────
+
+  async recordRevenueEvent(event: InsertRevenueEvent): Promise<RevenueEvent> {
+    const [newEvent] = await db.insert(revenueEvents).values(event).returning();
+    return newEvent;
+  }
+
+  async getRevenueEvents(assetId: string): Promise<RevenueEvent[]> {
+    return await db
+      .select()
+      .from(revenueEvents)
+      .where(eq(revenueEvents.assetId, assetId))
+      .orderBy(desc(revenueEvents.createdAt));
+  }
+
+  // Calculate (but do not execute) payout splits based on current ownership
+  async calculatePayouts(revenueEventId: string): Promise<PayoutRecord[]> {
+    const [event] = await db
+      .select()
+      .from(revenueEvents)
+      .where(eq(revenueEvents.id, revenueEventId));
+    if (!event) throw new Error("Revenue event not found");
+
+    const ownership = await this.getCurrentOwnership(event.assetId);
+    const totalAmount = parseFloat(event.amount as string);
+
+    return ownership.map((o) => ({
+      id: "preview",
+      revenueEventId,
+      userId: o.userId,
+      assetId: event.assetId,
+      ownershipPercentage: o.ownershipPercentage,
+      amount: ((parseFloat(o.ownershipPercentage as string) / 100) * totalAmount).toFixed(2),
+      currency: event.currency ?? "USD",
+      status: "pending",
+      stripeTransferId: null,
+      processedAt: null,
+      createdAt: new Date(),
+    })) as any[];
+  }
+
+  // Execute payouts — persist payout records and update user balances
+  async executePayouts(revenueEventId: string): Promise<PayoutRecord[]> {
+    const previews = await this.calculatePayouts(revenueEventId);
+    if (!previews.length) return [];
+
+    const toInsert = previews.map(({ id: _id, ...rest }) => rest);
+    const saved = await db.insert(payoutRecords).values(toInsert as any).returning();
+
+    // Update each user's balance ledger
+    for (const payout of saved) {
+      const amount = parseFloat(payout.amount as string);
+      const existing = await db
+        .select()
+        .from(userBalances)
+        .where(eq(userBalances.userId, payout.userId));
+
+      if (existing.length > 0) {
+        const current = existing[0];
+        await db
+          .update(userBalances)
+          .set({
+            totalEarned: (parseFloat(current.totalEarned as string) + amount).toFixed(2),
+            pendingBalance: (parseFloat(current.pendingBalance as string) + amount).toFixed(2),
+            updatedAt: new Date(),
+          })
+          .where(eq(userBalances.userId, payout.userId));
+      } else {
+        await db.insert(userBalances).values({
+          userId: payout.userId,
+          totalEarned: amount.toFixed(2),
+          totalPaid: "0",
+          pendingBalance: amount.toFixed(2),
+          currency: payout.currency ?? "USD",
+          updatedAt: new Date(),
+        });
+      }
+    }
+
+    return saved;
+  }
+
+  async getUserEarnings(userId: string): Promise<UserBalance | null> {
+    const [balance] = await db
+      .select()
+      .from(userBalances)
+      .where(eq(userBalances.userId, userId));
+    return balance ?? null;
+  }
+
+  async getUserPayouts(userId: string): Promise<PayoutRecord[]> {
+    return await db
+      .select()
+      .from(payoutRecords)
+      .where(eq(payoutRecords.userId, userId))
+      .orderBy(desc(payoutRecords.createdAt));
   }
 
   // Admin methods

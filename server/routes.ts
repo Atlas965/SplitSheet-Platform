@@ -1363,6 +1363,197 @@ export async function registerRoutes(app: Express): Promise<Server> {
 }));
 
 
+  // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
+
+  app.get('/api/assets', isAuthenticated, async (req: any, res) => {
+    try {
+      const assets = await storage.getSongAssets(req.user.claims.sub);
+      res.json(assets);
+    } catch (error) {
+      console.error("Error fetching assets:", error);
+      res.status(500).json({ message: "Failed to fetch assets" });
+    }
+  });
+
+  app.post('/api/assets', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const data = { ...req.body, createdBy: userId };
+      const asset = await storage.createSongAsset(data);
+      await storage.trackUserActivity(userId, "asset_created", { assetId: asset.id });
+      res.status(201).json(asset);
+    } catch (error) {
+      console.error("Error creating asset:", error);
+      res.status(500).json({ message: "Failed to create asset" });
+    }
+  });
+
+  app.get('/api/assets/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      res.json(asset);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch asset" });
+    }
+  });
+
+  app.patch('/api/assets/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== req.user.claims.sub)
+        return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.updateSongAsset(req.params.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update asset" });
+    }
+  });
+
+  // ─── OWNERSHIP LEDGER ─────────────────────────────────────────────────────
+
+  // GET current ownership (latest version)
+  app.get('/api/assets/:id/ownership', isAuthenticated, async (req: any, res) => {
+    try {
+      const ownership = await storage.getCurrentOwnership(req.params.id);
+      res.json(ownership);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ownership" });
+    }
+  });
+
+  // GET full ownership history (immutable audit trail)
+  app.get('/api/assets/:id/ownership/history', isAuthenticated, async (req: any, res) => {
+    try {
+      const history = await storage.getOwnershipHistory(req.params.id);
+      res.json(history);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ownership history" });
+    }
+  });
+
+  // POST initial ownership record for a new asset
+  app.post('/api/assets/:id/ownership', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const record = await storage.createOwnershipRecord({
+        ...req.body,
+        assetId: req.params.id,
+        createdBy: userId,
+        version: 1,
+        effectiveAt: new Date(),
+      });
+      res.status(201).json(record);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create ownership record" });
+    }
+  });
+
+  // PUT update ownership split — versioned, never overwrites
+  app.put('/api/assets/:id/ownership', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const { splits, changeReason } = req.body;
+      if (!Array.isArray(splits) || splits.length === 0)
+        return res.status(400).json({ message: "splits array is required" });
+
+      const records = await storage.updateOwnershipSplit(
+        req.params.id, splits, userId, changeReason
+      );
+
+      // Notify all stakeholders via the messaging system
+      for (const s of splits) {
+        if (s.userId !== userId) {
+          await storage.createNotification(
+            s.userId,
+            "Ownership Updated",
+            `Your ownership in "${asset.title}" has been updated to ${s.ownershipPercentage}%.`,
+            "info",
+            `/ownership/${req.params.id}`
+          ).catch(() => {});
+        }
+      }
+
+      res.json(records);
+    } catch (error: any) {
+      if (error.message?.includes("100%"))
+        return res.status(400).json({ message: error.message });
+      res.status(500).json({ message: "Failed to update ownership" });
+    }
+  });
+
+  // ─── REVENUE EVENTS ───────────────────────────────────────────────────────
+
+  app.get('/api/assets/:id/revenue', isAuthenticated, async (req: any, res) => {
+    try {
+      const events = await storage.getRevenueEvents(req.params.id);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch revenue events" });
+    }
+  });
+
+  app.post('/api/assets/:id/revenue', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const event = await storage.recordRevenueEvent({
+        ...req.body,
+        assetId: req.params.id,
+      });
+      res.status(201).json(event);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to record revenue event" });
+    }
+  });
+
+  // Preview payout splits without persisting
+  app.get('/api/revenue/:eventId/payouts/preview', isAuthenticated, async (req: any, res) => {
+    try {
+      const payouts = await storage.calculatePayouts(req.params.eventId);
+      res.json(payouts);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to calculate payouts" });
+    }
+  });
+
+  // Execute payouts — persist and update balances
+  app.post('/api/revenue/:eventId/payouts/execute', isAuthenticated, async (req: any, res) => {
+    try {
+      const payouts = await storage.executePayouts(req.params.eventId);
+      res.json(payouts);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to execute payouts" });
+    }
+  });
+
+  // ─── USER EARNINGS ────────────────────────────────────────────────────────
+
+  app.get('/api/earnings', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const [balance, payouts] = await Promise.all([
+        storage.getUserEarnings(userId),
+        storage.getUserPayouts(userId),
+      ]);
+      res.json({ balance, payouts });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch earnings" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

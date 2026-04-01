@@ -177,6 +177,78 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// ─── OWNERSHIP LEDGER SYSTEM ────────────────────────────────────────────────
+
+// Song assets — each song is treated like a startup cap table
+export const songAssets = pgTable("song_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title").notNull(),
+  artistName: varchar("artist_name"),
+  isrc: varchar("isrc"), // International Standard Recording Code
+  createdBy: varchar("created_by").references(() => users.id).notNull(),
+  contractId: varchar("contract_id").references(() => contracts.id),
+  status: varchar("status").default("active"), // active, archived
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Ownership records — append-only ledger, never overwrite, only append
+export const ownershipRecords = pgTable("ownership_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }).notNull(),
+  role: varchar("role").notNull(), // writer, producer, performer, publisher
+  version: integer("version").notNull(),
+  changeReason: text("change_reason"),
+  effectiveAt: timestamp("effective_at").defaultNow(),
+  createdBy: varchar("created_by").references(() => users.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Revenue events — incoming money per asset
+export const revenueEvents = pgTable("revenue_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
+  source: varchar("source").notNull(), // streaming, sync, performance, mechanical, other
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  currency: varchar("currency").default("USD"),
+  description: text("description"),
+  periodStart: timestamp("period_start"),
+  periodEnd: timestamp("period_end"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Payout records — per-user split of each revenue event
+export const payoutRecords = pgTable("payout_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  revenueEventId: varchar("revenue_event_id").references(() => revenueEvents.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
+  ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }).notNull(),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  currency: varchar("currency").default("USD"),
+  status: varchar("status").default("pending"), // pending, processing, completed, failed
+  stripeTransferId: varchar("stripe_transfer_id"),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// User balance ledger — running totals per user
+export const userBalances = pgTable("user_balances", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull().unique(),
+  totalEarned: decimal("total_earned", { precision: 12, scale: 2 }).default("0"),
+  totalPaid: decimal("total_paid", { precision: 12, scale: 2 }).default("0"),
+  pendingBalance: decimal("pending_balance", { precision: 12, scale: 2 }).default("0"),
+  currency: varchar("currency").default("USD"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ─── RELATIONS ───────────────────────────────────────────────────────────────
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   contracts: many(contracts),
@@ -301,6 +373,41 @@ export type NegotiationConversation = typeof negotiationConversations.$inferSele
 export type UserMatch = typeof userMatches.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+
+export const insertSongAssetSchema = createInsertSchema(songAssets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertOwnershipRecordSchema = createInsertSchema(ownershipRecords).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertRevenueEventSchema = createInsertSchema(revenueEvents).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertPayoutRecordSchema = createInsertSchema(payoutRecords).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertUserBalanceSchema = createInsertSchema(userBalances).omit({
+  id: true,
+});
+
+export type SongAsset = typeof songAssets.$inferSelect;
+export type InsertSongAsset = z.infer<typeof insertSongAssetSchema>;
+export type OwnershipRecord = typeof ownershipRecords.$inferSelect;
+export type InsertOwnershipRecord = z.infer<typeof insertOwnershipRecordSchema>;
+export type RevenueEvent = typeof revenueEvents.$inferSelect;
+export type InsertRevenueEvent = z.infer<typeof insertRevenueEventSchema>;
+export type PayoutRecord = typeof payoutRecords.$inferSelect;
+export type InsertPayoutRecord = z.infer<typeof insertPayoutRecordSchema>;
+export type UserBalance = typeof userBalances.$inferSelect;
 
 // Activity tracking schemas
 export const activityEventSchema = z.object({
