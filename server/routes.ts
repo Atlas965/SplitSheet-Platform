@@ -1587,6 +1587,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch earnings" });
     }
   });
+  // routes/assets.ts
+  app.put("/api/assets/:id/ownership", async (req, res) => {
+    const { id } = req.params;
+    const { splits } = req.body;
+
+    const total = splits.reduce((sum, s) => sum + s.percent, 0);
+    if (total !== 100) {
+      return res.status(400).json({ error: "Must equal 100%" });
+    }
+
+    const newVersion = {
+      assetId: id,
+      splits,
+      createdAt: new Date(),
+    };
+
+    await db.ownershipVersions.insert(newVersion);
+
+    res.json({ success: true });
+  });
 
   const httpServer = createServer(app);
   return httpServer;

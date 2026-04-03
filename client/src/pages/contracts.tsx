@@ -45,6 +45,26 @@ export default function Contracts() {
     createdAt: string;
     updatedAt: string;
   }
+  // pages/contracts.tsx
+  const [tab, setTab] = useState("mine");
+
+  const filtered =
+    tab === "mine."
+      ? contracts.filter(c => c.ownerId === user.id)
+      : contracts.filter(c => c.ownerId !== user.id);
+
+  return (
+    <>
+      <div className="tabs">
+        <button onClick={() => setTab("mine")}>My Contracts</button>
+        <button onClick={() => setTab("shared")}>Shared With Me</button>
+      </div>
+
+      {filtered.map(c => (
+        <ContractCard key={c.id} contract={c} />
+      ))}
+    </>
+  );
 
   const { data: contracts, isLoading: contractsLoading } = useQuery<Contract[]>({
     queryKey: ["/api/contracts"],

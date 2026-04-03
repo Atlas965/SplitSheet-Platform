@@ -8,15 +8,38 @@ import Logo from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import {
-  Music, Plus, TrendingUp, DollarSign, History, Users, ChevronRight,
-  BarChart3, Clock, CheckCircle2, AlertCircle, Home,
+  Music,
+  Plus,
+  TrendingUp,
+  DollarSign,
+  History,
+  Users,
+  ChevronRight,
+  BarChart3,
+  Clock,
+  CheckCircle2,
+  AlertCircle,
+  Home,
 } from "lucide-react";
+import EditOwnershipModal from "@/components/EditOwnershipModal";
 
 interface SongAsset {
   id: string;
@@ -56,7 +79,13 @@ interface UserBalance {
   currency: string;
 }
 
-const REVENUE_SOURCES = ["streaming", "sync", "performance", "mechanical", "other"];
+const REVENUE_SOURCES = [
+  "streaming",
+  "sync",
+  "performance",
+  "mechanical",
+  "other",
+];
 const ROLES = ["writer", "producer", "performer", "publisher", "co-writer"];
 
 const sourceColor: Record<string, string> = {
@@ -74,8 +103,16 @@ export default function Ownership() {
   const [showAddAsset, setShowAddAsset] = useState(false);
   const [showAddRevenue, setShowAddRevenue] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [newAsset, setNewAsset] = useState({ title: "", artistName: "", isrc: "" });
-  const [newRevenue, setNewRevenue] = useState({ source: "streaming", amount: "", description: "" });
+  const [newAsset, setNewAsset] = useState({
+    title: "",
+    artistName: "",
+    isrc: "",
+  });
+  const [newRevenue, setNewRevenue] = useState({
+    source: "streaming",
+    amount: "",
+    description: "",
+  });
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -83,70 +120,114 @@ export default function Ownership() {
     }
   }, [isAuthenticated, isLoading]);
 
-  const { data: assets = [], isLoading: assetsLoading } = useQuery<SongAsset[]>({
-    queryKey: ["/api/assets"],
-    enabled: isAuthenticated,
-    retry: false,
-  });
+  const { data: assets = [], isLoading: assetsLoading } = useQuery<SongAsset[]>(
+    {
+      queryKey: ["/api/assets"],
+      enabled: isAuthenticated,
+      retry: false,
+    },
+  );
 
-  const { data: ownership = [], isLoading: ownershipLoading } = useQuery<OwnershipRecord[]>({
+  const { data: ownership = [], isLoading: ownershipLoading } = useQuery<
+    OwnershipRecord[]
+  >({
     queryKey: ["/api/assets", selectedAsset?.id, "ownership"],
-    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/ownership`, { credentials: "include" }).then(r => r.json()),
+    queryFn: () =>
+      fetch(`/api/assets/${selectedAsset!.id}/ownership`, {
+        credentials: "include",
+      }).then((r) => r.json()),
     enabled: !!selectedAsset,
     retry: false,
   });
 
   const { data: ownershipHistory = [] } = useQuery<OwnershipRecord[]>({
     queryKey: ["/api/assets", selectedAsset?.id, "ownership", "history"],
-    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/ownership/history`, { credentials: "include" }).then(r => r.json()),
+    queryFn: () =>
+      fetch(`/api/assets/${selectedAsset!.id}/ownership/history`, {
+        credentials: "include",
+      }).then((r) => r.json()),
     enabled: !!selectedAsset && showHistory,
     retry: false,
   });
 
   const { data: revenue = [] } = useQuery<RevenueEvent[]>({
     queryKey: ["/api/assets", selectedAsset?.id, "revenue"],
-    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/revenue`, { credentials: "include" }).then(r => r.json()),
+    queryFn: () =>
+      fetch(`/api/assets/${selectedAsset!.id}/revenue`, {
+        credentials: "include",
+      }).then((r) => r.json()),
     enabled: !!selectedAsset,
     retry: false,
   });
 
-  const { data: earnings } = useQuery<{ balance: UserBalance | null; payouts: any[] }>({
+  const { data: earnings } = useQuery<{
+    balance: UserBalance | null;
+    payouts: any[];
+  }>({
     queryKey: ["/api/earnings"],
     enabled: isAuthenticated,
     retry: false,
   });
 
   const createAssetMutation = useMutation({
-    mutationFn: (data: typeof newAsset) => apiRequest("POST", "/api/assets", data),
+    mutationFn: (data: typeof newAsset) =>
+      apiRequest("POST", "/api/assets", data),
     onSuccess: (asset: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
       setShowAddAsset(false);
       setNewAsset({ title: "", artistName: "", isrc: "" });
       setSelectedAsset(asset);
-      toast({ title: "Song Asset Created", description: `"${asset.title}" is now in your rights ledger.` });
+      toast({
+        title: "Song Asset Created",
+        description: `"${asset.title}" is now in your rights ledger.`,
+      });
     },
-    onError: () => toast({ title: "Error", description: "Failed to create asset.", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: "Error",
+        description: "Failed to create asset.",
+        variant: "destructive",
+      }),
   });
 
   const recordRevenueMutation = useMutation({
     mutationFn: (data: typeof newRevenue) =>
       apiRequest("POST", `/api/assets/${selectedAsset!.id}/revenue`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "revenue"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/assets", selectedAsset?.id, "revenue"],
+      });
       setShowAddRevenue(false);
       setNewRevenue({ source: "streaming", amount: "", description: "" });
-      toast({ title: "Revenue Recorded", description: "Income has been logged in the ledger." });
+      toast({
+        title: "Revenue Recorded",
+        description: "Income has been logged in the ledger.",
+      });
     },
-    onError: () => toast({ title: "Error", description: "Failed to record revenue.", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: "Error",
+        description: "Failed to record revenue.",
+        variant: "destructive",
+      }),
   });
 
   const executePayoutsMutation = useMutation({
-    mutationFn: (eventId: string) => apiRequest("POST", `/api/revenue/${eventId}/payouts/execute`, {}),
+    mutationFn: (eventId: string) =>
+      apiRequest("POST", `/api/revenue/${eventId}/payouts/execute`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/earnings"] });
-      toast({ title: "Payouts Executed", description: "Earnings have been distributed to all stakeholders." });
+      toast({
+        title: "Payouts Executed",
+        description: "Earnings have been distributed to all stakeholders.",
+      });
     },
-    onError: () => toast({ title: "Error", description: "Failed to execute payouts.", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: "Error",
+        description: "Failed to execute payouts.",
+        variant: "destructive",
+      }),
   });
 
   if (isLoading) {
@@ -157,7 +238,21 @@ export default function Ownership() {
     );
   }
 
-  const totalRevenue = revenue.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+  const totalRevenue = revenue.reduce(
+    (sum, e) => sum + parseFloat(e.amount),
+    0,
+  );
+  const [open, setOpen] = useState(false);
+
+  <button onClick={() => setOpen(true)}>Edit Splits</button>
+
+  {open && (
+    <EditOwnershipModal
+      asset={asset}
+      onClose={() => setOpen(false)}
+      onUpdated={refetch}
+    />
+  )}
 
   return (
     <div className="min-h-screen bg-background">
@@ -171,7 +266,9 @@ export default function Ownership() {
             </div>
             <div className="flex items-center gap-3">
               <Button variant="ghost" size="sm" asChild>
-                <Link href="/"><Home className="h-4 w-4" /></Link>
+                <Link href="/">
+                  <Home className="h-4 w-4" />
+                </Link>
               </Button>
             </div>
           </div>
@@ -184,7 +281,8 @@ export default function Ownership() {
           <div>
             <h1 className="text-3xl font-bold">Rights Ledger</h1>
             <p className="text-muted-foreground mt-1">
-              Music ownership cap table — track splits, revenue, and payouts for every song.
+              Music ownership cap table — track splits, revenue, and payouts for
+              every song.
             </p>
           </div>
           <Dialog open={showAddAsset} onOpenChange={setShowAddAsset}>
@@ -205,7 +303,9 @@ export default function Ownership() {
                     id="asset-title"
                     placeholder="e.g. Midnight Drive"
                     value={newAsset.title}
-                    onChange={(e) => setNewAsset({ ...newAsset, title: e.target.value })}
+                    onChange={(e) =>
+                      setNewAsset({ ...newAsset, title: e.target.value })
+                    }
                     data-testid="input-asset-title"
                   />
                 </div>
@@ -215,7 +315,9 @@ export default function Ownership() {
                     id="asset-artist"
                     placeholder="e.g. The Band"
                     value={newAsset.artistName}
-                    onChange={(e) => setNewAsset({ ...newAsset, artistName: e.target.value })}
+                    onChange={(e) =>
+                      setNewAsset({ ...newAsset, artistName: e.target.value })
+                    }
                     data-testid="input-asset-artist"
                   />
                 </div>
@@ -225,18 +327,27 @@ export default function Ownership() {
                     id="asset-isrc"
                     placeholder="e.g. USRC11600001"
                     value={newAsset.isrc}
-                    onChange={(e) => setNewAsset({ ...newAsset, isrc: e.target.value })}
+                    onChange={(e) =>
+                      setNewAsset({ ...newAsset, isrc: e.target.value })
+                    }
                     data-testid="input-asset-isrc"
                   />
                 </div>
                 <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setShowAddAsset(false)}>Cancel</Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowAddAsset(false)}
+                  >
+                    Cancel
+                  </Button>
                   <Button
                     onClick={() => createAssetMutation.mutate(newAsset)}
                     disabled={!newAsset.title || createAssetMutation.isPending}
                     data-testid="button-confirm-add-asset"
                   >
-                    {createAssetMutation.isPending ? "Creating..." : "Create Asset"}
+                    {createAssetMutation.isPending
+                      ? "Creating..."
+                      : "Create Asset"}
                   </Button>
                 </div>
               </div>
@@ -254,7 +365,9 @@ export default function Ownership() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Total Earned</p>
-                  <p className="text-2xl font-bold">${parseFloat(earnings.balance.totalEarned).toFixed(2)}</p>
+                  <p className="text-2xl font-bold">
+                    ${parseFloat(earnings.balance.totalEarned).toFixed(2)}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -264,8 +377,12 @@ export default function Ownership() {
                   <TrendingUp className="h-5 w-5 text-blue-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Pending Balance</p>
-                  <p className="text-2xl font-bold">${parseFloat(earnings.balance.pendingBalance).toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Pending Balance
+                  </p>
+                  <p className="text-2xl font-bold">
+                    ${parseFloat(earnings.balance.pendingBalance).toFixed(2)}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -275,8 +392,12 @@ export default function Ownership() {
                   <CheckCircle2 className="h-5 w-5 text-purple-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Total Paid Out</p>
-                  <p className="text-2xl font-bold">${parseFloat(earnings.balance.totalPaid).toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Total Paid Out
+                  </p>
+                  <p className="text-2xl font-bold">
+                    ${parseFloat(earnings.balance.totalPaid).toFixed(2)}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -298,7 +419,9 @@ export default function Ownership() {
                 <CardContent className="p-8 text-center text-muted-foreground">
                   <Music className="h-8 w-8 mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No song assets yet.</p>
-                  <p className="text-xs mt-1">Add a song to start tracking ownership.</p>
+                  <p className="text-xs mt-1">
+                    Add a song to start tracking ownership.
+                  </p>
                 </CardContent>
               </Card>
             ) : (
@@ -306,14 +429,25 @@ export default function Ownership() {
                 <Card
                   key={asset.id}
                   className={`cursor-pointer transition-all hover:shadow-md ${selectedAsset?.id === asset.id ? "border-primary ring-1 ring-primary" : ""}`}
-                  onClick={() => { setSelectedAsset(asset); setShowHistory(false); }}
+                  onClick={() => {
+                    setSelectedAsset(asset);
+                    setShowHistory(false);
+                  }}
                   data-testid={`card-asset-${asset.id}`}
                 >
                   <CardContent className="p-4 flex items-center justify-between">
                     <div>
                       <p className="font-medium">{asset.title}</p>
-                      {asset.artistName && <p className="text-xs text-muted-foreground">{asset.artistName}</p>}
-                      {asset.isrc && <p className="text-[10px] text-muted-foreground font-mono mt-1">{asset.isrc}</p>}
+                      {asset.artistName && (
+                        <p className="text-xs text-muted-foreground">
+                          {asset.artistName}
+                        </p>
+                      )}
+                      {asset.isrc && (
+                        <p className="text-[10px] text-muted-foreground font-mono mt-1">
+                          {asset.isrc}
+                        </p>
+                      )}
                     </div>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </CardContent>
@@ -338,23 +472,37 @@ export default function Ownership() {
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
                       <div>
-                        <CardTitle className="text-xl">{selectedAsset.title}</CardTitle>
+                        <CardTitle className="text-xl">
+                          {selectedAsset.title}
+                        </CardTitle>
                         {selectedAsset.artistName && (
-                          <p className="text-sm text-muted-foreground">{selectedAsset.artistName}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {selectedAsset.artistName}
+                          </p>
                         )}
                       </div>
-                      <Badge className="bg-green-100 text-green-700">Active</Badge>
+                      <Badge className="bg-green-100 text-green-700">
+                        Active
+                      </Badge>
                     </div>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <p className="text-muted-foreground text-xs">Total Revenue</p>
-                        <p className="font-semibold text-lg">${totalRevenue.toFixed(2)}</p>
+                        <p className="text-muted-foreground text-xs">
+                          Total Revenue
+                        </p>
+                        <p className="font-semibold text-lg">
+                          ${totalRevenue.toFixed(2)}
+                        </p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground text-xs">Stakeholders</p>
-                        <p className="font-semibold text-lg">{ownership.length}</p>
+                        <p className="text-muted-foreground text-xs">
+                          Stakeholders
+                        </p>
+                        <p className="font-semibold text-lg">
+                          {ownership.length}
+                        </p>
                       </div>
                     </div>
                   </CardContent>
@@ -366,7 +514,9 @@ export default function Ownership() {
                     <CardTitle className="text-base flex items-center gap-2">
                       <Users className="h-4 w-4" /> Cap Table
                       {ownership.length > 0 && (
-                        <Badge variant="outline" className="text-xs">v{ownership[0]?.version}</Badge>
+                        <Badge variant="outline" className="text-xs">
+                          v{ownership[0]?.version}
+                        </Badge>
                       )}
                     </CardTitle>
                     <Button
@@ -387,45 +537,89 @@ export default function Ownership() {
                     ) : ownership.length === 0 ? (
                       <div className="text-center py-6 text-muted-foreground text-sm">
                         <Users className="h-6 w-6 mx-auto mb-2 opacity-30" />
-                        No ownership records yet. Use your contracts to auto-generate splits.
+                        No ownership records yet. Use your contracts to
+                        auto-generate splits.
                       </div>
                     ) : (
                       ownership.map((record) => (
-                        <div key={record.id} className="space-y-1" data-testid={`ownership-row-${record.id}`}>
+                        <div
+                          key={record.id}
+                          className="space-y-1"
+                          data-testid={`ownership-row-${record.id}`}
+                        >
                           <div className="flex items-center justify-between text-sm">
                             <div>
-                              <span className="font-medium font-mono text-xs">{record.userId.slice(0, 8)}…</span>
-                              <Badge variant="outline" className="ml-2 text-[10px]">{record.role}</Badge>
+                              <span className="font-medium font-mono text-xs">
+                                {record.userId.slice(0, 8)}…
+                              </span>
+                              <Badge
+                                variant="outline"
+                                className="ml-2 text-[10px]"
+                              >
+                                {record.role}
+                              </Badge>
                             </div>
-                            <span className="font-bold">{parseFloat(record.ownershipPercentage).toFixed(2)}%</span>
+                            <span className="font-bold">
+                              {parseFloat(record.ownershipPercentage).toFixed(
+                                2,
+                              )}
+                              %
+                            </span>
                           </div>
-                          <Progress value={parseFloat(record.ownershipPercentage)} className="h-2" />
+                          <Progress
+                            value={parseFloat(record.ownershipPercentage)}
+                            className="h-2"
+                          />
                         </div>
                       ))
                     )}
 
                     {/* Ownership Validation */}
-                    {ownership.length > 0 && (() => {
-                      const total = ownership.reduce((s, r) => s + parseFloat(r.ownershipPercentage), 0);
-                      const isValid = Math.abs(total - 100) < 0.01;
-                      return (
-                        <div className={`flex items-center gap-2 text-xs mt-2 p-2 rounded-lg ${isValid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-                          {isValid ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
-                          {isValid ? "Ownership totals 100% — valid" : `Total is ${total.toFixed(2)}% — must equal 100%`}
-                        </div>
-                      );
-                    })()}
+                    {ownership.length > 0 &&
+                      (() => {
+                        const total = ownership.reduce(
+                          (s, r) => s + parseFloat(r.ownershipPercentage),
+                          0,
+                        );
+                        const isValid = Math.abs(total - 100) < 0.01;
+                        return (
+                          <div
+                            className={`flex items-center gap-2 text-xs mt-2 p-2 rounded-lg ${isValid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
+                          >
+                            {isValid ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            ) : (
+                              <AlertCircle className="h-3.5 w-3.5" />
+                            )}
+                            {isValid
+                              ? "Ownership totals 100% — valid"
+                              : `Total is ${total.toFixed(2)}% — must equal 100%`}
+                          </div>
+                        );
+                      })()}
 
                     {/* Audit History */}
                     {showHistory && ownershipHistory.length > 0 && (
                       <div className="mt-4 border-t pt-4 space-y-2">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Audit Trail</p>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          Audit Trail
+                        </p>
                         {ownershipHistory.map((h) => (
-                          <div key={h.id} className="flex items-center gap-3 text-xs text-muted-foreground p-2 bg-muted rounded-lg">
+                          <div
+                            key={h.id}
+                            className="flex items-center gap-3 text-xs text-muted-foreground p-2 bg-muted rounded-lg"
+                          >
                             <Clock className="h-3 w-3 shrink-0" />
-                            <span>v{h.version} · {h.role} · {parseFloat(h.ownershipPercentage).toFixed(2)}%</span>
-                            {h.changeReason && <span className="italic">— {h.changeReason}</span>}
-                            <span className="ml-auto">{new Date(h.effectiveAt).toLocaleDateString()}</span>
+                            <span>
+                              v{h.version} · {h.role} ·{" "}
+                              {parseFloat(h.ownershipPercentage).toFixed(2)}%
+                            </span>
+                            {h.changeReason && (
+                              <span className="italic">— {h.changeReason}</span>
+                            )}
+                            <span className="ml-auto">
+                              {new Date(h.effectiveAt).toLocaleDateString()}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -439,9 +633,16 @@ export default function Ownership() {
                     <CardTitle className="text-base flex items-center gap-2">
                       <DollarSign className="h-4 w-4" /> Revenue Events
                     </CardTitle>
-                    <Dialog open={showAddRevenue} onOpenChange={setShowAddRevenue}>
+                    <Dialog
+                      open={showAddRevenue}
+                      onOpenChange={setShowAddRevenue}
+                    >
                       <DialogTrigger asChild>
-                        <Button size="sm" variant="outline" data-testid="button-add-revenue">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          data-testid="button-add-revenue"
+                        >
                           <Plus className="h-3.5 w-3.5 mr-1" /> Record Income
                         </Button>
                       </DialogTrigger>
@@ -454,14 +655,22 @@ export default function Ownership() {
                             <Label>Source</Label>
                             <Select
                               value={newRevenue.source}
-                              onValueChange={(v) => setNewRevenue({ ...newRevenue, source: v })}
+                              onValueChange={(v) =>
+                                setNewRevenue({ ...newRevenue, source: v })
+                              }
                             >
                               <SelectTrigger data-testid="select-revenue-source">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
                                 {REVENUE_SOURCES.map((s) => (
-                                  <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+                                  <SelectItem
+                                    key={s}
+                                    value={s}
+                                    className="capitalize"
+                                  >
+                                    {s}
+                                  </SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
@@ -474,7 +683,12 @@ export default function Ownership() {
                               step="0.01"
                               placeholder="e.g. 250.00"
                               value={newRevenue.amount}
-                              onChange={(e) => setNewRevenue({ ...newRevenue, amount: e.target.value })}
+                              onChange={(e) =>
+                                setNewRevenue({
+                                  ...newRevenue,
+                                  amount: e.target.value,
+                                })
+                              }
                               data-testid="input-revenue-amount"
                             />
                           </div>
@@ -483,18 +697,35 @@ export default function Ownership() {
                             <Input
                               placeholder="e.g. Spotify Q1 2026"
                               value={newRevenue.description}
-                              onChange={(e) => setNewRevenue({ ...newRevenue, description: e.target.value })}
+                              onChange={(e) =>
+                                setNewRevenue({
+                                  ...newRevenue,
+                                  description: e.target.value,
+                                })
+                              }
                               data-testid="input-revenue-description"
                             />
                           </div>
                           <div className="flex justify-end gap-2">
-                            <Button variant="outline" onClick={() => setShowAddRevenue(false)}>Cancel</Button>
                             <Button
-                              onClick={() => recordRevenueMutation.mutate(newRevenue)}
-                              disabled={!newRevenue.amount || recordRevenueMutation.isPending}
+                              variant="outline"
+                              onClick={() => setShowAddRevenue(false)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              onClick={() =>
+                                recordRevenueMutation.mutate(newRevenue)
+                              }
+                              disabled={
+                                !newRevenue.amount ||
+                                recordRevenueMutation.isPending
+                              }
                               data-testid="button-confirm-revenue"
                             >
-                              {recordRevenueMutation.isPending ? "Saving..." : "Record Revenue"}
+                              {recordRevenueMutation.isPending
+                                ? "Saving..."
+                                : "Record Revenue"}
                             </Button>
                           </div>
                         </div>
@@ -504,19 +735,36 @@ export default function Ownership() {
                   <CardContent>
                     {revenue.length === 0 ? (
                       <p className="text-center text-sm text-muted-foreground py-4">
-                        No revenue events yet. Record income to auto-calculate stakeholder splits.
+                        No revenue events yet. Record income to auto-calculate
+                        stakeholder splits.
                       </p>
                     ) : (
                       <div className="space-y-3">
                         {revenue.map((event) => (
-                          <div key={event.id} className="flex items-center justify-between p-3 bg-muted rounded-lg" data-testid={`revenue-row-${event.id}`}>
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-muted rounded-lg"
+                            data-testid={`revenue-row-${event.id}`}
+                          >
                             <div className="flex items-center gap-3">
-                              <Badge className={sourceColor[event.source] ?? "bg-gray-100 text-gray-700"}>
+                              <Badge
+                                className={
+                                  sourceColor[event.source] ??
+                                  "bg-gray-100 text-gray-700"
+                                }
+                              >
                                 {event.source}
                               </Badge>
                               <div>
-                                <p className="text-sm font-medium">${parseFloat(event.amount).toFixed(2)} {event.currency}</p>
-                                {event.description && <p className="text-xs text-muted-foreground">{event.description}</p>}
+                                <p className="text-sm font-medium">
+                                  ${parseFloat(event.amount).toFixed(2)}{" "}
+                                  {event.currency}
+                                </p>
+                                {event.description && (
+                                  <p className="text-xs text-muted-foreground">
+                                    {event.description}
+                                  </p>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -527,7 +775,9 @@ export default function Ownership() {
                                 size="sm"
                                 variant="outline"
                                 className="text-xs h-7"
-                                onClick={() => executePayoutsMutation.mutate(event.id)}
+                                onClick={() =>
+                                  executePayoutsMutation.mutate(event.id)
+                                }
                                 disabled={executePayoutsMutation.isPending}
                                 data-testid={`button-execute-payout-${event.id}`}
                               >

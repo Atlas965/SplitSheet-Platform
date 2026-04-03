@@ -8,6 +8,7 @@ import Logo from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "react-hot-toast";
 
 interface SubscriptionData {
   hasSubscription: boolean;
@@ -23,6 +24,13 @@ interface SubscriptionData {
 export default function Billing() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
+  export default function Billing() {
+    const upgrade = () => {
+      setTimeout(() => {
+        toast.success("Upgraded to Pro 🎉");
+      }, 800);
+    };
+
 
   // Fetch subscription data
   const { data: subscriptionData, isLoading: subscriptionLoading } = useQuery<SubscriptionData>({
@@ -309,5 +317,16 @@ export default function Billing() {
         </div>
       </div>
     </div>
+    return (
+        <div>
+          <h1>Billing</h1>
+          <p>Current Plan: Free</p>
+
+          <button onClick={upgrade}>
+            Upgrade to Pro
+          </button>
+        </div>
+      );
+    }
   );
 }

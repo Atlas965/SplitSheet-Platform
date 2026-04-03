@@ -1,0 +1,204 @@
+**SPLITSHEET LEGAL DOCUMENTS**
+SoundLedger Technologies Inc. – SplitSheet Product
+Effective Date: [Insert Date]
+
+---
+
+## 1. TERMS OF SERVICE
+
+### 1.1 Acceptance of Terms
+
+By accessing or using SplitSheet (“Platform”), you agree to these Terms. If you do not agree, do not use the Platform.
+
+### 1.2 Platform Liability
+
+SplitSheet acts solely as a platform to facilitate agreements and is **not a party to any agreement between users**. We are not responsible for disputes, performance, or enforcement of user-created agreements.
+
+### 1.3 User Responsibility
+
+Users are solely responsible for the **accuracy, legality, and enforceability** of the agreements they create.
+
+### 1.4 As-Is Disclaimer
+
+The Platform and all documents are provided **“as-is” without guarantees or warranties**, express or implied.
+
+### 1.5 Intellectual Property
+
+All content, logos, and trademarks on SplitSheet are the **exclusive property of SoundLedger Technologies Inc.**
+
+### 1.6 Dispute Limitation
+
+Disputes arising from use of the Platform will be resolved in the following order:
+
+1. Mutual negotiation
+2. Mediation
+3. Arbitration (costs shared equally)
+
+### 1.7 Eligibility
+
+* Must be 18+ or age of majority in your jurisdiction
+* Must have authority to enter binding agreements
+
+### 1.8 User Accounts & Content
+
+* Maintain account security
+* Own all uploaded content
+* Grant SplitSheet a limited license to operate the platform
+
+### 1.9 Payments & Subscriptions
+
+* Fees may apply; payments are non-refundable unless required by law
+* Pricing may change with notice
+
+### 1.10 Termination
+
+Accounts may be suspended or terminated for violating terms, fraudulent activity, or abuse.
+
+### 1.11 Limitation of Liability
+
+SplitSheet is **not liable for indirect or consequential damages**, and total liability is limited to fees paid in the last 12 months.
+
+### 1.12 Governing Law
+
+Ontario, Canada
+
+### 1.13 Changes
+
+We may update these Terms; continued use = acceptance.
+
+### 1.14 Contact
+
+[Insert Email]
+
+---
+
+## 2. PRIVACY POLICY
+
+### 2.1 Information We Collect
+
+* Account info: name, email, username
+* Contract data: royalty splits, ownership percentages, agreement terms
+* Usage data: device info, IP address, interaction data
+
+### 2.2 How We Use Information
+
+* Operate the platform
+* Store agreements
+* Improve user experience
+* Ensure security
+
+### 2.3 Data Sharing
+
+* We do NOT sell user data
+* May share with cloud providers, payment processors, or legal authorities if required
+
+### 2.4 Data Storage & Security
+
+* Stored securely with encryption
+* Access controls and secure authentication
+
+### 2.5 User Rights (Canada / GDPR-aligned)
+
+* Access, correction, or deletion of your data
+
+### 2.6 Data Retention
+
+* Retained while account is active and as required for legal compliance
+
+### 2.7 Platform Liability
+
+SplitSheet is **not responsible for the content or legality of user-created agreements**.
+
+### 2.8 Dispute Limitation
+
+Privacy-related disputes will follow:
+
+1. Negotiation
+2. Mediation
+3. Arbitration (costs shared equally)
+
+### 2.9 Children
+
+Platform is not for users under 18.
+
+### 2.10 Changes
+
+Policy updates may occur; continued use = acceptance.
+
+### 2.11 Contact
+
+[Insert Email]
+
+---
+
+## 3. SPLIT AGREEMENT TEMPLATE
+
+### 3.1 Parties
+
+Contributor A: [Name]
+Contributor B: [Name]
+Contributor C: [Name]
+(Collectively, the “Parties”)
+
+### 3.2 Work
+
+Title: [Song Name / Project Name]
+
+### 3.3 Ownership Split
+
+* Contributor A: [%]
+* Contributor B: [%]
+* Contributor C: [%]
+  Total = 100%
+
+### 3.4 Revenue Sources
+
+* Streaming revenue
+* Publishing royalties
+* Performance royalties
+* Licensing / sync deals
+
+### 3.5 User Responsibility
+
+* Users are solely responsible for **accuracy and legality** of this agreement
+* SplitSheet is **not a party to this agreement** and provides it **as-is** without guarantees
+
+### 3.6 Payment Responsibility
+
+* Each party registers with PROs and collects their own shares unless otherwise agreed
+
+### 3.7 Representations
+
+* Each party contributed to the work and has authority to enter this agreement
+
+### 3.8 Dispute Resolution
+
+* Mutual negotiation → mediation → arbitration (costs shared equally)
+* Governing law: Ontario, Canada
+
+### 3.9 Amendments
+
+* Must be agreed by all parties
+* Updated through SplitSheet
+
+### 3.10 Digital Execution
+
+* Electronically signed agreements are legally binding
+
+### 3.11 Intellectual Property
+
+* All SplitSheet content, logos, and templates are **exclusive property of SoundLedger Technologies Inc.**
+
+SIGNATURES:
+
+---
+
+Contributor A
+
+---
+
+Contributor B
+
+---
+
+Contributor C
