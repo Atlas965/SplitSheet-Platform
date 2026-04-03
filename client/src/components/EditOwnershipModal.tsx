@@ -1,6 +1,6 @@
 // components/EditOwnershipModal.tsx
-import { useState } from "react";
 import { toast } from "react-hot-toast";
+import { useState } from "react";
 
 export default function EditOwnershipModal({ asset, onClose, onUpdated }) {
   const [splits, setSplits] = useState(asset.ownership);

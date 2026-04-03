@@ -23,6 +23,7 @@ import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
 import NotFound from "@/pages/not-found";
 import EditOwnershipModal from "@/components/EditOwnershipModal";
+import NotificationsPage from "./pages/notifications";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();

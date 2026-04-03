@@ -297,15 +297,6 @@ export class DatabaseStorage implements IStorage {
       .from(contractSignatures)
       .where(eq(contractSignatures.contractId, contractId));
   }
-  // storage.ts
-  async function getContracts(userId) {
-    return db.query(`
-      SELECT c.*
-      FROM contracts c
-      LEFT JOIN contract_collaborators cc ON cc.contract_id = c.id
-      WHERE c.owner_id = $1 OR cc.user_id = $1
-    `, [userId]);
-  }
 
   // Analytics operations
   async getAnalyticsData(userId?: string): Promise<any> {
