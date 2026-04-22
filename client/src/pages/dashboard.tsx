@@ -1,15 +1,18 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import Footer from "@/components/Footer";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import Logo from "@/components/Logo";
 import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen } from "lucide-react";
+import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen, LogOut, Settings } from "lucide-react";
+import NavESignButton from "@/components/NavESignButton";
+import QuickActionModal, { type QuickActionType } from "@/components/QuickActionModal";
 
 interface DashboardStats {
   totalContracts: number;
@@ -29,7 +32,8 @@ interface Contract {
 
 export default function Dashboard() {
   const { toast } = useToast();
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
+  const [quickAction, setQuickAction] = useState<QuickActionType>(null);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -93,13 +97,62 @@ export default function Dashboard() {
               <Logo />
               <span className="text-xl font-bold text-primary">SplitSheet</span>
             </div>
-            <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
+            <div className="flex items-center space-x-2">
+              <NavESignButton />
+              <button className="text-muted-foreground hover:text-foreground p-2" data-testid="nav-notifications">
                 <Bell className="h-4 w-4" />
               </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-muted transition-colors"
+                    data-testid="nav-user-menu"
+                  >
+                    <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0">
+                      {(user as any)?.firstName?.[0] ?? (user as any)?.email?.[0]?.toUpperCase() ?? "U"}
+                    </div>
+                    <ChevronDown className="h-3 w-3 text-muted-foreground hidden sm:block" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56" data-testid="user-dropdown-menu">
+                  <DropdownMenuLabel className="font-normal">
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-sm font-semibold leading-none">
+                        {(user as any)?.firstName && (user as any)?.lastName
+                          ? `${(user as any).firstName} ${(user as any).lastName}`
+                          : (user as any)?.email ?? "My Account"}
+                      </p>
+                      {(user as any)?.email && (
+                        <p className="text-xs text-muted-foreground leading-none truncate">
+                          {(user as any).email}
+                        </p>
+                      )}
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild data-testid="menu-profile">
+                    <Link href="/profile" className="flex items-center w-full cursor-pointer">
+                      <User className="mr-2 h-4 w-4" />
+                      Profile
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild data-testid="menu-billing">
+                    <Link href="/billing" className="flex items-center w-full cursor-pointer">
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Billing
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    data-testid="menu-sign-out"
+                    className="text-destructive focus:text-destructive cursor-pointer"
+                    onClick={() => { window.location.href = "/api/logout"; }}
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         </div>
@@ -117,7 +170,7 @@ export default function Dashboard() {
                   <Link href="/" className="nav-item nav-active" data-testid="tab-overview">
                     <Home className="mr-2 h-4 w-4" />Dashboard
                   </Link>
-                  
+
                   {/* Navigation Dropdown - Accessible */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -206,22 +259,23 @@ export default function Dashboard() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-                
+
                 {/* Quick Actions */}
                 <div className="flex items-center space-x-3">
                   <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
-                    <Link href="/contract/new">
+                    <Link href="/contract/split-sheet">
                       <Plus className="mr-1 h-3 w-3" />
                       New Contract
                     </Link>
                   </Button>
+                  <NavESignButton />
                   <Button variant="ghost" size="sm" asChild data-testid="quick-messages">
                     <Link href="/messages">
                       <Mail className="h-4 w-4" />
                     </Link>
                   </Button>
                   <Button variant="ghost" size="sm" asChild data-testid="quick-notifications">
-                    <Link href="/notifications">
+                    <Link href="/">
                       <Bell className="h-4 w-4" />
                     </Link>
                   </Button>
@@ -327,44 +381,29 @@ export default function Dashboard() {
                   <span>Create New Contract</span>
                 </Link>
               </Button>
-              
+
               <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-accent/10 hover:text-accent transition-colors" 
                 data-testid="button-upload-contract"
-                onClick={() => {
-                  toast({
-                    title: "Upload Feature",
-                    description: "Select a contract file to upload (PDF or Docx).",
-                  });
-                }}
+                onClick={() => setQuickAction("upload")}
               >
                 <Upload className="h-4 w-4" />
                 <span>Upload Existing Contract</span>
               </button>
-              
+
               <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-accent/10 hover:text-accent transition-colors" 
                 data-testid="button-invite-collaborator"
-                onClick={() => {
-                  toast({
-                    title: "Invite Collaborator",
-                    description: "Enter email address to send invitation link.",
-                  });
-                }}
+                onClick={() => setQuickAction("invite")}
               >
                 <Users className="h-4 w-4" />
                 <span>Invite Collaborator</span>
               </button>
-              
+
               <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
+                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:bg-accent/10 hover:text-accent transition-colors" 
                 data-testid="button-export-contracts"
-                onClick={() => {
-                  toast({
-                    title: "Export All Contracts",
-                    description: "Your contract archive is being generated for download.",
-                  });
-                }}
+                onClick={() => setQuickAction("export")}
               >
                 <Download className="h-4 w-4" />
                 <span>Export All Contracts</span>
@@ -373,6 +412,8 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      <QuickActionModal action={quickAction} onClose={() => setQuickAction(null)} />
+      <Footer />
     </div>
   );
 }

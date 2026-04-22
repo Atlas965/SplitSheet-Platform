@@ -72,6 +72,26 @@ export const contracts = pgTable("contracts", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ─── Canadian PRO (Performance Rights Organization) ──────────────────────────
+
+export const PRO_TYPE = z.enum(["SOCAN", "BMI", "ASCAP", "PRS", "SESAC", "Other"]);
+export type ProType = z.infer<typeof PRO_TYPE>;
+
+export const PRO_LABELS: Record<ProType, string> = {
+  SOCAN:  "SOCAN — Society of Composers, Authors and Music Publishers of Canada",
+  BMI:    "BMI — Broadcast Music, Inc.",
+  ASCAP:  "ASCAP — American Society of Composers, Authors and Publishers",
+  PRS:    "PRS — Performing Right Society (UK)",
+  SESAC:  "SESAC — Society of European Stage Authors & Composers",
+  Other:  "Other / Not affiliated",
+};
+
+export const ipiNumberSchema = z
+  .string()
+  .regex(/^\d{9}$/, "IPI number must be exactly 9 digits")
+  .optional()
+  .or(z.literal(""));
+
 // Contract collaborators
 export const contractCollaborators = pgTable("contract_collaborators", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -82,6 +102,8 @@ export const contractCollaborators = pgTable("contract_collaborators", {
   role: varchar("role").notNull(),
   ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }),
   status: varchar("status").default("pending"), // pending, signed, declined
+  proAffiliation: varchar("pro_affiliation").default("SOCAN"), // Canadian-first default
+  ipiNumber: varchar("ipi_number", { length: 9 }),             // 9-digit IPI
   signedAt: timestamp("signed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -312,6 +334,10 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
 export const insertContractCollaboratorSchema = createInsertSchema(contractCollaborators).omit({
   id: true,
   createdAt: true,
+}).extend({
+  // Enforce Canadian-first PRO enum and 9-digit IPI
+  proAffiliation: PRO_TYPE.default("SOCAN").optional(),
+  ipiNumber: ipiNumberSchema,
 });
 
 export const insertContractSignatureSchema = createInsertSchema(contractSignatures).omit({

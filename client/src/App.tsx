@@ -22,8 +22,7 @@ import Admin from "@/pages/admin";
 import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
 import NotFound from "@/pages/not-found";
-import EditOwnershipModal from "@/components/EditOwnershipModal";
-import NotificationsPage from "./pages/notifications";
+import NotificationsPage from "@/pages/notifications";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -52,7 +51,7 @@ function Router() {
           <Route path="/ownership" component={Ownership} />
           <Route path="/ownership/:id" component={Ownership} />
           <Route path="/contract/:type" component={ContractForm} />
-          <Route path="/notifications" element={<NotificationsPage />} />
+          <Route path="/notifications" component={NotificationsPage} />
         </>
       )}
       <Route component={NotFound} />

@@ -1,0 +1,56 @@
+import { Switch, Route } from "wouter";
+import { useAuth } from "./hooks/useAuth";
+import Admin from "./pages/admin";
+import Analytics from "./pages/analytics";
+import Billing from "./pages/billing";
+import ContractDetails from "./pages/contract-details";
+import ContractEdit from "./pages/contract-edit";
+import ContractForm from "./pages/contract-form";
+import Contracts from "./pages/contracts";
+import Dashboard from "./pages/dashboard";
+import Landing from "./pages/landing";
+import Matches from "./pages/matches";
+import Messages from "./pages/messages";
+import NegotiationDetail from "./pages/negotiation-detail";
+import Negotiations from "./pages/negotiations";
+import NotFound from "./pages/not-found";
+import NotificationsPage from "./pages/notifications";
+import Ownership from "./pages/ownership";
+import Profile from "./pages/profile";
+import Search from "./pages/search";
+import Templates from "./pages/templates";
+
+export function Router() {
+    const { isAuthenticated, isLoading } = useAuth();
+
+    return (
+        <Switch>
+            {isLoading || !isAuthenticated ? (
+                <Route path="/" component={Landing} />
+            ) : (
+                <>
+                    <Route path="/" component={Dashboard} />
+                    <Route path="/contracts" component={Contracts} />
+                    <Route path="/contracts/:id" component={ContractDetails} />
+                    <Route path="/contracts/:id/edit" component={ContractEdit} />
+                    <Route path="/profile" component={Profile} />
+                    <Route path="/analytics" component={Analytics} />
+                    <Route path="/templates" component={Templates} />
+                    <Route path="/billing" component={Billing} />
+                    <Route path="/negotiations" component={Negotiations} />
+                    <Route path="/negotiations/:id" component={NegotiationDetail} />
+                    <Route path="/matches" component={Matches} />
+                    <Route path="/messages" component={Messages} />
+                    <Route path="/messages/:userId" component={Messages} />
+                    <Route path="/search" component={Search} />
+                    <Route path="/admin" component={Admin} />
+                    <Route path="/ownership" component={Ownership} />
+                    <Route path="/ownership/:id" component={Ownership} />
+                    <Route path="/contract/:type" component={ContractForm} />
+                    <Route path="/notifications" component={<NotificationsPage />} />
+                </>
+            )}
+            <Route component={NotFound} />
+        </Switch>
+    );
+}

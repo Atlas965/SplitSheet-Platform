@@ -1,3 +1,5 @@
+import { registerSecurityRoutes } from "./security routes";
+// ...at the end of registerRoutes():
 import type { Express } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
@@ -23,6 +25,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import OpenAI from "openai";
 import { insertUserMatchSchema, insertMessageSchema, insertNotificationSchema } from "@shared/schema";
+import cors from "cors";
 
 // Rate limiting storage (in production, use Redis or database)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -1607,7 +1610,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     res.json({ success: true });
   });
+  app.use(cors({
+    origin: "*", // or your specific front-end URL
+  }));
 
   const httpServer = createServer(app);
   return httpServer;
+  await registerSecurityRoutes(app);
 }

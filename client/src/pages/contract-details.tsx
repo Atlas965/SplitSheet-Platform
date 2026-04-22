@@ -8,6 +8,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
 import Logo from "@/components/Logo";
 import SignatureCanvas, { type SignaturePayload } from "@/components/SignatureCanvas";
+import IdentityVerification, { type VerificationResult } from "@/components/IdentityVerification";
+import CWRExport from "@/components/CWRExport";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +41,8 @@ export default function ContractDetails() {
   const [shareEmail, setShareEmail] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [savedSignature, setSavedSignature] = useState<SignaturePayload | null>(null);
+  const [identityResult, setIdentityResult] = useState<VerificationResult | null>(null);
+  const [signingStep, setSigningStep] = useState<"kyc" | "sign">("kyc");
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -173,7 +177,7 @@ export default function ContractDetails() {
 
   const handleDownloadPDF = async () => {
     if (!contract) return;
-    
+
     try {
       downloadContractPDF({
         title: contract.title,
@@ -181,7 +185,7 @@ export default function ContractDetails() {
         data: contract.data,
         createdAt: contract.createdAt
       });
-      
+
       toast({
         title: "PDF Downloaded",
         description: "Contract PDF has been downloaded successfully.",
@@ -515,7 +519,7 @@ export default function ContractDetails() {
               <i className="fas fa-download mr-2"></i>
               Download PDF
             </Button>
-            
+
             <Link href={`/contracts/${id}/edit`}>
               <Button variant="outline" data-testid="button-edit-contract">
                 <i className="fas fa-edit mr-2"></i>
@@ -760,11 +764,36 @@ export default function ContractDetails() {
                     </div>
                   );
                 })() : (
-                  /* ── SIGNING CANVAS ── */
-                  <SignatureCanvas
-                    onSave={(payload) => eSignMutation.mutate(payload)}
-                    isSaving={eSignMutation.isPending}
-                  />
+                  /* ── KYC → SIGNING FLOW ── */
+                  <div className="space-y-4">
+                    {signingStep === "kyc" && !identityResult ? (
+                      <IdentityVerification
+                        prefillName={(user as any)?.firstName
+                          ? `${(user as any).firstName} ${(user as any).lastName ?? ""}`.trim()
+                          : ""}
+                        onVerified={(result) => {
+                          setIdentityResult(result);
+                          setSigningStep("sign");
+                        }}
+                        onSkip={() => setSigningStep("sign")}
+                      />
+                    ) : (
+                      <>
+                        {identityResult && (
+                          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-xs">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
+                            <span className="text-green-800 dark:text-green-300 font-medium">
+                              Identity verified — {identityResult.legalName}
+                            </span>
+                          </div>
+                        )}
+                        <SignatureCanvas
+                          onSave={(payload) => eSignMutation.mutate(payload)}
+                          isSaving={eSignMutation.isPending}
+                        />
+                      </>
+                    )}
+                  </div>
                 )}
 
                 {/* Legal footer */}
@@ -775,6 +804,16 @@ export default function ContractDetails() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* ── CWR / PRO EXPORT ─────────────────────────────── */}
+            {contract.type === "split-sheet" && contract.data?.collaborators?.length > 0 && (
+              <CWRExport
+                contractId={contract.id}
+                songTitle={contract.data.title || contract.title}
+                collaborators={contract.data.collaborators || []}
+                isrc={contract.data.isrc}
+              />
+            )}
 
             {/* ── ACTIVITY TIMELINE ───────────────────────────── */}
             <Card>

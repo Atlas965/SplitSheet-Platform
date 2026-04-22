@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { PROSelectorFields } from "@/components/PROSelector";
 
 const splitSheetSchema = z.object({
   title: z.string().min(1, "Song title is required"),
@@ -18,6 +19,8 @@ const splitSheetSchema = z.object({
       (val) => val === "" ? 0 : Number(val),
       z.number().min(0, "Must be 0 or greater").max(100, "Cannot exceed 100%")
     ),
+    proAffiliation: z.string().default("SOCAN"),
+    ipiNumber: z.string().regex(/^\d{9}$/, "Must be exactly 9 digits").optional().or(z.literal("")),
   })).min(1, "At least one collaborator is required"),
   performanceRoyalties: z.string().default("equal"),
   mechanicalRoyalties: z.string().default("equal"),
@@ -88,8 +91,8 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
       return initialData.collaborators;
     }
     return [
-      { name: "", role: "writer", ownershipPercentage: 50 },
-      { name: "", role: "writer", ownershipPercentage: 50 },
+      { name: "", role: "writer", ownershipPercentage: 50, proAffiliation: "SOCAN", ipiNumber: "" },
+      { name: "", role: "writer", ownershipPercentage: 50, proAffiliation: "SOCAN", ipiNumber: "" },
     ];
   });
 
@@ -116,7 +119,7 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
         collaborators: initialData.collaborators || collaborators,
       };
     }
-    
+
     // Otherwise use default values
     switch (contractType) {
       case "split-sheet":
@@ -166,7 +169,7 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
   });
 
   const addCollaborator = () => {
-    setCollaborators([...collaborators, { name: "", role: "writer", ownershipPercentage: 0 }]);
+    setCollaborators([...collaborators, { name: "", role: "writer", ownershipPercentage: 0, proAffiliation: "SOCAN", ipiNumber: "" }]);
   };
 
   const removeCollaborator = (index: number) => {
@@ -230,16 +233,37 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold">Collaborators</h3>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={addCollaborator}
-                    data-testid="button-add-collaborator"
-                  >
-                    <i className="fas fa-plus mr-1"></i>Add Collaborator
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const equal = Math.floor(100 / collaborators.length);
+                        const remainder = 100 - equal * collaborators.length;
+                        const updated = collaborators.map((c: any, i: number) => ({
+                          ...c,
+                          ownershipPercentage: i === 0 ? equal + remainder : equal,
+                        }));
+                        setCollaborators(updated);
+                        form.setValue("collaborators", updated);
+                      }}
+                      data-testid="button-equalize-split"
+                      className="text-accent border-accent/30 hover:bg-accent/10"
+                    >
+                      ⚖ Equal Split
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={addCollaborator}
+                      data-testid="button-add-collaborator"
+                    >
+                      <i className="fas fa-plus mr-1"></i>Add Collaborator
+                    </Button>
+                  </div>
                 </div>
-                
+
                 <div className="space-y-4">
                   {collaborators.map((collaborator, index) => (
                     <div key={index} className="bg-muted p-4 rounded-lg">
@@ -296,10 +320,22 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
                           )}
                         </div>
                       </div>
+
+                      {/* PRO Affiliation + IPI — Canadian-first */}
+                      <div className="mt-3 pt-3 border-t border-border/60">
+                        <PROSelectorFields
+                          defaultPRO={collaborator.proAffiliation ?? "SOCAN"}
+                          defaultIPI={collaborator.ipiNumber ?? ""}
+                          onChange={(vals) => {
+                            updateCollaborator(index, "proAffiliation", vals.proAffiliation);
+                            updateCollaborator(index, "ipiNumber", vals.ipiNumber ?? "");
+                          }}
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
-                
+
                 <div className={`mt-4 p-3 border rounded-lg ${totalOwnership === 100 ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
                   <p className={`text-sm ${totalOwnership === 100 ? 'text-green-800' : 'text-yellow-800'}`}>
                     <i className="fas fa-info-circle mr-2"></i>
