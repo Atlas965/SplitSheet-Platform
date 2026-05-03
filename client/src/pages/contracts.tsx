@@ -202,10 +202,10 @@ export default function Contracts() {
         </div>
 
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold">My Contracts</h2>
+          <h2 className="text-2xl font-bold">My Music Agreements</h2>
           <Link href="/templates">
             <Button className="bg-primary text-primary-foreground hover:bg-primary/90" data-testid="button-new-contract">
-              <i className="fas fa-plus mr-2"></i>New Contract
+              <i className="fas fa-plus mr-2"></i>Create New Agreement
             </Button>
           </Link>
         </div>
@@ -241,7 +241,7 @@ export default function Contracts() {
             <div className="flex-1">
               <Input 
                 type="text" 
-                placeholder="Search contracts..." 
+                placeholder="Search agreements..." 
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full"
@@ -317,16 +317,16 @@ export default function Contracts() {
             ) : (
               <div className="text-center py-12">
                 <i className="fas fa-file-contract text-4xl text-muted-foreground mb-4"></i>
-                <h3 className="text-lg font-semibold mb-2">No contracts found</h3>
+                <h3 className="text-lg font-semibold mb-2">No agreements found</h3>
                 <p className="text-muted-foreground mb-4">
                   {searchTerm || typeFilter !== "all" || statusFilter !== "all" 
                     ? "Try adjusting your filters or search terms."
-                    : "Create your first contract to get started!"
+                    : "Create your first agreement to get started!"
                   }
                 </p>
                 <Link href="/templates">
                   <Button className="bg-primary text-primary-foreground hover:bg-primary/90" data-testid="button-create-first-contract">
-                    <i className="fas fa-plus mr-2"></i>Create Contract
+                    <i className="fas fa-plus mr-2"></i>Create Agreement
                   </Button>
                 </Link>
               </div>
@@ -338,14 +338,14 @@ export default function Contracts() {
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
           <AlertDialogContent data-testid="delete-contract-dialog">
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Contract</AlertDialogTitle>
+              <AlertDialogTitle>Delete Agreement</AlertDialogTitle>
             </AlertDialogHeader>
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Are you sure you want to delete this contract? This action is permanent and cannot be undone.
+                Are you sure you want to delete this agreement? This action is permanent and cannot be undone.
               </p>
               <p className="text-xs text-red-600 font-semibold">
-                All contract data, collaborations, and associated information will be permanently removed.
+                All agreement data, collaborations, and associated information will be permanently removed.
               </p>
             </div>
             <AlertDialogFooter>

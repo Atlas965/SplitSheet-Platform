@@ -168,7 +168,7 @@ export default function Landing() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
             <div className="max-w-xl">
               <h1 className="text-4xl md:text-6xl font-bold text-foreground mb-6 leading-tight">
-                Professional Music Contracts Made{" "}
+                Professional Music Agreements Made{" "}
                 <span className="text-accent">Simple</span>
               </h1>
               <p className="text-xl text-muted-foreground mb-8 leading-relaxed">

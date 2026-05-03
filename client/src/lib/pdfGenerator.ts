@@ -29,7 +29,7 @@ export function generateContractPDF(contract: ContractData): jsPDF {
   doc.text('SPLITSHEET', margin, yPosition);
   doc.setFontSize(12);
   doc.setFont(undefined, 'normal');
-  doc.text('Music Contract Management Platform', margin, yPosition + 10);
+  doc.text('Music Agreement Management Platform', margin, yPosition + 10);
   
   // Title
   yPosition += 30;
@@ -41,7 +41,7 @@ export function generateContractPDF(contract: ContractData): jsPDF {
   yPosition += 15;
   doc.setFontSize(12);
   doc.setFont(undefined, 'normal');
-  doc.text(`Contract Type: ${contract.type.replace('-', ' ').toUpperCase()}`, margin, yPosition);
+  doc.text(`Agreement Type: ${contract.type.replace('-', ' ').toUpperCase()}`, margin, yPosition);
   doc.text(`Date: ${new Date(contract.createdAt).toLocaleDateString()}`, pageWidth - margin - 50, yPosition);
   
   // Horizontal line

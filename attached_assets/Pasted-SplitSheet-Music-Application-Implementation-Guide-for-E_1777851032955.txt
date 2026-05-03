@@ -1,0 +1,111 @@
+SplitSheet Music Application: Implementation Guide for Enhancements
+This document provides a detailed implementation guide to transition the SplitSheet application from using “Contracts” to “Music Agreements,” enhance the landing page, and address identified code quality issues. Each section includes specific instructions and examples.
+
+1. Naming Convention Transition: From ‘Contracts’ to ‘Music Agreements’
+Goal: Achieve consistent use of “Music Agreements” across the application to enhance professionalism and industry relevance.
+
+1.1. Frontend (UI/UX) Changes
+Action: Systematically replace all user-facing instances of “Contract” with “Music Agreement” or “Agreement” where appropriate.
+
+Specific Files to Modify & Examples:
+
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`:
+	◦	Hero Section Headline: Change line 36.
+	◦	Original: `Professional Music Contracts Made <span className="text-accent">Simple</span>`
+	◦	Proposed: `Professional Music Agreements Made <span className="text-accent">Simple</span>`
+	◦	Hero Section Subheading: Refine lines 38-40.
+	◦	Original: `Create lawyer-informed contracts for splits, performances, production, and management. Built specifically for indie artists, producers, and music industry professionals.`
+	◦	Proposed: `Create, manage, and secure your split sheets, performance agreements, producer contracts, and management deals with ease.`
+	◦	Call to Action (CTA): Change line 44.
+	◦	Original: `Start Creating Contracts`
+	◦	Proposed: `Start Creating Music Agreements`
+	◦	Features Section Heading: Change line 58.
+	◦	Original: `Everything You Need to Manage Music Contracts`
+	◦	Proposed: `Everything You Need to Manage Music Agreements`
+	◦	Feature Card Titles: Update titles like “Smart Contract Templates” (line 67) to “Lawyer-Informed Agreement Templates.”
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/templates.tsx`:
+	◦	Page Header: Change line 116.
+	◦	Original: `Contract Templates`
+	◦	Proposed: `Music Agreement Templates`
+	◦	Page Subheading: Change line 117.
+	◦	Original: `Choose from our lawyer-informed templates to create professional music contracts`
+	◦	Proposed: `Choose from our lawyer-informed templates to create professional music agreements`
+	◦	Template Names: Ensure consistency with existing “Agreement” terminology (e.g., “Split Sheet Agreement,” “Performance Agreement”). No change needed for `name` fields (lines 29, 37, 45, 53) as they already use “Agreement.”
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx`:
+	◦	Page Title/Header: Update “My Contracts” to “My Music Agreements.”
+	◦	Button Text: Change “New Contract” to “Create New Agreement.”
+	◦	Placeholder Text: Update “Search contracts…” to “Search agreements…”.
+	◦	Empty State Message: Change “No contracts found” to “No agreements found.”
+	◦	Delete Confirmation: Update text referring to “removing all contract data” to “removing all agreement data.”
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx`:
+	◦	Navigation Link: Change `Contracts` (line 143) to `Agreements`.
+	◦	Quick Action Button: Change `New Contract` (line 215) to `New Agreement`.
+	◦	Stat Card Titles: Update “Total Contracts” (line 237) to “Total Agreements” and “Completed This Month” (line 253) to “Agreements Completed This Month.”
+	•	`/home/ubuntu/splitsheet_repo/client/src/lib/pdfGenerator.ts`:
+	◦	Platform Name in PDF Header: Change line 32.
+	◦	Original: `Music Contract Management Platform`
+	◦	Proposed: `Music Agreement Management Platform`
+	◦	Contract Type Label: Change line 44.
+	◦	Original: `Contract Type: <LaTex>${contract.type.replace(\'-\', \' \').toUpperCase()}`
+	◦	Proposed: `Agreement Type: $</LaTex>{contract.type.replace(\'-\', \' \').toUpperCase()}`
+	◦	Filename Generation: Update `filename` (line 223) to use `_agreement.pdf` instead of `_contract.pdf`.
+
+1.2. Backend (Codebase) Considerations
+Action: Evaluate the feasibility of renaming database entities and API endpoints. Prioritize internal consistency and clear documentation if full renaming is not immediately feasible.
+
+	•	`/home/ubuntu/splitsheet_repo/shared/schema.ts`:
+	◦	Database Table Names: Renaming tables like `contracts` to `music_agreements` is a significant database migration. For immediate impact, it is acceptable to keep the table names as `contracts` internally, but ensure all new code, API documentation, and comments refer to them as “agreements.”
+	◦	Column Names: Similarly, `contractId` could ideally become `agreementId`. This should be a gradual refactoring effort.
+	•	API Endpoints: Review and update API routes (e.g., `/api/contracts` to `/api/agreements`). This requires careful versioning to avoid breaking existing clients. If immediate renaming is not possible, ensure API documentation clearly states that `contracts` endpoints refer to “music agreements.”
+
+2. Landing Page Enhancements
+Goal: Improve visual appeal, clarity, and trust on the landing page.
+
+Specific Files to Modify & Examples:
+
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`:
+	◦	Hero Section Visuals: Implement a large hero image as described in `design_guidelines.md` (line 34). This will likely involve adding an `<img>` tag or setting a background image via CSS.
+	◦	Example: Add an `<img>` tag within the hero section, ensuring it is responsive and optimized for web.
+	◦	Social Proof: Add trust indicators below the hero section.
+	◦	Example: Insert a section with text like “Used by 10,000+ artists • 50,000+ agreements signed” and a logo grid of music labels/publishers (referencing `design_guidelines.md` lines 52-53).
+	◦	Feature Section Language: Review and update feature descriptions to be more benefit-oriented.
+	◦	Example: For the “Smart Contract Templates” card (lines 63-69), update the description to emphasize legal protection and ease of use.
+
+3. Code Quality Improvements
+Goal: Enhance maintainability, reduce bugs, and improve developer experience.
+
+Action: Refactor identified problematic code sections and implement best practices.
+
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx`:
+	◦	Refactoring: Remove the stray return block and any unused variables or imports. Ensure `user.id`, `ownerId`, and `ContractCard` are used within their correct scope.
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx`:
+	◦	Refactoring: Address the duplicate `button-cancel-subscription` test ID. Extract the inline `return` block for billing information into a separate, reusable component or function to maintain a clean component structure.
+	•	`/home/ubuntu/splitsheet_repo/client/src/pages/ownership.tsx`:
+	◦	Cleanup: Review and complete any unfinished code. Ensure all variable declarations (e.g., `const [open, setOpen] = useState(false);`) and JSX elements (`<button>`) are properly integrated or removed if not needed. Verify that `asset`/`refetch` references are within the correct component scope.
+
+General Code Quality Practices
+	1.	Code Review: Implement a mandatory code review process for all changes.
+	2.	Linting and Formatting: Ensure ESLint and Prettier are configured and integrated into the development workflow to enforce consistent code style and identify potential issues automatically.
+	3.	Testing: Increase test coverage, especially for critical paths and newly refactored components.
+
+4. General Professional Enhancements
+Goal: Improve overall user experience and application robustness.
+
+	•	Consistent Branding: Verify that “SplitSheet” and its logo are consistently displayed and styled across all pages. Update the browser tab title to reflect the application name accurately.
+	•	Error Handling and User Feedback: Enhance error messages to be more informative and user-friendly. For unauthorized access, provide clear instructions or options beyond a simple redirect.
+	•	Mobile Responsiveness: Conduct thorough testing on various mobile devices and screen sizes to ensure optimal display and functionality.
+	•	Accessibility: Perform an accessibility audit to ensure compliance with WCAG guidelines, focusing on keyboard navigation, screen reader compatibility, and color contrast.
+	•	Performance Optimization: Profile the application to identify and address performance bottlenecks, focusing on faster load times and smoother interactions.
+
+References
+	1.	Live SplitSheet Application
+	2.	SplitSheet GitHub Repository
+	3.	/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx
+	4.	/home/ubuntu/splitsheet_repo/shared/schema.ts
+	5.	/home/ubuntu/splitsheet_repo/client/src/pages/contract-details.tsx
+	6.	/home/ubuntu/splitsheet_repo/client/src/lib/pdfGenerator.ts
+	7.	/home/ubuntu/splitsheet_repo/client/src/pages/templates.tsx
+	8.	/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx
+	9.	/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx
+	10.	/home/ubuntu/splitsheet_repo/design_guidelines.md
+	11.	/home/ubuntu/splitsheet_repo/client/src/pages/ownership.tsx

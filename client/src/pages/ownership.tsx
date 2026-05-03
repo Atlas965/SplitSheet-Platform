@@ -242,17 +242,6 @@ export default function Ownership() {
     (sum, e) => sum + parseFloat(e.amount),
     0,
   );
-  const [open, setOpen] = useState(false);
-
-  <button onClick={() => setOpen(true)}>Edit Splits</button>
-
-  {open && (
-    <EditOwnershipModal
-      asset={asset}
-      onClose={() => setOpen(false)}
-      onUpdated={refetch}
-    />
-  )}
 
   return (
     <div className="min-h-screen bg-background">

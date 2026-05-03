@@ -288,7 +288,7 @@ export default function Dashboard() {
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <StatCard
-            title="Total Contracts"
+            title="Total Agreements"
             value={statsLoading ? "..." : (stats?.totalContracts || 0).toString()}
             icon="fas fa-file-contract"
             iconBg="bg-accent/10"

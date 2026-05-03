@@ -1,5 +1,3 @@
-import { registerSecurityRoutes } from "./security routes";
-// ...at the end of registerRoutes():
 import type { Express } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
@@ -25,7 +23,6 @@ import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
 import OpenAI from "openai";
 import { insertUserMatchSchema, insertMessageSchema, insertNotificationSchema } from "@shared/schema";
-import cors from "cors";
 
 // Rate limiting storage (in production, use Redis or database)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -35,20 +32,20 @@ function rateLimit(maxRequests: number, windowMs: number) {
   return (req: any, res: any, next: any) => {
     const userId = req.user?.claims?.sub;
     if (!userId) return next();
-    
+
     const now = Date.now();
     const key = `${userId}:messages`;
     const current = rateLimitStore.get(key);
-    
+
     if (!current || now > current.resetTime) {
       rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
       return next();
     }
-    
+
     if (current.count >= maxRequests) {
       return res.status(429).json({ message: "Too many messages. Please wait before sending more." });
     }
-    
+
     current.count++;
     next();
   };
@@ -60,21 +57,21 @@ async function isAdmin(req: any, res: any, next: any) {
   if (!user) {
     return res.status(401).json({ message: "Authentication required" });
   }
-  
+
   try {
     // Get user from database to verify admin role
     const dbUser = await storage.getUser(user.claims.sub);
     if (!dbUser) {
       return res.status(401).json({ message: "User not found" });
     }
-    
+
     // Check if user has admin privileges (only from database role field)
     const isAdminUser = (dbUser as any).role === 'admin';
-                       
+
     if (!isAdminUser) {
       return res.status(403).json({ message: "Admin access required" });
     }
-    
+
     next();
   } catch (error) {
     console.error("Error checking admin status:", error);
@@ -90,7 +87,7 @@ if (stripeKey) {
   // Validate that we have a secret key, not a public key
   if (stripeKey.startsWith('sk_')) {
     stripe = new Stripe(stripeKey, {
-      apiVersion: "2025-08-27.basil",
+      apiVersion: "2023-10-16",
     });
     console.log('Stripe initialized with secret key');
   } else {
@@ -148,7 +145,7 @@ Please provide your analysis and strategic recommendation.`
     });
 
     const aiContent = response.choices[0]?.message?.content || "Unable to generate analysis";
-    
+
     // Extract sentiment from the main response instead of separate call
     const sentimentMatch = aiContent.match(/sentiment[:\s]*(-?[0-9]*\.?[0-9]+)/i);
     const sentimentScore = sentimentMatch ? Math.max(-1, Math.min(1, parseFloat(sentimentMatch[1]))) : 0;
@@ -227,7 +224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Check if user owns this contract or is a collaborator
       if (contract.createdBy !== userId) {
         const collaborators = await storage.getContractCollaborators(req.params.id);
@@ -236,7 +233,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      
+
       res.json(contract);
     } catch (error) {
       console.error("Error fetching contract:", error);
@@ -251,7 +248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         createdBy: userId,
       });
-      
+
       const contract = await storage.createContract(contractData);
       res.json(contract);
     } catch (error) {
@@ -270,7 +267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Check if user owns this contract or is a collaborator with edit permission
       if (contract.createdBy !== userId) {
         const collaborators = await storage.getContractCollaborators(req.params.id);
@@ -279,7 +276,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      
+
       const updates = req.body;
       const updatedContract = await storage.updateContract(req.params.id, updates);
       res.json(updatedContract);
@@ -296,12 +293,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Only the contract owner can delete the contract
       if (contract.createdBy !== userId) {
         return res.status(403).json({ message: "Only the contract owner can delete this contract" });
       }
-      
+
       await storage.deleteContract(req.params.id);
       res.json({ message: "Contract deleted successfully" });
     } catch (error) {
@@ -318,7 +315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Check if user owns this contract or is a collaborator
       if (contract.createdBy !== userId) {
         const collaborators = await storage.getContractCollaborators(req.params.id);
@@ -327,7 +324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      
+
       const collaborators = await storage.getContractCollaborators(req.params.id);
       res.json(collaborators);
     } catch (error) {
@@ -343,17 +340,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Only the contract owner can add collaborators
       if (contract.createdBy !== userId) {
         return res.status(403).json({ message: "Only the contract owner can add collaborators" });
       }
-      
+
       const collaboratorData = insertContractCollaboratorSchema.parse({
         ...req.body,
         contractId: req.params.id,
       });
-      
+
       const collaborator = await storage.addContractCollaborator(collaboratorData);
       res.json(collaborator);
     } catch (error) {
@@ -373,7 +370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Check if user owns this contract or is a collaborator
       if (contract.createdBy !== userId) {
         const collaborators = await storage.getContractCollaborators(req.params.id);
@@ -382,7 +379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      
+
       const signatures = await storage.getContractSignatures(req.params.id);
       res.json(signatures);
     } catch (error) {
@@ -398,7 +395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!contract) {
         return res.status(404).json({ message: "Contract not found" });
       }
-      
+
       // Check if user owns this contract or is a collaborator
       if (contract.createdBy !== userId) {
         const collaborators = await storage.getContractCollaborators(req.params.id);
@@ -407,7 +404,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied" });
         }
       }
-      
+
       const signatureData = insertContractSignatureSchema.parse({
         ...req.body,
         contractId: req.params.id,
@@ -415,7 +412,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
       });
-      
+
       const signature = await storage.createContractSignature(signatureData);
       res.json(signature);
     } catch (error) {
@@ -522,10 +519,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      
+
       // Validate and clean the profile data with strict allowlist
       const updateData = insertUserSchema.partial().parse(req.body);
-      
+
       // Remove protected fields that users cannot update
       const {
         stripeCustomerId,
@@ -536,7 +533,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isActive,
         ...cleanData
       } = updateData;
-      
+
       const updatedUser = await storage.updateUser(userId, cleanData);
       res.json(updatedUser);
     } catch (error) {
@@ -555,7 +552,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const { profileImageUrl } = req.body;
-      
+
       if (!profileImageUrl) {
         return res.status(400).json({ message: "Profile image URL is required" });
       }
@@ -572,7 +569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updatedUser = await storage.updateUser(userId, {
         profileImageUrl: normalizedPath
       });
-      
+
       res.json({ profileImageUrl: normalizedPath });
     } catch (error) {
       console.error("Error updating profile image:", error);
@@ -616,75 +613,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/get-or-create-subscription', isAuthenticated, async (req: any, res) => {
     try {
       if (!stripe) {
-        return res.status(503).json({ message: "Stripe is not configured. Please contact support." });
+        return res.status(503).json({ error: { message: "Stripe is not configured. Add STRIPE_SECRET_KEY to your environment." } });
       }
 
       const userId = req.user.claims.sub;
-      let user = await storage.getUser(userId);
-      
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
+      const user   = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: { message: "User not found" } });
+      if (!user.email) return res.status(400).json({ error: { message: "No email address on file" } });
 
-      if (user.stripeSubscriptionId) {
-        const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
-        res.json({
-          subscriptionId: subscription.id,
-          clientSecret: (subscription.latest_invoice as any)?.payment_intent?.client_secret,
-        });
-        return;
-      }
-      
-      if (!user.email) {
-        throw new Error('No user email on file');
-      }
-
-      const customer = await stripe.customers.create({
-        email: user.email,
-        name: `${user.firstName} ${user.lastName}`,
-      });
-
-      // Determine price ID based on plan
       const { plan = 'pro' } = req.body;
-      let priceId;
-      let tier;
-      
-      switch (plan) {
-        case 'pro':
-          priceId = process.env.STRIPE_PRO_PRICE_ID || 'price_pro_default';
-          tier = 'pro';
-          break;
-        case 'label':
-          priceId = process.env.STRIPE_LABEL_PRICE_ID || 'price_label_default';
-          tier = 'label';
-          break;
-        default:
-          priceId = process.env.STRIPE_PRO_PRICE_ID || 'price_pro_default';
-          tier = 'pro';
+      if (!['pro', 'label'].includes(plan)) {
+        return res.status(400).json({ error: { message: `Invalid plan: ${plan}` } });
       }
 
+      // ── Resolve or reuse existing Stripe customer ──────────────────────────
+      let customerId = user.stripeCustomerId as string | undefined;
+
+      if (customerId) {
+        try {
+          const existing = await stripe.customers.retrieve(customerId);
+          if ((existing as any).deleted) customerId = undefined;
+        } catch {
+          customerId = undefined;
+        }
+      }
+
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          name:  [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email,
+          metadata: { splitsheet_user_id: userId },
+        });
+        customerId = customer.id;
+        await storage.updateUserStripeInfo(userId, customerId, user.stripeSubscriptionId ?? '');
+      }
+
+      // ── Check for existing active subscription ─────────────────────────────
+      if (user.stripeSubscriptionId) {
+        try {
+          const existingSub = await stripe.subscriptions.retrieve(
+            user.stripeSubscriptionId,
+            { expand: ['latest_invoice.payment_intent'] }
+          );
+          const isActive    = ['active', 'trialing'].includes(existingSub.status);
+          const currentTier = (existingSub.metadata?.tier ?? 'pro') as string;
+
+          if (isActive && currentTier === plan) {
+            return res.json({ alreadyActive: true, plan, subscriptionId: existingSub.id });
+          }
+
+          if (isActive && currentTier !== plan) {
+            await stripe.subscriptions.cancel(user.stripeSubscriptionId);
+          }
+
+          if (!isActive && existingSub.status === 'incomplete') {
+            const secret = (existingSub.latest_invoice as any)?.payment_intent?.client_secret;
+            if (secret) return res.json({ subscriptionId: existingSub.id, clientSecret: secret, plan });
+          }
+        } catch (err: any) {
+          console.warn('[SUBSCRIPTION] Could not retrieve existing sub:', err.message);
+        }
+      }
+
+      // ── Resolve price ID — create inline price if env var missing ──────────
+      const priceEnvMap: Record<string, string | undefined> = {
+        pro:   process.env.STRIPE_PRO_PRICE_ID,
+        label: process.env.STRIPE_LABEL_PRICE_ID,
+      };
+      const amountMap: Record<string, number> = { pro: 1900, label: 4900 };
+
+      let priceId: string;
+      if (priceEnvMap[plan]) {
+        priceId = priceEnvMap[plan] as string;
+      } else {
+        console.warn(`[SUBSCRIPTION] STRIPE_${plan.toUpperCase()}_PRICE_ID not set — creating inline price (demo mode).`);
+        const inlinePrice = await stripe.prices.create({
+          unit_amount:  amountMap[plan],
+          currency:     'cad',
+          recurring:    { interval: 'month' },
+          product_data: { name: `SplitSheet ${plan.charAt(0).toUpperCase() + plan.slice(1)} Plan` },
+        });
+        priceId = inlinePrice.id;
+      }
+
+      // ── Create subscription ────────────────────────────────────────────────
       const subscription = await stripe.subscriptions.create({
-        customer: customer.id,
-        items: [{
-          price: priceId,
-        }],
+        customer:         customerId,
+        items:            [{ price: priceId }],
         payment_behavior: 'default_incomplete',
-        expand: ['latest_invoice.payment_intent'],
-        metadata: {
-          tier: tier,
-          userId: userId,
-        },
+        expand:           ['latest_invoice.payment_intent'],
+        metadata:         { tier: plan, userId },
       });
 
-      await storage.updateUserStripeInfo(userId, customer.id, subscription.id);
-  
-      res.json({
-        subscriptionId: subscription.id,
-        clientSecret: (subscription.latest_invoice as any)?.payment_intent?.client_secret,
-      });
+      await storage.updateUserStripeInfo(userId, customerId, subscription.id);
+
+      const clientSecret = (subscription.latest_invoice as any)?.payment_intent?.client_secret ?? null;
+      if (!clientSecret) {
+        return res.json({ subscriptionId: subscription.id, alreadyActive: true, plan });
+      }
+
+      return res.json({ subscriptionId: subscription.id, clientSecret, plan });
+
     } catch (error: any) {
-      console.error("Stripe subscription error:", error);
-      return res.status(400).json({ error: { message: error.message } });
+      console.error('[SUBSCRIPTION ERROR]', error?.message ?? error);
+      return res.status(400).json({ error: { message: error?.message ?? 'Subscription failed' } });
     }
   });
 
@@ -719,20 +751,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         case 'customer.subscription.updated':
           const subscription = event.data.object;
           console.log(`Subscription ${event.type}:`, subscription.id);
-          
+
           // Update user subscription status in database
           if (subscription.customer) {
             const user = await storage.getUserByStripeCustomerId(subscription.customer);
             if (user) {
               const tier = subscription.metadata?.tier || 'pro';
               const subscriptionStatus = subscription.status === 'active' ? tier : 'free';
-              
+
               await storage.updateUser(user.id, {
                 subscriptionStatus: subscription.status,
                 subscriptionTier: subscriptionStatus,
                 stripeSubscriptionId: subscription.id,
               });
-              
+
               console.log(`Updated user ${user.id} subscription to ${tier} (${subscription.status})`);
             } else {
               console.warn(`User not found for Stripe customer: ${subscription.customer}`);
@@ -743,7 +775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         case 'customer.subscription.deleted':
           const deletedSubscription = event.data.object;
           console.log('Subscription deleted:', deletedSubscription.id);
-          
+
           // Update user to free tier
           if (deletedSubscription.customer) {
             const user = await storage.getUserByStripeCustomerId(deletedSubscription.customer);
@@ -753,7 +785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 subscriptionTier: 'free',
                 stripeSubscriptionId: null,
               });
-              
+
               console.log(`Updated user ${user.id} to free tier after subscription deletion`);
             } else {
               console.warn(`User not found for Stripe customer: ${deletedSubscription.customer}`);
@@ -791,7 +823,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
-      
+
       if (!user || !user.stripeSubscriptionId) {
         return res.status(400).json({ message: "No active subscription found" });
       }
@@ -818,7 +850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
-      
+
       // If no user or subscription, return free tier
       if (!user || !user.stripeSubscriptionId) {
         return res.json({
@@ -832,7 +864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (stripe) {
         try {
           const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
-          
+
           return res.json({
             hasSubscription: subscription.status === 'active',
             subscriptionId: subscription.id,
@@ -871,7 +903,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const contracts = await storage.getContracts(userId);
-      
+
       const now = new Date();
       const stats = {
         totalContracts: contracts.length,
@@ -884,7 +916,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }).length,
         revenueSplit: contracts.filter(c => c.status === 'signed').length * 100, // Simplified: $100 per signed contract
       };
-      
+
       res.json(stats);
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
@@ -896,9 +928,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/analytics', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      
+
       // Don't track page view here to avoid double counting (client-side tracks it)
-      
+
       // Get user-specific analytics (scoped to user's own data)
       const analyticsData = await storage.getAnalyticsData(userId);
       res.json(analyticsData);
@@ -913,15 +945,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
-      
+
       // Check if user is admin (you can adjust this logic based on your admin system)
       if (!user || user.subscriptionTier !== 'admin') {
         return res.status(403).json({ message: "Admin access required" });
       }
-      
+
       // Track admin analytics access
       await storage.trackUserActivity(userId, 'admin_analytics_access');
-      
+
       // Get global platform analytics
       const analyticsData = await storage.getAnalyticsData(); // No userId = global analytics
       res.json(analyticsData);
@@ -936,7 +968,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const activityEvent = activityEventSchema.parse(req.body);
-      
+
       await storage.trackUserActivity(userId, activityEvent.activityType, activityEvent.activityData);
       res.json({ success: true });
     } catch (error) {
@@ -953,10 +985,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const batchData = batchActivitiesSchema.parse(req.body);
-      
+
       // Use bulk insert for true batching
       await storage.trackUserActivitiesBulk(userId, batchData.activities);
-      
+
       res.json({ success: true, processed: batchData.activities.length });
     } catch (error) {
       console.error("Error tracking batch activities:", error);
@@ -968,7 +1000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Negotiation CRUD endpoints
-  
+
   // Get all negotiations for user
   app.get('/api/negotiations', isAuthenticated, async (req: any, res) => {
     try {
@@ -986,20 +1018,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
-      
+
       const negotiation = await storage.getNegotiation(negotiationId);
       if (!negotiation) {
         return res.status(404).json({ message: "Negotiation not found" });
       }
-      
+
       // Check access (creator or participant)
       const hasAccess = negotiation.createdBy === userId || 
                        (negotiation.participants && negotiation.participants.includes(userId));
-      
+
       if (!hasAccess) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       res.json(negotiation);
     } catch (error) {
       console.error("Error fetching negotiation:", error);
@@ -1015,7 +1047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         createdBy: userId,
       });
-      
+
       const negotiation = await storage.createNegotiation(negotiationData);
       res.status(201).json(negotiation);
     } catch (error) {
@@ -1032,17 +1064,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
-      
+
       const negotiation = await storage.getNegotiation(negotiationId);
       if (!negotiation) {
         return res.status(404).json({ message: "Negotiation not found" });
       }
-      
+
       // Only creator can update negotiation
       if (negotiation.createdBy !== userId) {
         return res.status(403).json({ message: "Only the creator can update this negotiation" });
       }
-      
+
       const updates = req.body;
       const updatedNegotiation = await storage.updateNegotiation(negotiationId, updates);
       res.json(updatedNegotiation);
@@ -1057,20 +1089,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
-      
+
       const negotiation = await storage.getNegotiation(negotiationId);
       if (!negotiation) {
         return res.status(404).json({ message: "Negotiation not found" });
       }
-      
+
       // Check access (creator or participant)
       const hasAccess = negotiation.createdBy === userId || 
                        (negotiation.participants && negotiation.participants.includes(userId));
-      
+
       if (!hasAccess) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       const conversations = await storage.getNegotiationConversations(negotiationId);
       res.json(conversations);
     } catch (error) {
@@ -1084,32 +1116,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
-      
+
       const negotiation = await storage.getNegotiation(negotiationId);
       if (!negotiation) {
         return res.status(404).json({ message: "Negotiation not found" });
       }
-      
+
       // Check access (creator or participant)
       const hasAccess = negotiation.createdBy === userId || 
                        (negotiation.participants && negotiation.participants.includes(userId));
-      
+
       if (!hasAccess) {
         return res.status(403).json({ message: "Access denied" });
       }
-      
+
       const conversationData = insertNegotiationConversationSchema.parse({
         ...req.body,
         negotiationId,
         senderId: userId,
       });
-      
+
       // Add the user message
       const conversation = await storage.addNegotiationConversation(conversationData);
-      
+
       // Send response immediately to ensure message delivery is not blocked by AI
       res.status(201).json(conversation);
-      
+
       // Process AI analysis asynchronously if enabled (never blocks message sending)
       if (negotiation.aiAssistantEnabled && conversationData.messageType === 'text') {
         setImmediate(async () => {
@@ -1117,10 +1149,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Get recent conversations and limit to last 5 for cost control
             const conversations = await storage.getNegotiationConversations(negotiationId);
             const recentMessages = conversations.slice(-5); // Enforce context limit here
-            
+
             // Generate AI analysis (gracefully handles missing API key)
             const analysis = await generateAIAnalysis(recentMessages, negotiation);
-            
+
             // Add AI suggestion as a separate message if analysis succeeded
             if (analysis?.suggestion) {
               await storage.addNegotiationConversation({
@@ -1149,13 +1181,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 
   // ===== USER MATCHING ROUTES =====
-  
+
   // Get user recommendations
   app.get('/api/matches/recommendations', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const limit = parseInt(req.query.limit) || 10;
-      
+
       const recommendations = await storage.getUserRecommendations(userId, limit);
       res.json(recommendations);
     } catch (error) {
@@ -1169,7 +1201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const status = req.query.status;
-      
+
       const matches = await storage.getUserMatches(userId, status);
       res.json(matches);
     } catch (error) {
@@ -1182,23 +1214,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/matches', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      
+
       // Validate request body using Zod schema
       const matchData = insertUserMatchSchema.parse({
         ...req.body,
         userId,
         matchScore: typeof req.body.matchScore === 'number' ? req.body.matchScore.toFixed(2) : String(req.body.matchScore || "0.80")
       });
-      
+
       const { matchedUserId, matchScore, matchReason } = matchData;
-      
+
       const match = await storage.createUserMatch(
         userId, 
         matchedUserId, 
         matchScore as any, 
         matchReason || "Manual connection"
       );
-      
+
       // Create notification for the matched user
       await storage.createNotification(
         matchedUserId,
@@ -1207,7 +1239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "info",
         `/matches`
       );
-      
+
       res.status(201).json(match);
     } catch (error) {
       console.error("Error creating match:", error);
@@ -1220,11 +1252,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const matchId = req.params.id;
       const { status } = req.body;
-      
+
       if (!status) {
         return res.status(400).json({ message: "Status is required" });
       }
-      
+
       await storage.updateMatchStatus(matchId, status);
       res.json({ success: true });
     } catch (error) {
@@ -1234,7 +1266,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===== MESSAGING ROUTES =====
-  
+
   // Get user conversations
   app.get('/api/conversations', isAuthenticated, async (req: any, res) => {
     try {
@@ -1253,7 +1285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const currentUserId = req.user.claims.sub;
       const otherUserId = req.params.userId;
       const limit = parseInt(req.query.limit) || 50;
-      
+
       const messages = await storage.getConversation(currentUserId, otherUserId, limit);
       res.json(messages.reverse()); // Return in chronological order
     } catch (error) {
@@ -1266,17 +1298,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/messages', isAuthenticated, rateLimit(30, 60000), async (req: any, res) => {
     try {
       const senderId = req.user.claims.sub;
-      
+
       // Validate request body using Zod schema
       const messageData = insertMessageSchema.parse({
         ...req.body,
         senderId
       });
-      
+
       const { receiverId, content, messageType } = messageData;
-      
+
       const message = await storage.sendMessage(senderId, receiverId, content, messageType || 'text');
-      
+
       // Create notification for receiver
       const sender = await storage.getUser(senderId);
       await storage.createNotification(
@@ -1286,7 +1318,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "info",
         `/messages/${senderId}`
       );
-      
+
       res.status(201).json(message);
     } catch (error) {
       console.error("Error sending message:", error);
@@ -1299,7 +1331,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const currentUserId = req.user.claims.sub;
       const senderId = req.params.userId;
-      
+
       await storage.markMessagesAsRead(currentUserId, senderId);
       res.json({ success: true });
     } catch (error) {
@@ -1309,13 +1341,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===== NOTIFICATION ROUTES =====
-  
+
   // Get user notifications
   app.get('/api/notifications', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const unreadOnly = req.query.unread === 'true';
-      
+
       const notifications = await storage.getUserNotifications(userId, unreadOnly);
       res.json(notifications);
     } catch (error) {
@@ -1349,14 +1381,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===== ADMIN ROUTES =====
-  
+
   // Get all users (admin only)
   app.get('/api/admin/users', isAuthenticated, isAdmin, async (req: any, res) => {
     try {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const search = req.query.search || '';
-      
+
       // Get users with pagination and search
       const users = await storage.getAllUsers(page, limit, search);
       res.json(users);
@@ -1371,13 +1403,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.params.id;
       const { isActive, subscriptionTier } = req.body;
-      
+
       const updatedUser = await storage.updateUser(userId, { 
         isActive,
         subscriptionTier,
         updatedAt: new Date()
       });
-      
+
       res.json(updatedUser);
     } catch (error) {
       console.error("Error updating user:", error);
@@ -1395,10 +1427,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to get activity" });
     }
   });
-  app.use(cors({
-  origin: process.env.ALLOWED_DOMAINS?.split(",") || "*",
-}));
-
 
   // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
 
@@ -1590,31 +1618,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch earnings" });
     }
   });
-  // routes/assets.ts
-  app.put("/api/assets/:id/ownership", async (req, res) => {
-    const { id } = req.params;
-    const { splits } = req.body;
-
-    const total = splits.reduce((sum, s) => sum + s.percent, 0);
-    if (total !== 100) {
-      return res.status(400).json({ error: "Must equal 100%" });
-    }
-
-    const newVersion = {
-      assetId: id,
-      splits,
-      createdAt: new Date(),
-    };
-
-    await db.ownershipVersions.insert(newVersion);
-
-    res.json({ success: true });
-  });
-  app.use(cors({
-    origin: "*", // or your specific front-end URL
-  }));
 
   const httpServer = createServer(app);
   return httpServer;
-  await registerSecurityRoutes(app);
 }

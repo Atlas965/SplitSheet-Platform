@@ -13,6 +13,7 @@ import Profile from "@/pages/profile";
 import Templates from "@/pages/templates";
 import Analytics from "@/pages/analytics";
 import Billing from "@/pages/billing";
+import Subscribe from "@/pages/subscribe";
 import ContractForm from "@/pages/contract-form";
 import Negotiations from "@/pages/negotiations";
 import NegotiationDetail from "@/pages/negotiation-detail";
@@ -22,7 +23,6 @@ import Admin from "@/pages/admin";
 import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
 import NotFound from "@/pages/not-found";
-import NotificationsPage from "@/pages/notifications";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -41,6 +41,11 @@ function Router() {
           <Route path="/analytics" component={Analytics} />
           <Route path="/templates" component={Templates} />
           <Route path="/billing" component={Billing} />
+          <Route path="/subscribe" component={() => {
+            const params = new URLSearchParams(window.location.search);
+            const plan   = params.get("plan") ?? "pro";
+            return <Subscribe plan={plan} />;
+          }} />
           <Route path="/negotiations" component={Negotiations} />
           <Route path="/negotiations/:id" component={NegotiationDetail} />
           <Route path="/matches" component={Matches} />
@@ -51,7 +56,6 @@ function Router() {
           <Route path="/ownership" component={Ownership} />
           <Route path="/ownership/:id" component={Ownership} />
           <Route path="/contract/:type" component={ContractForm} />
-          <Route path="/notifications" component={NotificationsPage} />
         </>
       )}
       <Route component={NotFound} />

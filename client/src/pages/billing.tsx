@@ -69,22 +69,63 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
   open: boolean; onClose: () => void; currentPlan: PlanKey;
 }) {
   const { toast } = useToast();
+  const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
 
-  const upgradeMutation = useMutation({
-    mutationFn: async (plan: string) =>
-      apiRequest("POST", "/api/get-or-create-subscription", { plan }),
-    onSuccess: (data: any) => {
-      if (data?.clientSecret) {
-        window.location.href = `/subscribe?plan=${data.plan}`;
-      } else {
-        toast({ title: "Plan updated", description: "Your subscription has been updated." });
+  async function handleUpgrade(plan: string) {
+    setLoadingPlan(plan);
+    try {
+      // apiRequest returns the Response — parse JSON manually
+      const res  = await apiRequest("POST", "/api/get-or-create-subscription", { plan });
+      const data = await res.json();
+
+      // Server returned an error object
+      if (data?.error?.message) {
+        toast({
+          title:       "Could not start upgrade",
+          description: data.error.message,
+          variant:     "destructive",
+        });
+        return;
+      }
+
+      // User is already on this plan
+      if (data?.alreadyActive) {
+        toast({
+          title:       "Already subscribed",
+          description: `You're already on the ${plan.charAt(0).toUpperCase() + plan.slice(1)} plan.`,
+        });
         queryClient.invalidateQueries({ queryKey: ["/api/stripe/subscription"] });
         onClose();
+        return;
       }
-    },
-    onError: () =>
-      toast({ title: "Could not start upgrade", description: "Please try again.", variant: "destructive" }),
-  });
+
+      // Payment required — navigate to subscribe page with clientSecret in sessionStorage
+      // (safer than a URL param — secrets shouldn't live in browser history)
+      if (data?.clientSecret) {
+        sessionStorage.setItem("stripe_client_secret", data.clientSecret);
+        sessionStorage.setItem("stripe_plan", plan);
+        window.location.href = `/subscribe?plan=${encodeURIComponent(plan)}`;
+        return;
+      }
+
+      // Fallback: subscription created without requiring payment (trial etc.)
+      toast({
+        title:       "Plan upgraded",
+        description: `You are now on the ${plan} plan.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/stripe/subscription"] });
+      onClose();
+
+    } catch (err: any) {
+      toast({
+        title:       "Could not start upgrade",
+        description: err?.message ?? "Please check your connection and try again.",
+        variant:     "destructive",
+      });
+    } finally {
+      setLoadingPlan(null);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -96,7 +137,10 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
         <div className="p-6 space-y-4">
           {(["pro", "label"] as PlanKey[]).map((plan) => {
             const cfg = PLANS[plan];
-            const isCurrent = plan === currentPlan;
+            const isCurrent    = plan === currentPlan;
+            const isLoading    = loadingPlan === plan;
+            const anyLoading   = loadingPlan !== null;
+
             return (
               <div key={plan} className={`rounded-xl border p-5 ${plan === "pro" ? "border-accent/60 bg-accent/5" : "border-border bg-card"}`}>
                 <div className="flex items-start justify-between mb-3">
@@ -117,11 +161,12 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
                   {!isCurrent && (
                     <Button
                       size="sm"
-                      onClick={() => upgradeMutation.mutate(plan)}
-                      disabled={upgradeMutation.isPending}
+                      onClick={() => handleUpgrade(plan)}
+                      disabled={anyLoading}
+                      data-testid={`btn-upgrade-${plan}`}
                     >
-                      {upgradeMutation.isPending
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {isLoading
+                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Starting…</>
                         : <><span>Upgrade</span><ArrowRight className="h-3 w-3 ml-1" /></>}
                     </Button>
                   )}
