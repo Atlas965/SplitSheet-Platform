@@ -207,12 +207,40 @@ export const songAssets = pgTable("song_assets", {
   title: varchar("title").notNull(),
   artistName: varchar("artist_name"),
   isrc: varchar("isrc"), // International Standard Recording Code
+  iswc: varchar("iswc"), // International Standard Musical Work Code
+  type: varchar("type").default("master"), // master, composition, split_sheet, agreement
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   contractId: varchar("contract_id").references(() => contracts.id),
-  status: varchar("status").default("active"), // active, archived
+  status: varchar("status").default("active"), // active, archived, deactivated, pending_transfer
+  archivedAt: timestamp("archived_at"),
+  archivedBy: varchar("archived_by").references(() => users.id),
+  deactivatedAt: timestamp("deactivated_at"),
+  deletedAt: timestamp("deleted_at"), // soft-delete for drafts only
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Immutable audit trail for every asset action
+export const assetActivityLogs = pgTable("asset_activity_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  action: varchar("action").notNull(), // created, archived, restored, deactivated, transferred, ownership_updated, revenue_recorded, payout_executed, deleted_draft
+  metadata: jsonb("metadata"),
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Role-based access control per asset
+export const assetPermissions = pgTable("asset_permissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  role: varchar("role").notNull().default("viewer"), // owner, editor, viewer, collaborator, manager
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Ownership records — append-only ledger, never overwrite, only append
@@ -425,8 +453,14 @@ export const insertUserBalanceSchema = createInsertSchema(userBalances).omit({
   id: true,
 });
 
+export const insertAssetActivityLogSchema = createInsertSchema(assetActivityLogs).omit({ id: true, createdAt: true });
+export const insertAssetPermissionSchema = createInsertSchema(assetPermissions).omit({ id: true, createdAt: true });
+
 export type SongAsset = typeof songAssets.$inferSelect;
 export type InsertSongAsset = z.infer<typeof insertSongAssetSchema>;
+export type AssetActivityLog = typeof assetActivityLogs.$inferSelect;
+export type InsertAssetActivityLog = z.infer<typeof insertAssetActivityLogSchema>;
+export type AssetPermission = typeof assetPermissions.$inferSelect;
 export type OwnershipRecord = typeof ownershipRecords.$inferSelect;
 export type InsertOwnershipRecord = z.infer<typeof insertOwnershipRecordSchema>;
 export type RevenueEvent = typeof revenueEvents.$inferSelect;

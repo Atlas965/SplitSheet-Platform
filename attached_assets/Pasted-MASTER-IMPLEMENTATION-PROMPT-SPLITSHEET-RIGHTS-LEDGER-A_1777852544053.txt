@@ -1,0 +1,235 @@
+MASTER IMPLEMENTATION PROMPT — SPLITSHEET RIGHTS LEDGER (ARCHIVE / REMOVE ASSET SYSTEM)
+
+ROLE:
+You are a senior full-stack fintech architect, security engineer, and product designer. Build this feature for SplitSheet as production-grade software using best practices in React, TypeScript, Node.js, PostgreSQL, Drizzle ORM, Tailwind CSS, and secure audit-log architecture.
+
+PROJECT CONTEXT:
+SplitSheet is a music fintech platform for agreements, ownership splits, royalty tracking, and collaborator payouts.
+
+We are building a “Rights Ledger” dashboard where creators, producers, managers, and labels manage music assets (songs, masters, compositions, agreements).
+
+GOAL:
+Implement a secure Asset Management system inside the Rights Ledger that allows users to remove assets from active use WITHOUT destroying legal, financial, or ownership history.
+
+IMPORTANT:
+Do NOT implement dangerous hard-delete logic for signed agreements, ownership records, payouts, or revenue history.
+
+Instead, build enterprise-grade controls:
+1. Archive Asset
+2. Deactivate Asset
+3. Transfer Ownership
+4. Revoke Collaborator Access
+5. Delete Draft Asset (only unsigned/unpublished drafts)
+6. Immutable Audit Trail
+
+====================================================
+PHASE 1 — DATABASE / SCHEMA UPGRADES
+====================================================
+
+Update schema with these fields:
+
+TABLE: assets
+- id
+- ownerId
+- title
+- type (master, composition, split_sheet, agreement)
+- status (active, archived, deactivated, pending_transfer)
+- archivedAt
+- archivedBy
+- deactivatedAt
+- deletedAt (soft delete only for drafts)
+- createdAt
+- updatedAt
+
+TABLE: asset_activity_logs
+- id
+- assetId
+- userId
+- action
+- metadata JSONB
+- ipAddress
+- userAgent
+- createdAt
+
+TABLE: asset_permissions
+- id
+- assetId
+- userId
+- role (owner, editor, viewer, collaborator, manager)
+- revokedAt
+
+====================================================
+PHASE 2 — RIGHTS LEDGER UI
+====================================================
+
+Build a professional dashboard page:
+
+/rights-ledger
+
+Each asset card should display:
+
+- Asset Name
+- Type
+- Ownership %
+- Revenue Generated
+- Status Badge
+- Last Updated
+- Actions Dropdown
+
+Dropdown Actions:
+
+1. View Ledger
+2. Edit Metadata
+3. Invite Collaborators
+4. Export Records
+5. Transfer Ownership
+6. Archive Asset
+7. Deactivate Asset
+8. Danger Zone
+
+Danger Zone:
+- Revoke collaborator access
+- Delete draft asset (only if unsigned and no payouts)
+
+====================================================
+PHASE 3 — ARCHIVE SYSTEM (RECOMMENDED)
+====================================================
+
+When user clicks Archive Asset:
+
+Modal:
+Title: Archive Asset?
+Body:
+This removes the asset from active dashboards while preserving ownership, payout, and legal records.
+
+Buttons:
+- Cancel
+- Archive Asset
+
+Backend behavior:
+- status = archived
+- archivedAt = now()
+- archivedBy = currentUser.id
+- create activity log
+
+Archived assets:
+- Hidden from normal dashboard
+- Visible in “Archived Assets” tab
+- Can be restored
+
+====================================================
+PHASE 4 — DEACTIVATE SYSTEM
+====================================================
+
+Purpose:
+Pause payouts, royalties, and new transactions temporarily.
+
+Behavior:
+- status = deactivated
+- prevent new revenue entries
+- prevent payout runs
+- preserve all history
+
+====================================================
+PHASE 5 — DELETE DRAFT SYSTEM
+====================================================
+
+Only allowed if ALL true:
+
+- No signatures
+- No collaborators accepted
+- No revenue records
+- No ownership ledger finalized
+- Status = draft
+
+Then:
+soft delete only
+
+deletedAt = now()
+
+Never permanently delete from DB.
+
+====================================================
+PHASE 6 — SECURITY RULES
+====================================================
+
+Only owner/admin may archive/deactivate/delete.
+
+Require:
+- auth middleware
+- ownership verification
+- role-based access control
+
+Log every action with:
+
+- userId
+- IP address
+- user agent
+- timestamp
+- assetId
+
+Block unauthorized requests with 403.
+
+====================================================
+PHASE 7 — UX / POLISH
+====================================================
+
+Use enterprise SaaS styling:
+Stripe + Carta + ServiceTitan inspired.
+
+Include:
+
+- Confirmation modals
+- Toast success/error messages
+- Skeleton loaders
+- Mobile responsive cards
+- Empty states
+- Search/filter by status
+- Archived tab
+- Restore button
+
+====================================================
+PHASE 8 — API ROUTES
+====================================================
+
+Build:
+
+PATCH /api/assets/:id/archive
+PATCH /api/assets/:id/restore
+PATCH /api/assets/:id/deactivate
+PATCH /api/assets/:id/transfer
+DELETE /api/assets/:id/draft
+
+GET /api/assets?status=active
+GET /api/assets?status=archived
+
+====================================================
+PHASE 9 — COMPLIANCE MINDSET
+====================================================
+
+This platform handles ownership and money.
+
+Therefore:
+ownership + payouts + signatures must be append-only records.
+
+Never allow destructive deletes of finalized legal records.
+
+====================================================
+PHASE 10 — OUTPUT REQUIRED
+====================================================
+
+Generate:
+
+1. Full Drizzle schema changes
+2. Backend routes/controllers
+3. React Rights Ledger page
+4. Archive modal component
+5. Role permission middleware
+6. Audit logging service
+7. Tailwind polished UI
+8. Mobile responsive layout
+9. Production-ready code
+
+Build as if SplitSheet is applying to DMZ, Techstars, YC, and major label partnerships.
+
+START NOW.

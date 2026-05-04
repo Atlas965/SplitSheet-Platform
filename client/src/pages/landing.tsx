@@ -182,7 +182,7 @@ export default function Landing() {
                   href="/api/login"
                   className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary/90 transition-colors w-full sm:w-auto text-center"
                 >
-                  Start Creating Contracts
+                  Start Creating Music Agreements
                 </a>
                 <a
                   href="#demo"

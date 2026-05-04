@@ -1476,6 +1476,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── ASSET LIFECYCLE (archive / restore / deactivate / delete-draft) ────────
+
+  app.get('/api/assets/archived', isAuthenticated, async (req: any, res) => {
+    try {
+      const assets = await storage.getSongAssetsByStatus(req.user.claims.sub, "archived");
+      res.json(assets);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch archived assets" }); }
+  });
+
+  app.patch('/api/assets/:id/archive', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.archiveSongAsset(req.params.id, userId);
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to archive" }); }
+  });
+
+  app.patch('/api/assets/:id/restore', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.restoreSongAsset(req.params.id, userId);
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to restore" }); }
+  });
+
+  app.patch('/api/assets/:id/deactivate', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const updated = await storage.deactivateSongAsset(req.params.id, userId);
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to deactivate" }); }
+  });
+
+  app.delete('/api/assets/:id/draft', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const asset = await storage.getSongAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteDraftSongAsset(req.params.id, userId);
+      res.json({ success: true });
+    } catch (e: any) { res.status(400).json({ message: e.message || "Cannot delete asset" }); }
+  });
+
+  app.get('/api/assets/:id/activity', isAuthenticated, async (req: any, res) => {
+    try {
+      const logs = await storage.getAssetActivityLog(req.params.id);
+      res.json(logs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch activity" }); }
+  });
+
   // ─── OWNERSHIP LEDGER ─────────────────────────────────────────────────────
 
   // GET current ownership (latest version)

@@ -75,3 +75,19 @@ Preferred communication style: Simple, everyday language.
 
 ## PDF Generation
 - **jsPDF**: Client-side PDF generation for contract documents with custom formatting and legal compliance features
+
+# Recent Changes
+
+## Phase 1 — "Music Agreements" Rename (UI Text Only)
+- Landing page headline and CTA: "Professional Music Agreements Made Simple" / "Start Creating Music Agreements"
+- Contracts list page: header, buttons, empty state, delete dialog — all say "Music Agreements" / "agreement"
+- Dashboard: stat cards ("Total Agreements", "Agreements Completed"), Quick Actions ("Create New Agreement"), nav button
+- Templates page: header and subheading
+- PDF generator: footer text and filenames use `_agreement.pdf`
+- All internal API routes and DB tables remain unchanged (`/api/contracts`, `contracts` table)
+
+## Phase 2 — Rights Ledger Expansion
+- **Schema**: Added `iswc`, `type`, `archivedAt`, `archivedBy`, `deactivatedAt`, `deletedAt` columns to `song_assets`; created `asset_activity_logs` and `asset_permissions` tables
+- **Storage**: Added `getSongAssetsByStatus`, `archiveSongAsset`, `restoreSongAsset`, `deactivateSongAsset`, `deleteDraftSongAsset`, `logAssetActivity`, `getAssetActivityLog` methods
+- **API Routes**: `GET /api/assets/archived`, `PATCH /api/assets/:id/archive`, `PATCH /api/assets/:id/restore`, `PATCH /api/assets/:id/deactivate`, `DELETE /api/assets/:id/draft`, `GET /api/assets/:id/activity`
+- **ownership.tsx**: Full rewrite — Active/Archived tabs, per-asset actions dropdown (Archive, Deactivate, Restore, Delete Draft), confirmation modals with legal copy, activity log panel, ISWC field in add-asset form, status badges, asset type selector, revenue-by-source summary bars, deactivated-asset notice, restore button

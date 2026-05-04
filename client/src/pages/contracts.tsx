@@ -275,7 +275,7 @@ export default function Contracts() {
                       <td className="p-4">
                         <div>
                           <p className="font-medium">{contract.title}</p>
-                          <p className="text-muted-foreground text-sm">{contract.type} contract</p>
+                          <p className="text-muted-foreground text-sm capitalize">{contract.type} agreement</p>
                         </div>
                       </td>
                       <td className="p-4 capitalize">{contract.type.replace('-', ' ')}</td>

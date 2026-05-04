@@ -265,7 +265,7 @@ export default function Dashboard() {
                   <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
                     <Link href="/contract/split-sheet">
                       <Plus className="mr-1 h-3 w-3" />
-                      New Contract
+                      New Agreement
                     </Link>
                   </Button>
                   <NavESignButton />
@@ -304,7 +304,7 @@ export default function Dashboard() {
             data-testid="stat-pending-signatures"
           />
           <StatCard
-            title="Completed This Month"
+            title="Agreements Completed"
             value={statsLoading ? "..." : (stats?.completedThisMonth || 0).toString()}
             icon="fas fa-check"
             iconBg="bg-green-100"
@@ -378,7 +378,7 @@ export default function Dashboard() {
               <Button asChild className="w-full justify-start space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90" data-testid="button-create-contract">
                 <Link href="/templates">
                   <Plus className="h-4 w-4" />
-                  <span>Create New Contract</span>
+                  <span>Create New Agreement</span>
                 </Link>
               </Button>
 

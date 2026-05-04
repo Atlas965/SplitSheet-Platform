@@ -113,8 +113,8 @@ export default function Templates() {
         </div>
 
         <div className="mb-6">
-          <h2 className="text-2xl font-bold mb-2">Contract Templates</h2>
-          <p className="text-muted-foreground">Choose from our lawyer-informed templates to create professional music contracts</p>
+          <h2 className="text-2xl font-bold mb-2">Music Agreement Templates</h2>
+          <p className="text-muted-foreground">Choose from our lawyer-informed templates to create professional music agreements</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -1,0 +1,157 @@
+Master Implementation Prompt: SplitSheet Application Enhancements
+This prompt consolidates all previous recommendations for the SplitSheet application, focusing on professionalization, code quality, and the integration of scaling features necessary for incubator readiness. The goal is to transform SplitSheet into a robust, industry-standard platform for music agreement management.
+
+Overall Goal
+Implement a comprehensive set of changes to the SplitSheet application to achieve consistent branding with “Music Agreements,” resolve identified code quality issues, enhance the landing page for professionalism, and integrate critical scaling features required for successful deployment and application to programs like the DMZ Incubator.
+
+Phase 1: Professionalization & Core Refinements
+1.1. Naming Convention Transition: From ‘Contracts’ to ‘Music Agreements’
+Objective: Systematically replace all user-facing instances of “Contract” with “Music Agreement” or “Agreement” where appropriate, ensuring a professional and consistent brand voice.
+
+Instructions:
+
+	1.	Update Landing Page (`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`):
+	◦	Hero Section Headline: Change line 36:
+	◦	Original: `Professional Music Contracts Made <span className="text-accent">Simple</span>`
+	◦	New: `Professional Music Agreements Made <span className="text-accent">Simple</span>`
+	◦	Hero Section Subheading: Refine lines 38-40:
+	◦	Original: `Create lawyer-informed contracts for splits, performances, production, and management. Built specifically for indie artists, producers, and music industry professionals.`
+	◦	New: `Create, manage, and secure your split sheets, performance agreements, producer contracts, and management deals with ease.`
+	◦	Call to Action (CTA): Change line 44:
+	◦	Original: `Start Creating Contracts`
+	◦	New: `Start Creating Music Agreements`
+	◦	Features Section Heading: Change line 58:
+	◦	Original: `Everything You Need to Manage Music Contracts`
+	◦	New: `Everything You Need to Manage Music Agreements`
+	◦	Feature Card Titles: Update titles like “Smart Contract Templates” (line 67) to “Lawyer-Informed Agreement Templates.”
+	2.	Update Templates Page (`/home/ubuntu/splitsheet_repo/client/src/pages/templates.tsx`):
+	◦	Page Header: Change line 116:
+	◦	Original: `Contract Templates`
+	◦	New: `Music Agreement Templates`
+	◦	Page Subheading: Change line 117:
+	◦	Original: `Choose from our lawyer-informed templates to create professional music contracts`
+	◦	New: `Choose from our lawyer-informed templates to create professional music agreements`
+	◦	Template Names: Verify consistency; existing `name` fields (lines 29, 37, 45, 53) already use “Agreement” and do not require changes.
+	3.	Update Contracts Listing Page (`/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx`):
+	◦	Page Title/Header: Update “My Contracts” to “My Music Agreements.”
+	◦	Button Text: Change “New Contract” to “Create New Agreement.”
+	◦	Placeholder Text: Update “Search contracts…” to “Search agreements…”.
+	◦	Empty State Message: Change “No contracts found” to “No agreements found.”
+	◦	Delete Confirmation: Update text referring to “removing all contract data” to “removing all agreement data.”
+	4.	Update Dashboard Page (`/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx`):
+	◦	Navigation Link: Change `Contracts` (line 143) to `Agreements`.
+	◦	Quick Action Button: Change `New Contract` (line 215) to `New Agreement`.
+	◦	Stat Card Titles: Update “Total Contracts” (line 237) to “Total Agreements” and “Completed This Month” (line 253) to “Agreements Completed This Month.”
+	5.	Update PDF Generator (`/home/ubuntu/splitsheet_repo/client/src/lib/pdfGenerator.ts`):
+	◦	Platform Name in PDF Header: Change line 32:
+	◦	Original: `Music Contract Management Platform`
+	◦	New: `Music Agreement Management Platform`
+	◦	Contract Type Label: Change line 44:
+	◦	Original: `Contract Type: <LaTex>${contract.type.replace(\'-\', \' \').toUpperCase()}`
+	◦	New: `Agreement Type: $</LaTex>{contract.type.replace(\'-\', \' \').toUpperCase()}`
+	◦	Filename Generation: Update `filename` (line 223) to use `_agreement.pdf` instead of `_contract.pdf`.
+	6.	Backend Considerations (`/home/ubuntu/splitsheet_repo/shared/schema.ts`):
+	◦	Database Table Names: While direct renaming of tables (e.g., `contracts` to `music_agreements`) is a significant migration, for now, maintain internal table names as `contracts`. Ensure all new API endpoints, internal documentation, and code comments consistently refer to them as “agreements.”
+	◦	API Endpoints: Plan for future versioned API routes (e.g., `/api/contracts` to `/api/agreements`). For now, ensure existing API documentation clarifies the new terminology.
+
+1.2. Code Quality Improvements
+Objective: Resolve identified structural and logical issues to improve maintainability, reduce bugs, and enhance developer experience.
+
+Instructions:
+
+	1.	Refactor `/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx`:
+	◦	Remove the stray return block (`tab === "mine."`) and any unused variables or imports. Ensure `user.id`, `ownerId`, and `ContractCard` are used within their correct scope.
+	2.	Refactor `/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx`:
+	◦	Address the duplicate `button-cancel-subscription` test ID. Extract the inline `return` block for billing information into a separate, reusable component or function to maintain a clean component structure.
+	3.	Clean up `/home/ubuntu/splitsheet_repo/client/src/pages/ownership.tsx`:
+	◦	Review and complete any unfinished code. Ensure all variable declarations (e.g., `const [open, setOpen] = useState(false);`) and JSX elements (`<button>`) are properly integrated or removed if not needed. Verify that `asset`/`refetch` references are within the correct component scope.
+
+1.3. Landing Page Enhancements
+Objective: Improve visual appeal, clarity, and trust on the landing page to better engage users and reflect a professional product.
+
+Instructions:
+
+	1.	Implement Hero Section Visuals (`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`):
+	◦	Add a large, high-quality hero image (e.g., diverse musicians collaborating in a studio) as described in `design_guidelines.md` (line 34). This will likely involve adding an `<img>` tag or setting a background image via CSS.
+	2.	Integrate Social Proof (`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`):
+	◦	Add trust indicators below the hero section. Include text like “Used by 10,000+ artists • 50,000+ agreements signed” and a logo grid of music labels/publishers (referencing `design_guidelines.md` lines 52-53).
+	3.	Refine Feature Section Language (`/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx`):
+	◦	Review and update feature descriptions to be more benefit-oriented. For example, for the “Smart Contract Templates” card (lines 63-69), update the description to emphasize legal protection and ease of use.
+
+1.4. Metadata Integration
+Objective: Enhance the `ContractForm` to collect essential industry-standard metadata, crucial for professional music rights management.
+
+Instructions:
+
+	1.	Modify `ContractForm.tsx` (`/home/ubuntu/splitsheet_repo/client/src/components/ContractForm.tsx`):
+	◦	For `splitSheetSchema` (lines 11-34), add new fields to collect:
+	◦	ISRC (International Standard Recording Code): A string field for the recording identifier.
+	◦	ISWC (International Standard Musical Work Code): A string field for the musical work identifier.
+	◦	PRO Affiliation: A dropdown or text field for each collaborator to specify their Performing Rights Organization (e.g., SOCAN, ASCAP, BMI) and their CAE/IPI number.
+	◦	Ensure these new fields are integrated into the form’s UI, providing clear labels and input types.
+
+Phase 2: Scaling Features for Incubator Readiness
+Objective: Develop advanced features that position SplitSheet as a comprehensive music rights management platform, demonstrating scalability and innovation for incubator programs.
+
+2.1. Industry-Standard Compliance & Enhanced Audit Trail
+Instructions:
+
+	1.	PRO Integration: Develop functionality to allow users to specify their PRO affiliation and CAE/IPI numbers within their profile and for each collaborator in an agreement. Explore options for direct export formats compatible with major PROs (e.g., SOCAN, ASCAP, BMI).
+	2.	Standard Identifiers: Make ISRC and ISWC fields mandatory for relevant agreement types (e.g., split sheets) to ensure comprehensive metadata collection.
+	3.	Legal Audit Trail Enhancement: Augment the existing “Activity Log” to capture more granular details for every signature, including:
+	◦	IP addresses.
+	◦	Browser fingerprints (user agent strings).
+	◦	Timestamp with timezone information.
+	◦	This data should be securely stored and easily retrievable for legal verification.
+
+2.2. The
+“Rights Ledger” Expansion
+
+Instructions:
+
+	1.	Real-time Rights Management Dashboard: Enhance the `ownership.tsx` page to evolve into a comprehensive “Rights Ledger” dashboard. This should visually represent:
+	◦	Automated Payout Calculations: Display real-time calculations of what each collaborator is owed based on `revenueEvents` and `payoutRecords`.
+	◦	Historical Ownership: Visualize changes in ownership over time, leveraging the append-only nature of `ownershipRecords`.
+	◦	Revenue Streams: Clearly show revenue breakdown by source (streaming, sync, performance, mechanical).
+	2.	Dispute Resolution Workflow: Implement a structured workflow for collaborators to dispute or negotiate splits before an agreement is finalized. This could involve:
+	◦	A dedicated negotiation interface.
+	◦	Version control for proposed splits.
+	◦	Notification system for pending disputes.
+
+2.3. Traction & Growth Tools
+Instructions:
+
+	1.	Collaborator Viral Loop: Optimize the “Signer” experience for non-users to encourage conversion into “Creators.”
+	◦	Seamless Onboarding: When a non-user signs an agreement, provide a clear, low-friction path to create their own SplitSheet account and start their first agreement.
+	◦	Value Proposition: Clearly articulate the benefits of becoming a “Creator” (e.g., managing all their agreements, tracking royalties).
+	2.	Analytics for Labels/Managers: Develop a “Label View” or “Manager Dashboard” feature.
+	◦	This view should allow users with appropriate roles (e.g., “admin” or “manager” in `users` table) to oversee all agreements and rights across their entire roster of artists/producers from a single, consolidated dashboard.
+	◦	Include aggregated analytics on total agreements, pending signatures, and revenue distribution across their managed artists.
+
+Phase 3: General Professional Enhancements
+Objective: Implement overarching improvements to enhance user experience, application robustness, and brand consistency.
+
+Instructions:
+
+	1.	Consistent Branding: Ensure that “SplitSheet” and its logo are consistently displayed and styled across all pages. Update the browser tab title to reflect the application name accurately.
+	2.	Enhanced Error Handling and User Feedback: Implement more informative and user-friendly error messages throughout the application. For scenarios like unauthorized access, provide clear explanations and actionable options (e.g., “You need to be logged in to view this page. Please log in or create an account.”).
+	3.	Rigorous Mobile Responsiveness Testing: Conduct thorough testing across a wide range of mobile devices and screen sizes to ensure optimal display, functionality, and touch interactions.
+	4.	Accessibility Audit: Perform a comprehensive accessibility audit against WCAG guidelines. Focus on keyboard navigation, screen reader compatibility, and color contrast for all interactive elements and text.
+	5.	Performance Optimization: Conduct performance profiling to identify and resolve bottlenecks. Optimize asset loading, API response times, and rendering efficiency to ensure a fast and smooth user experience.
+
+References
+	1.	Live SplitSheet Application
+	2.	SplitSheet GitHub Repository
+	3.	DMZ Incubator Program Details
+	4.	ASCAP Songwriting Split Guidelines
+	5.	SOCAN Distribution Rules 2024
+	6.	/home/ubuntu/splitsheet_repo/client/src/pages/landing.tsx
+	7.	/home/ubuntu/splitsheet_repo/shared/schema.ts
+	8.	/home/ubuntu/splitsheet_repo/client/src/pages/contract-details.tsx
+	9.	/home/ubuntu/splitsheet_repo/client/src/lib/pdfGenerator.ts
+	10.	/home/ubuntu/splitsheet_repo/client/src/pages/templates.tsx
+	11.	/home/ubuntu/splitsheet_repo/client/src/pages/dashboard.tsx
+	12.	/home/ubuntu/splitsheet_repo/client/src/pages/contracts.tsx
+	13.	/home/ubuntu/splitsheet_repo/design_guidelines.md
+	14.	/home/ubuntu/splitsheet_repo/client/src/pages/ownership.tsx
+	15.	/home/ubuntu/splitsheet_repo/client/src/components/ContractForm.tsx

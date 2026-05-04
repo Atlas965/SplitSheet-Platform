@@ -16,6 +16,8 @@ import {
   revenueEvents,
   payoutRecords,
   userBalances,
+  assetActivityLogs,
+  assetPermissions,
   type User,
   type UpsertUser,
   type Contract,
@@ -39,6 +41,7 @@ import {
   type InsertRevenueEvent,
   type PayoutRecord,
   type UserBalance,
+  type AssetActivityLog,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
@@ -854,6 +857,64 @@ export class DatabaseStorage implements IStorage {
       .where(eq(songAssets.id, id))
       .returning();
     return asset;
+  }
+
+  async getSongAssetsByStatus(userId: string, status: string): Promise<SongAsset[]> {
+    return await db
+      .select()
+      .from(songAssets)
+      .where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, status)))
+      .orderBy(desc(songAssets.createdAt));
+  }
+
+  async archiveSongAsset(id: string, userId: string): Promise<SongAsset> {
+    const [asset] = await db
+      .update(songAssets)
+      .set({ status: "archived", archivedAt: new Date(), archivedBy: userId, updatedAt: new Date() })
+      .where(eq(songAssets.id, id))
+      .returning();
+    await this.logAssetActivity(id, userId, "archived", {});
+    return asset;
+  }
+
+  async restoreSongAsset(id: string, userId: string): Promise<SongAsset> {
+    const [asset] = await db
+      .update(songAssets)
+      .set({ status: "active", archivedAt: null, archivedBy: null, updatedAt: new Date() })
+      .where(eq(songAssets.id, id))
+      .returning();
+    await this.logAssetActivity(id, userId, "restored", {});
+    return asset;
+  }
+
+  async deactivateSongAsset(id: string, userId: string): Promise<SongAsset> {
+    const [asset] = await db
+      .update(songAssets)
+      .set({ status: "deactivated", deactivatedAt: new Date(), updatedAt: new Date() })
+      .where(eq(songAssets.id, id))
+      .returning();
+    await this.logAssetActivity(id, userId, "deactivated", {});
+    return asset;
+  }
+
+  async deleteDraftSongAsset(id: string, userId: string): Promise<boolean> {
+    // Check for any revenue records — block if exist
+    const revenues = await db.select().from(revenueEvents).where(eq(revenueEvents.assetId, id));
+    if (revenues.length > 0) throw new Error("Cannot delete asset with revenue records.");
+    const ownership = await this.getCurrentOwnership(id);
+    if (ownership.length > 0) throw new Error("Cannot delete asset with finalized ownership records.");
+    // Soft delete only
+    await db.update(songAssets).set({ deletedAt: new Date(), status: "archived" }).where(eq(songAssets.id, id));
+    await this.logAssetActivity(id, userId, "deleted_draft", {});
+    return true;
+  }
+
+  async logAssetActivity(assetId: string, userId: string, action: string, metadata: any, ip?: string, ua?: string): Promise<void> {
+    await db.insert(assetActivityLogs).values({ assetId, userId, action, metadata, ipAddress: ip ?? null, userAgent: ua ?? null });
+  }
+
+  async getAssetActivityLog(assetId: string): Promise<AssetActivityLog[]> {
+    return await db.select().from(assetActivityLogs).where(eq(assetActivityLogs.assetId, assetId)).orderBy(desc(assetActivityLogs.createdAt));
   }
 
   async createOwnershipRecord(record: InsertOwnershipRecord): Promise<OwnershipRecord> {
