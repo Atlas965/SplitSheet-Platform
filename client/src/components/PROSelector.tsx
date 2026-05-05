@@ -1,14 +1,8 @@
 /**
- * PROSelector.tsx  (fixed)
+ * PROSelector.tsx  (self-contained — no @shared/schema dependency)
  * ─────────────────────────────────────────────────────────────────────────────
- * Fixes:
- *  1. PROSelectorFields no longer uses useFormContext — it manages its own
- *     local state and calls onChange, which ContractForm uses to sync.
- *     This eliminates the nested FormProvider / recursive context crash.
- *  2. No form.watch() in useEffect dependency array — was causing infinite
- *     re-render loop (call stack overflow).
- *  3. standalone <PROSelector> still provides its own FormProvider for
- *     pages that use it in isolation.
+ * Defines PRO_TYPE and ipiNumberSchema locally so this component works
+ * even if shared/schema.ts hasn't been updated yet in Replit.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -39,11 +33,21 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
-import { PRO_TYPE, ipiNumberSchema, type ProType } from "@shared/schema";
+
+// ── Local definitions (no @shared/schema import needed) ───────────────────────
+
+const PRO_TYPE_VALUES = ["SOCAN", "BMI", "ASCAP", "PRS", "SESAC", "Other"] as const;
+export type ProType = typeof PRO_TYPE_VALUES[number];
+
+const ipiNumberSchema = z
+  .string()
+  .regex(/^\d{9}$/, "IPI number must be exactly 9 digits")
+  .optional()
+  .or(z.literal(""));
 
 // ── Zod schema ────────────────────────────────────────────────────────────────
 export const proSelectorSchema = z.object({
-  proAffiliation: PRO_TYPE.default("SOCAN"),
+  proAffiliation: z.enum(PRO_TYPE_VALUES).default("SOCAN"),
   ipiNumber:      ipiNumberSchema,
 });
 
@@ -82,15 +86,12 @@ function InfoTooltip({ text }: { text: string }) {
   );
 }
 
-// ── PROSelectorFields — self-contained, NO useFormContext ─────────────────────
-// This is the embeddable version. It manages its own local state and calls
-// onChange(values) whenever either field changes. ContractForm simply syncs
-// the values into the collaborator array directly.
+// ── PROSelectorFields — self-contained, no FormContext dependency ──────────────
 interface PROSelectorFieldsProps {
   defaultPRO?: ProType;
   defaultIPI?: string;
   onChange?: (values: PROSelectorValues) => void;
-  namePrefix?: string; // kept for API compat, unused internally
+  namePrefix?: string;
 }
 
 export function PROSelectorFields({
@@ -191,7 +192,7 @@ export function PROSelectorFields({
   );
 }
 
-// ── Standalone PROSelector (own form context, submit button) ──────────────────
+// ── Standalone PROSelector (own form context + submit button) ─────────────────
 interface PROSelectorProps {
   defaultValues?: Partial<PROSelectorValues>;
   onSubmit?: (values: PROSelectorValues) => void | Promise<void>;
