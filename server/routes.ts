@@ -1679,6 +1679,157 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── SERVICE BUSINESS — CLIENTS ──────────────────────────────────────────
+
+  app.get('/api/clients', isAuthenticated, async (req: any, res) => {
+    try {
+      const list = await storage.getClients(req.user.claims.sub);
+      res.json(list);
+    } catch { res.status(500).json({ message: "Failed to fetch clients" }); }
+  });
+
+  app.post('/api/clients', isAuthenticated, async (req: any, res) => {
+    try {
+      const client = await storage.createClient({ ...req.body, operatorId: req.user.claims.sub });
+      res.status(201).json(client);
+    } catch { res.status(500).json({ message: "Failed to create client" }); }
+  });
+
+  app.get('/api/clients/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const client = await storage.getClient(req.params.id);
+      if (!client) return res.status(404).json({ message: "Client not found" });
+      res.json(client);
+    } catch { res.status(500).json({ message: "Failed to fetch client" }); }
+  });
+
+  app.patch('/api/clients/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const client = await storage.updateClient(req.params.id, req.body);
+      res.json(client);
+    } catch { res.status(500).json({ message: "Failed to update client" }); }
+  });
+
+  app.delete('/api/clients/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteClient(req.params.id);
+      res.json({ success: true });
+    } catch { res.status(500).json({ message: "Failed to delete client" }); }
+  });
+
+  app.get('/api/clients/:id/projects', isAuthenticated, async (req: any, res) => {
+    try {
+      const projects = await storage.getServiceProjectsByClient(req.params.id);
+      res.json(projects);
+    } catch { res.status(500).json({ message: "Failed to fetch projects" }); }
+  });
+
+  // ─── SERVICE BUSINESS — PROJECTS ─────────────────────────────────────────
+
+  app.get('/api/projects', isAuthenticated, async (req: any, res) => {
+    try {
+      const projects = await storage.getServiceProjects(req.user.claims.sub);
+      res.json(projects);
+    } catch { res.status(500).json({ message: "Failed to fetch projects" }); }
+  });
+
+  app.post('/api/projects', isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.createServiceProject({ ...req.body, operatorId: req.user.claims.sub });
+      res.status(201).json(project);
+    } catch { res.status(500).json({ message: "Failed to create project" }); }
+  });
+
+  app.get('/api/projects/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getServiceProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      res.json(project);
+    } catch { res.status(500).json({ message: "Failed to fetch project" }); }
+  });
+
+  app.patch('/api/projects/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.updateServiceProject(req.params.id, req.body);
+      res.json(project);
+    } catch { res.status(500).json({ message: "Failed to update project" }); }
+  });
+
+  app.delete('/api/projects/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteServiceProject(req.params.id);
+      res.json({ success: true });
+    } catch { res.status(500).json({ message: "Failed to delete project" }); }
+  });
+
+  // ─── SERVICE BUSINESS — CONTRIBUTORS ─────────────────────────────────────
+
+  app.get('/api/projects/:id/contributors', isAuthenticated, async (req: any, res) => {
+    try {
+      const contributors = await storage.getProjectContributors(req.params.id);
+      res.json(contributors);
+    } catch { res.status(500).json({ message: "Failed to fetch contributors" }); }
+  });
+
+  app.post('/api/projects/:id/contributors', isAuthenticated, async (req: any, res) => {
+    try {
+      const contributor = await storage.addProjectContributor({ ...req.body, projectId: req.params.id });
+      res.status(201).json(contributor);
+    } catch { res.status(500).json({ message: "Failed to add contributor" }); }
+  });
+
+  app.patch('/api/projects/:projectId/contributors/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const contributor = await storage.updateProjectContributor(req.params.id, req.body);
+      res.json(contributor);
+    } catch { res.status(500).json({ message: "Failed to update contributor" }); }
+  });
+
+  app.delete('/api/projects/:projectId/contributors/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.removeProjectContributor(req.params.id);
+      res.json({ success: true });
+    } catch { res.status(500).json({ message: "Failed to remove contributor" }); }
+  });
+
+  app.post('/api/projects/:id/send-confirmations', isAuthenticated, async (req: any, res) => {
+    try {
+      const contributors = await storage.generateConfirmationTokens(req.params.id);
+      const host = req.headers.origin || `https://${req.headers.host}`;
+      const links = contributors.map(c => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        token: c.confirmationToken,
+        confirmUrl: `${host}/confirm/${c.confirmationToken}`,
+      }));
+      res.json({ contributors: links });
+    } catch { res.status(500).json({ message: "Failed to generate confirmation links" }); }
+  });
+
+  // ─── PUBLIC — CONFIRMATION (no auth) ────────────────────────────────────
+
+  app.get('/api/confirm/:token', async (req, res) => {
+    try {
+      const contributor = await storage.getContributorByToken(req.params.token);
+      if (!contributor) return res.status(404).json({ message: "Invalid confirmation link" });
+      const project = await storage.getServiceProject(contributor.projectId);
+      const allContributors = await storage.getProjectContributors(contributor.projectId);
+      res.json({ contributor, project, allContributors });
+    } catch { res.status(500).json({ message: "Failed to load confirmation" }); }
+  });
+
+  app.post('/api/confirm/:token', async (req, res) => {
+    try {
+      const contributor = await storage.getContributorByToken(req.params.token);
+      if (!contributor) return res.status(404).json({ message: "Invalid or expired link" });
+      if (contributor.confirmedAt) return res.status(400).json({ message: "Already confirmed" });
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '';
+      const updated = await storage.confirmContributor(req.params.token, ip);
+      res.json({ success: true, contributor: updated });
+    } catch { res.status(500).json({ message: "Failed to confirm" }); }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

@@ -91,3 +91,61 @@ Preferred communication style: Simple, everyday language.
 - **Storage**: Added `getSongAssetsByStatus`, `archiveSongAsset`, `restoreSongAsset`, `deactivateSongAsset`, `deleteDraftSongAsset`, `logAssetActivity`, `getAssetActivityLog` methods
 - **API Routes**: `GET /api/assets/archived`, `PATCH /api/assets/:id/archive`, `PATCH /api/assets/:id/restore`, `PATCH /api/assets/:id/deactivate`, `DELETE /api/assets/:id/draft`, `GET /api/assets/:id/activity`
 - **ownership.tsx**: Full rewrite — Active/Archived tabs, per-asset actions dropdown (Archive, Deactivate, Restore, Delete Draft), confirmation modals with legal copy, activity log panel, ISWC field in add-asset form, status badges, asset type selector, revenue-by-source summary bars, deactivated-asset notice, restore button
+
+## Phase 3 — "SplitSheet as a Service" (Operator Model)
+
+### Architecture Pivot
+Transformed from self-serve SaaS to operator-managed service business. The software now functions as an internal operations tool for the service provider (operator), not as a self-serve product for end users.
+
+### New Entities (DB + Schema)
+- **`clients`** — Artists, producers, groups, songwriters, and labels the operator serves. Fields: name, email, phone, type, notes.
+- **`service_projects`** — Per-song split sheet jobs. Fields: title, songTitle, clientId, status (draft / pending_confirmation / confirmed / archived), notes.
+- **`project_contributors`** — People with ownership stakes. Fields: name, email, role, PRO, IPI, ownershipPercentage, confirmationToken (unique), confirmedAt, confirmationIp.
+
+### Service Workflow
+Client Intake → Split Setup → Confirmation → Record Storage
+1. Operator adds client → creates project → adds contributors with ownership %
+2. Ownership must total exactly 100% (validated in UI + enforcement)
+3. Operator clicks "Generate Confirmation Links" — each contributor gets a unique token-based URL
+4. Contributors visit their link (no auth required), review the split, check a box, and confirm
+5. When all contributors confirm, project auto-advances to "confirmed" status
+
+### New API Routes
+- `GET/POST /api/clients` — list and create clients
+- `GET/PATCH/DELETE /api/clients/:id` — client detail management
+- `GET /api/clients/:id/projects` — projects for a specific client
+- `GET/POST /api/projects` — list and create projects
+- `GET/PATCH/DELETE /api/projects/:id` — project detail management
+- `GET/POST /api/projects/:id/contributors` — contributor management
+- `PATCH/DELETE /api/projects/:projectId/contributors/:id` — edit/remove contributor
+- `POST /api/projects/:id/send-confirmations` — generate tokens, return confirmation URLs
+- `GET/POST /api/confirm/:token` — **public** (no auth) — view and submit confirmation
+
+### New Pages
+- **`/clients`** — Client management: grid view, type filtering, search, add/edit/delete
+- **`/clients/:id`** — Client detail: stats, all associated projects
+- **`/projects`** — Project pipeline: status filter tabs (Draft/Pending/Confirmed/Archived), search, create new
+- **`/projects/:id`** — Project detail: split sheet editor, contributor management with ownership validation, confirmation link generator, existing token display with copy buttons, project timeline
+- **`/confirm/:token`** — **Public confirmation page** (no auth): contributor views split, checks agreement box, submits confirmation. Time-stamped, IP-logged.
+
+### New Components
+- **`OperatorLayout.tsx`** — Persistent sidebar layout for all authenticated pages. Sidebar nav: Dashboard, Clients, Projects, Music Agreements, Rights Ledger. Mobile-responsive with overlay drawer. User menu at bottom.
+
+### Dashboard Restructure
+- Command-center view: Client count, Active Projects, Pending Confirmations, Confirmed stats
+- Recent Projects pipeline list with status badges
+- Pending confirmations alert banner
+- Quick Actions sidebar (New Project, Add Client, Music Agreements, Rights Ledger)
+- Recent Clients sidebar
+- Recent Agreements sidebar
+
+### What Was Kept
+- Auth system (Replit OIDC) — operator logs in
+- Music Agreements (contracts/templates) — document storage, unchanged
+- Rights Ledger (song assets, ownership, revenue) — unchanged, accessible via sidebar
+- Stripe/billing infrastructure — still present but de-emphasized (accessible via user menu)
+
+### What Was De-emphasized
+- Subscription billing UI removed from main nav (still accessible via user menu → Billing)
+- Self-serve onboarding removed from primary flow
+- Complex match/negotiation features accessible but not in primary sidebar

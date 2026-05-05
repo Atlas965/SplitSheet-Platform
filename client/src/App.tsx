@@ -22,6 +22,11 @@ import Messages from "@/pages/messages";
 import Admin from "@/pages/admin";
 import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
+import Clients from "@/pages/clients";
+import ClientDetail from "@/pages/client-detail";
+import Projects from "@/pages/projects";
+import ProjectDetail from "@/pages/project-detail";
+import Confirm from "@/pages/confirm";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -29,11 +34,18 @@ function Router() {
 
   return (
     <Switch>
+      {/* Public route — no auth required */}
+      <Route path="/confirm/:token" component={Confirm} />
+
       {isLoading || !isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
         <>
           <Route path="/" component={Dashboard} />
+          <Route path="/clients" component={Clients} />
+          <Route path="/clients/:id" component={ClientDetail} />
+          <Route path="/projects" component={Projects} />
+          <Route path="/projects/:id" component={ProjectDetail} />
           <Route path="/contracts" component={Contracts} />
           <Route path="/contracts/:id" component={ContractDetails} />
           <Route path="/contracts/:id/edit" component={ContractEdit} />
@@ -43,7 +55,7 @@ function Router() {
           <Route path="/billing" component={Billing} />
           <Route path="/subscribe" component={() => {
             const params = new URLSearchParams(window.location.search);
-            const plan   = params.get("plan") ?? "pro";
+            const plan = params.get("plan") ?? "pro";
             return <Subscribe plan={plan} />;
           }} />
           <Route path="/negotiations" component={Negotiations} />

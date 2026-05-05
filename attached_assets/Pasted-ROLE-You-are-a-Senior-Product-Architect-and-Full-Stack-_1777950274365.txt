@@ -1,0 +1,170 @@
+ROLE:  
+You are a Senior Product Architect and Full-Stack Engineer specializing in transforming SaaS platforms into productized service businesses.
+
+---
+
+CONTEXT:  
+I have built a SaaS platform called SplitSheet under my business SoundLedger Technologies.  
+The current system is structured as a subscription-based SaaS (user accounts, dashboards, self-serve usage).
+
+I want to restructure this into a service-first business model, similar to skilled trades or professional services (e.g., accountants), where:
+
+- The primary value is done-for-you split sheet creation and agreement management
+- The software becomes an internal operations tool, not the main product
+- Users do NOT self-serve initially — I (the operator) manage workflows
+
+---
+
+OBJECTIVE:  
+Refactor the platform architecture, UX, and data flow to support:
+
+> “SplitSheet as a Service” (operator-driven workflow)
+
+---
+
+CORE REQUIREMENTS:
+
+### 1. Replace SaaS Subscription Model
+- Remove or deprioritize:
+  - subscription billing logic
+  - self-serve onboarding flows
+- Introduce:
+  - client-based service records
+  - project/job-based structure (like service tickets)
+
+---
+
+### 2. Introduce Service Workflow System
+
+Design the system around this lifecycle:
+
+Client Intake → Split Setup → Confirmation → Record Storage
+
+Implement:
+
+- Client entity (artist, producer, group)
+- Project/Session entity (per song or collaboration)
+- Contributor management (roles + ownership %)
+- Validation logic (ownership must equal 100%)
+
+---
+
+### 3. Operator Dashboard (Core System)
+
+Build a dashboard for ME (the service provider), not end users:
+
+Features:
+- View all clients
+- View all projects/sessions
+- Create/edit split sheets
+- Track status:
+  - Draft
+  - Pending Confirmation
+  - Confirmed
+- Audit trail (who added/edited what)
+
+---
+
+### 4. Confirmation System (Critical)
+
+Implement a lightweight confirmation mechanism:
+
+- Each contributor must:
+  - review split
+  - confirm agreement (checkbox or simple acknowledgment)
+- Store:
+  - timestamp
+  - name/email (no need for complex auth yet)
+
+---
+
+### 5. Data Integrity & Safety
+
+Enforce:
+
+- total ownership % must equal 100%
+- no duplicate contributors
+- clear role labeling (producer, artist, songwriter, etc.)
+
+---
+
+### 6. Remove Overengineering
+
+Avoid:
+- complex permissions systems
+- multi-tenant SaaS scaling concerns
+- advanced billing systems
+
+Focus on:
+- speed
+- clarity
+- reliability
+
+---
+
+### 7. Prepare for Future SaaS Evolution
+
+Structure code so that:
+
+- service workflows can later become self-serve
+- user accounts can be layered in later
+- system is modular (clients, projects, splits)
+
+---
+
+### 8. UX Direction
+
+Design for:
+
+- simplicity (non-technical music users)
+- fast data entry during/after studio sessions
+- clean, minimal interface
+
+---
+
+### 9. Tech Stack (keep aligned)
+
+- Frontend: Next.js
+- Backend: API routes / Node
+- Database: PostgreSQL (Drizzle ORM)
+- Hosting: Compatible with Replit deployment
+
+---
+
+OUTPUT EXPECTATION:
+
+Provide:
+
+1. Updated system architecture (entities + relationships)  
+2. Database schema (Drizzle ORM)  
+3. API structure (routes for clients, projects, splits)  
+4. Operator dashboard layout  
+5. Step-by-step service workflow implementation  
+6. Refactored feature list (what to keep, remove, add)
+
+---
+
+IMPORTANT CONSTRAINT:
+
+This is NOT a SaaS product anymore.
+
+This is:
+
+> A service business powered by internal software.
+
+Optimize everything for:
+- operator efficiency
+- real-world usage
+- early-stage simplicity
+
+---
+
+END GOAL:
+
+A production-ready MVP that allows me to:
+
+- manage 5–20 clients manually  
+- run SplitSheet as a professional service  
+- evolve into SaaS later if needed  
+
+---

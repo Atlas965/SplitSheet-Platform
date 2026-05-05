@@ -297,6 +297,50 @@ export const userBalances = pgTable("user_balances", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ─── SERVICE BUSINESS LAYER ──────────────────────────────────────────────────
+
+// Clients — artists, producers, groups the operator serves
+export const clients = pgTable("clients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  operatorId: varchar("operator_id").references(() => users.id).notNull(),
+  name: varchar("name").notNull(),
+  email: varchar("email"),
+  phone: varchar("phone"),
+  type: varchar("type").default("artist"), // artist, producer, group, songwriter, label
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Service Projects — per-song or collaboration jobs
+export const serviceProjects = pgTable("service_projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  operatorId: varchar("operator_id").references(() => users.id).notNull(),
+  clientId: varchar("client_id").references(() => clients.id),
+  title: varchar("title").notNull(),
+  songTitle: varchar("song_title").notNull(),
+  status: varchar("status").default("draft"), // draft, pending_confirmation, confirmed, archived
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Project Contributors — people with ownership stakes who must confirm
+export const projectContributors = pgTable("project_contributors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").references(() => serviceProjects.id).notNull(),
+  name: varchar("name").notNull(),
+  email: varchar("email"),
+  role: varchar("role").notNull(), // producer, songwriter, artist, co-writer, publisher
+  pro: varchar("pro"), // SOCAN, BMI, ASCAP, etc.
+  ipi: varchar("ipi"),
+  ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }).notNull(),
+  confirmationToken: varchar("confirmation_token").unique(),
+  confirmedAt: timestamp("confirmed_at"),
+  confirmationIp: varchar("confirmation_ip"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
 
 // Relations
@@ -455,6 +499,17 @@ export const insertUserBalanceSchema = createInsertSchema(userBalances).omit({
 
 export const insertAssetActivityLogSchema = createInsertSchema(assetActivityLogs).omit({ id: true, createdAt: true });
 export const insertAssetPermissionSchema = createInsertSchema(assetPermissions).omit({ id: true, createdAt: true });
+
+export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertServiceProjectSchema = createInsertSchema(serviceProjects).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertProjectContributorSchema = createInsertSchema(projectContributors).omit({ id: true, createdAt: true, confirmationToken: true, confirmedAt: true, confirmationIp: true });
+
+export type Client = typeof clients.$inferSelect;
+export type InsertClient = z.infer<typeof insertClientSchema>;
+export type ServiceProject = typeof serviceProjects.$inferSelect;
+export type InsertServiceProject = z.infer<typeof insertServiceProjectSchema>;
+export type ProjectContributor = typeof projectContributors.$inferSelect;
+export type InsertProjectContributor = z.infer<typeof insertProjectContributorSchema>;
 
 export type SongAsset = typeof songAssets.$inferSelect;
 export type InsertSongAsset = z.infer<typeof insertSongAssetSchema>;
