@@ -1573,6 +1573,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── CONFIRMATIONS ────────────────────────────────────────────────────────
+
+  // Generate confirmation links for a contract
+  app.post('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const collaborators = await storage.getContractCollaborators(req.params.id);
+      const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
+
+      const newConfirmations = [];
+      const crypto = await import("crypto");
+
+      for (const collaborator of collaborators) {
+        // Check if confirmation already exists for this collaborator
+        const existing = existingConfirmations.find(c => c.collaboratorId === collaborator.id);
+        if (existing) {
+          newConfirmations.push(existing);
+          continue;
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const confirmation = await storage.createConfirmation({
+          contractId: req.params.id,
+          collaboratorId: collaborator.id,
+          token,
+          status: 'pending',
+          expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 hours
+        });
+        newConfirmations.push(confirmation);
+      }
+
+      res.json(newConfirmations);
+    } catch (error) {
+      console.error("Error generating confirmations:", error);
+      res.status(500).json({ message: "Failed to generate confirmations" });
+    }
+  });
+
+  // Get confirmations for a contract (operator view)
+  app.get('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const confirmations = await storage.getConfirmationsByContract(req.params.id);
+      res.json(confirmations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch confirmations" });
+    }
+  });
+
+  // Public: Get confirmation details by token
+  app.get('/api/confirmations/:token', async (req, res) => {
+    try {
+      const confirmation = await storage.getConfirmationByToken(req.params.token);
+      if (!confirmation) return res.status(404).json({ message: "Invalid or expired link" });
+
+      if (confirmation.expiresAt && confirmation.expiresAt < new Date()) {
+        return res.status(410).json({ message: "This link has expired" });
+      }
+
+      const [contract, collaborator, allCollaborators] = await Promise.all([
+        storage.getContract(confirmation.contractId),
+        storage.getContractCollaborators(confirmation.contractId).then(cols => cols.find(c => c.id === confirmation.collaboratorId)),
+        storage.getContractCollaborators(confirmation.contractId)
+      ]);
+
+      if (!contract || !collaborator) return res.status(404).json({ message: "Contract details not found" });
+
+      res.json({
+        confirmation,
+        contract: {
+          title: contract.title,
+          type: contract.type,
+          data: contract.data,
+        },
+        collaborator,
+        allCollaborators
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch confirmation details" });
+    }
+  });
+
+  // Public: Submit confirmation
+  app.post('/api/confirmations/:token/submit', async (req, res) => {
+    try {
+      const confirmation = await storage.getConfirmationByToken(req.params.token);
+      if (!confirmation) return res.status(404).json({ message: "Invalid link" });
+      
+      const { status, notes, name, email } = req.body; // status: 'confirmed' or 'requested_change'
+      
+      const updates: any = {
+        status,
+        notes,
+        confirmedAt: new Date(),
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      };
+
+      const updatedConfirmation = await storage.updateConfirmation(confirmation.id, updates);
+
+      // If confirmed, also update the collaborator status in the main table
+      if (status === 'confirmed') {
+        await storage.updateCollaboratorStatus(confirmation.collaboratorId, 'signed');
+        
+        // Check if all collaborators have confirmed
+        const allConfirmations = await storage.getConfirmationsByContract(confirmation.contractId);
+        const allConfirmed = allConfirmations.every(c => c.status === 'confirmed');
+        
+        if (allConfirmed) {
+          await storage.updateContract(confirmation.contractId, { status: 'signed' });
+        }
+      }
+
+      res.json(updatedConfirmation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to submit confirmation" });
+    }
+  });
+
   // ─── USER EARNINGS ────────────────────────────────────────────────────────
 
   app.get('/api/earnings', isAuthenticated, async (req: any, res) => {

@@ -21,6 +21,7 @@ import Messages from "@/pages/messages";
 import Admin from "@/pages/admin";
 import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
+import Confirm from "@/pages/confirm";
 import NotFound from "@/pages/not-found";
 import EditOwnershipModal from "@/components/EditOwnershipModal";
 import NotificationsPage from "./pages/notifications";
@@ -55,6 +56,7 @@ function Router() {
           <Route path="/notifications" element={<NotificationsPage />} />
         </>
       )}
+      <Route path="/confirm/:token" component={Confirm} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -177,6 +177,22 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Split Sheet Confirmations
+export const confirmations = pgTable("confirmations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id).notNull(),
+  collaboratorId: varchar("collaborator_id").references(() => contractCollaborators.id).notNull(),
+  status: varchar("status").default("pending"), // pending, confirmed, requested_change
+  token: varchar("token").notNull().unique(),
+  expiresAt: timestamp("expires_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  notes: text("notes"), // For "Request Change" feedback
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ─── OWNERSHIP LEDGER SYSTEM ────────────────────────────────────────────────
 
 // Song assets — each song is treated like a startup cap table
@@ -290,6 +306,17 @@ export const contractSignaturesRelations = relations(contractSignatures, ({ one 
   }),
 }));
 
+export const confirmationsRelations = relations(confirmations, ({ one }) => ({
+  contract: one(contracts, {
+    fields: [confirmations.contractId],
+    references: [contracts.id],
+  }),
+  collaborator: one(contractCollaborators, {
+    fields: [confirmations.collaboratorId],
+    references: [contractCollaborators.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -355,6 +382,12 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
   createdAt: true,
 });
 
+export const insertConfirmationSchema = createInsertSchema(confirmations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type UpsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -373,6 +406,8 @@ export type NegotiationConversation = typeof negotiationConversations.$inferSele
 export type UserMatch = typeof userMatches.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+export type Confirmation = typeof confirmations.$inferSelect;
+export type InsertConfirmation = z.infer<typeof insertConfirmationSchema>;
 
 export const insertSongAssetSchema = createInsertSchema(songAssets).omit({
   id: true,

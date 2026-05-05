@@ -11,6 +11,7 @@ import {
   userMatches,
   messages,
   notifications,
+  confirmations,
   songAssets,
   ownershipRecords,
   revenueEvents,
@@ -29,6 +30,8 @@ import {
   type UserMatch,
   type Message,
   type Notification,
+  type Confirmation,
+  type InsertConfirmation,
   type Negotiation,
   type NegotiationConversation,
   type SongAsset,
@@ -129,6 +132,12 @@ export interface IStorage {
   // User balances & earnings
   getUserEarnings(userId: string): Promise<UserBalance | null>;
   getUserPayouts(userId: string): Promise<PayoutRecord[]>;
+
+  // Confirmation methods
+  getConfirmationByToken(token: string): Promise<Confirmation | undefined>;
+  getConfirmationsByContract(contractId: string): Promise<Confirmation[]>;
+  createConfirmation(confirmation: InsertConfirmation): Promise<Confirmation>;
+  updateConfirmation(id: string, updates: Partial<Confirmation>): Promise<Confirmation>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1014,6 +1023,42 @@ export class DatabaseStorage implements IStorage {
       .from(payoutRecords)
       .where(eq(payoutRecords.userId, userId))
       .orderBy(desc(payoutRecords.createdAt));
+  }
+
+  // Confirmation methods
+  async getConfirmationByToken(token: string): Promise<Confirmation | undefined> {
+    const [confirmation] = await db
+      .select()
+      .from(confirmations)
+      .where(eq(confirmations.token, token));
+    return confirmation;
+  }
+
+  async getConfirmationsByContract(contractId: string): Promise<Confirmation[]> {
+    return await db
+      .select()
+      .from(confirmations)
+      .where(eq(confirmations.contractId, contractId));
+  }
+
+  async createConfirmation(confirmation: InsertConfirmation): Promise<Confirmation> {
+    const [newConfirmation] = await db
+      .insert(confirmations)
+      .values(confirmation)
+      .returning();
+    return newConfirmation;
+  }
+
+  async updateConfirmation(id: string, updates: Partial<Confirmation>): Promise<Confirmation> {
+    const [updatedConfirmation] = await db
+      .update(confirmations)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(confirmations.id, id))
+      .returning();
+    return updatedConfirmation;
   }
 
   // Admin methods

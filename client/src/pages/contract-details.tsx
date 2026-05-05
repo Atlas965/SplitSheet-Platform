@@ -17,7 +17,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users } from "lucide-react";
+import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users, Share2, MessageSquare, Smartphone, Copy, Check } from "lucide-react";
 
 interface Contract {
   id: string;
@@ -39,6 +39,25 @@ export default function ContractDetails() {
   const [shareEmail, setShareEmail] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [savedSignature, setSavedSignature] = useState<SignaturePayload | null>(null);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
+
+  const { data: confirmations, isLoading: confirmationsLoading } = useQuery<any[]>({
+    queryKey: [`/api/contracts/${id}/confirmations`],
+    enabled: !!id && isAuthenticated,
+  });
+
+  const generateConfirmationsMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("POST", `/api/contracts/${id}/confirmations`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/contracts/${id}/confirmations`] });
+      toast({
+        title: "Links Generated",
+        description: "Confirmation links are ready to share.",
+      });
+    },
+  });
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -196,16 +215,27 @@ export default function ContractDetails() {
     }
   };
 
-  const handleShare = () => {
-    // For now, just copy the contract link to clipboard
-    const contractUrl = `${window.location.origin}/contracts/${id}`;
-    navigator.clipboard.writeText(contractUrl);
-    setShowShareDialog(false);
-    setShareEmail("");
+  const handleCopyLink = (token: string) => {
+    const url = `${window.location.origin}/confirm/${token}`;
+    navigator.clipboard.writeText(url);
+    setCopiedToken(token);
+    setTimeout(() => setCopiedToken(null), 2000);
     toast({
       title: "Link Copied",
-      description: "Contract link has been copied to clipboard.",
+      description: "Confirmation link copied to clipboard.",
     });
+  };
+
+  const handleShareWhatsApp = (token: string, name: string) => {
+    const url = `${window.location.origin}/confirm/${token}`;
+    const text = encodeURIComponent(`Hey ${name} — please review and confirm the split for our track "${contract?.title}" here: ${url}`);
+    window.open(`https://wa.me/?text=${text}`, '_blank');
+  };
+
+  const handleShareSMS = (token: string, name: string) => {
+    const url = `${window.location.origin}/confirm/${token}`;
+    const text = encodeURIComponent(`Hey ${name} — please review and confirm the split for our track "${contract?.title}" here: ${url}`);
+    window.open(`sms:?&body=${text}`, '_blank');
   };
 
   const renderContractContent = () => {
@@ -526,34 +556,87 @@ export default function ContractDetails() {
             <Dialog open={showShareDialog} onOpenChange={setShowShareDialog}>
               <DialogTrigger asChild>
                 <Button variant="outline" data-testid="button-share-contract">
-                  <i className="fas fa-share mr-2"></i>
-                  Share
+                  <Share2 className="h-4 w-4 mr-2" />
+                  Share & Track
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>Share Contract</DialogTitle>
+                  <DialogTitle>Share Confirmation Links</DialogTitle>
                 </DialogHeader>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="shareEmail">Email Address</Label>
-                    <Input
-                      id="shareEmail"
-                      type="email"
-                      placeholder="colleague@example.com"
-                      value={shareEmail}
-                      onChange={(e) => setShareEmail(e.target.value)}
-                      data-testid="input-share-email"
-                    />
-                  </div>
-                  <div className="flex justify-end space-x-2">
-                    <Button variant="outline" onClick={() => setShowShareDialog(false)}>
-                      Cancel
-                    </Button>
-                    <Button onClick={handleShare} data-testid="button-confirm-share">
-                      Copy Link
-                    </Button>
-                  </div>
+                <div className="space-y-6 py-4">
+                  {!confirmations || confirmations.length === 0 ? (
+                    <div className="text-center py-8 space-y-4">
+                      <p className="text-muted-foreground">Generate unique links for each collaborator to track their confirmation.</p>
+                      <Button 
+                        onClick={() => generateConfirmationsMutation.mutate()}
+                        disabled={generateConfirmationsMutation.isPending}
+                      >
+                        {generateConfirmationsMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Generate Confirmation Links
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {contract?.data?.collaborators?.map((collab: any) => {
+                        const conf = confirmations.find(c => c.collaboratorId === collab.id);
+                        return (
+                          <div key={collab.id} className="p-4 border rounded-lg space-y-3 bg-slate-50/50">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="font-semibold">{collab.name}</p>
+                                <p className="text-xs text-muted-foreground">{collab.role} • {collab.ownershipPercentage}%</p>
+                              </div>
+                              <Badge variant={
+                                conf?.status === 'confirmed' ? 'default' : 
+                                conf?.status === 'requested_change' ? 'destructive' : 'outline'
+                              }>
+                                {conf?.status === 'confirmed' ? 'Confirmed' : 
+                                 conf?.status === 'requested_change' ? 'Change Requested' : 'Pending'}
+                              </Badge>
+                            </div>
+                            
+                            {conf && (
+                              <div className="flex flex-wrap gap-2">
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="h-8 text-xs"
+                                  onClick={() => handleCopyLink(conf.token)}
+                                >
+                                  {copiedToken === conf.token ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                                  Copy Link
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="h-8 text-xs"
+                                  onClick={() => handleShareWhatsApp(conf.token, collab.name)}
+                                >
+                                  <MessageSquare className="h-3 w-3 mr-1" />
+                                  WhatsApp
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="h-8 text-xs"
+                                  onClick={() => handleShareSMS(conf.token, collab.name)}
+                                >
+                                  <Smartphone className="h-3 w-3 mr-1" />
+                                  SMS
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <div className="pt-4 flex justify-center">
+                        <Button variant="ghost" size="sm" onClick={() => generateConfirmationsMutation.mutate()}>
+                          Regenerate All Links
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </DialogContent>
             </Dialog>
