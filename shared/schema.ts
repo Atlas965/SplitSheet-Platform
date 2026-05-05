@@ -72,26 +72,6 @@ export const contracts = pgTable("contracts", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ─── Canadian PRO (Performance Rights Organization) ──────────────────────────
-
-export const PRO_TYPE = z.enum(["SOCAN", "BMI", "ASCAP", "PRS", "SESAC", "Other"]);
-export type ProType = z.infer<typeof PRO_TYPE>;
-
-export const PRO_LABELS: Record<ProType, string> = {
-  SOCAN:  "SOCAN — Society of Composers, Authors and Music Publishers of Canada",
-  BMI:    "BMI — Broadcast Music, Inc.",
-  ASCAP:  "ASCAP — American Society of Composers, Authors and Publishers",
-  PRS:    "PRS — Performing Right Society (UK)",
-  SESAC:  "SESAC — Society of European Stage Authors & Composers",
-  Other:  "Other / Not affiliated",
-};
-
-export const ipiNumberSchema = z
-  .string()
-  .regex(/^\d{9}$/, "IPI number must be exactly 9 digits")
-  .optional()
-  .or(z.literal(""));
-
 // Contract collaborators
 export const contractCollaborators = pgTable("contract_collaborators", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -102,8 +82,6 @@ export const contractCollaborators = pgTable("contract_collaborators", {
   role: varchar("role").notNull(),
   ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }),
   status: varchar("status").default("pending"), // pending, signed, declined
-  proAffiliation: varchar("pro_affiliation").default("SOCAN"), // Canadian-first default
-  ipiNumber: varchar("ipi_number", { length: 9 }),             // 9-digit IPI
   signedAt: timestamp("signed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -199,6 +177,22 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Split Sheet Confirmations
+export const confirmations = pgTable("confirmations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id).notNull(),
+  collaboratorId: varchar("collaborator_id").references(() => contractCollaborators.id).notNull(),
+  status: varchar("status").default("pending"), // pending, confirmed, requested_change
+  token: varchar("token").notNull().unique(),
+  expiresAt: timestamp("expires_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  notes: text("notes"), // For "Request Change" feedback
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ─── OWNERSHIP LEDGER SYSTEM ────────────────────────────────────────────────
 
 // Song assets — each song is treated like a startup cap table
@@ -207,40 +201,12 @@ export const songAssets = pgTable("song_assets", {
   title: varchar("title").notNull(),
   artistName: varchar("artist_name"),
   isrc: varchar("isrc"), // International Standard Recording Code
-  iswc: varchar("iswc"), // International Standard Musical Work Code
-  type: varchar("type").default("master"), // master, composition, split_sheet, agreement
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   contractId: varchar("contract_id").references(() => contracts.id),
-  status: varchar("status").default("active"), // active, archived, deactivated, pending_transfer
-  archivedAt: timestamp("archived_at"),
-  archivedBy: varchar("archived_by").references(() => users.id),
-  deactivatedAt: timestamp("deactivated_at"),
-  deletedAt: timestamp("deleted_at"), // soft-delete for drafts only
+  status: varchar("status").default("active"), // active, archived
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Immutable audit trail for every asset action
-export const assetActivityLogs = pgTable("asset_activity_logs", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
-  userId: varchar("user_id").references(() => users.id).notNull(),
-  action: varchar("action").notNull(), // created, archived, restored, deactivated, transferred, ownership_updated, revenue_recorded, payout_executed, deleted_draft
-  metadata: jsonb("metadata"),
-  ipAddress: varchar("ip_address"),
-  userAgent: text("user_agent"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Role-based access control per asset
-export const assetPermissions = pgTable("asset_permissions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  assetId: varchar("asset_id").references(() => songAssets.id).notNull(),
-  userId: varchar("user_id").references(() => users.id).notNull(),
-  role: varchar("role").notNull().default("viewer"), // owner, editor, viewer, collaborator, manager
-  revokedAt: timestamp("revoked_at"),
-  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Ownership records — append-only ledger, never overwrite, only append
@@ -297,50 +263,6 @@ export const userBalances = pgTable("user_balances", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// ─── SERVICE BUSINESS LAYER ──────────────────────────────────────────────────
-
-// Clients — artists, producers, groups the operator serves
-export const clients = pgTable("clients", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  operatorId: varchar("operator_id").references(() => users.id).notNull(),
-  name: varchar("name").notNull(),
-  email: varchar("email"),
-  phone: varchar("phone"),
-  type: varchar("type").default("artist"), // artist, producer, group, songwriter, label
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Service Projects — per-song or collaboration jobs
-export const serviceProjects = pgTable("service_projects", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  operatorId: varchar("operator_id").references(() => users.id).notNull(),
-  clientId: varchar("client_id").references(() => clients.id),
-  title: varchar("title").notNull(),
-  songTitle: varchar("song_title").notNull(),
-  status: varchar("status").default("draft"), // draft, pending_confirmation, confirmed, archived
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
-
-// Project Contributors — people with ownership stakes who must confirm
-export const projectContributors = pgTable("project_contributors", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").references(() => serviceProjects.id).notNull(),
-  name: varchar("name").notNull(),
-  email: varchar("email"),
-  role: varchar("role").notNull(), // producer, songwriter, artist, co-writer, publisher
-  pro: varchar("pro"), // SOCAN, BMI, ASCAP, etc.
-  ipi: varchar("ipi"),
-  ownershipPercentage: decimal("ownership_percentage", { precision: 5, scale: 2 }).notNull(),
-  confirmationToken: varchar("confirmation_token").unique(),
-  confirmedAt: timestamp("confirmed_at"),
-  confirmationIp: varchar("confirmation_ip"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
 
 // Relations
@@ -384,6 +306,17 @@ export const contractSignaturesRelations = relations(contractSignatures, ({ one 
   }),
 }));
 
+export const confirmationsRelations = relations(confirmations, ({ one }) => ({
+  contract: one(contracts, {
+    fields: [confirmations.contractId],
+    references: [contracts.id],
+  }),
+  collaborator: one(contractCollaborators, {
+    fields: [confirmations.collaboratorId],
+    references: [contractCollaborators.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -406,10 +339,6 @@ export const insertContractSchema = createInsertSchema(contracts).omit({
 export const insertContractCollaboratorSchema = createInsertSchema(contractCollaborators).omit({
   id: true,
   createdAt: true,
-}).extend({
-  // Enforce Canadian-first PRO enum and 9-digit IPI
-  proAffiliation: PRO_TYPE.default("SOCAN").optional(),
-  ipiNumber: ipiNumberSchema,
 });
 
 export const insertContractSignatureSchema = createInsertSchema(contractSignatures).omit({
@@ -453,6 +382,12 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
   createdAt: true,
 });
 
+export const insertConfirmationSchema = createInsertSchema(confirmations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type UpsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -471,6 +406,8 @@ export type NegotiationConversation = typeof negotiationConversations.$inferSele
 export type UserMatch = typeof userMatches.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+export type Confirmation = typeof confirmations.$inferSelect;
+export type InsertConfirmation = z.infer<typeof insertConfirmationSchema>;
 
 export const insertSongAssetSchema = createInsertSchema(songAssets).omit({
   id: true,
@@ -497,25 +434,8 @@ export const insertUserBalanceSchema = createInsertSchema(userBalances).omit({
   id: true,
 });
 
-export const insertAssetActivityLogSchema = createInsertSchema(assetActivityLogs).omit({ id: true, createdAt: true });
-export const insertAssetPermissionSchema = createInsertSchema(assetPermissions).omit({ id: true, createdAt: true });
-
-export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertServiceProjectSchema = createInsertSchema(serviceProjects).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertProjectContributorSchema = createInsertSchema(projectContributors).omit({ id: true, createdAt: true, confirmationToken: true, confirmedAt: true, confirmationIp: true });
-
-export type Client = typeof clients.$inferSelect;
-export type InsertClient = z.infer<typeof insertClientSchema>;
-export type ServiceProject = typeof serviceProjects.$inferSelect;
-export type InsertServiceProject = z.infer<typeof insertServiceProjectSchema>;
-export type ProjectContributor = typeof projectContributors.$inferSelect;
-export type InsertProjectContributor = z.infer<typeof insertProjectContributorSchema>;
-
 export type SongAsset = typeof songAssets.$inferSelect;
 export type InsertSongAsset = z.infer<typeof insertSongAssetSchema>;
-export type AssetActivityLog = typeof assetActivityLogs.$inferSelect;
-export type InsertAssetActivityLog = z.infer<typeof insertAssetActivityLogSchema>;
-export type AssetPermission = typeof assetPermissions.$inferSelect;
 export type OwnershipRecord = typeof ownershipRecords.$inferSelect;
 export type InsertOwnershipRecord = z.infer<typeof insertOwnershipRecordSchema>;
 export type RevenueEvent = typeof revenueEvents.$inferSelect;

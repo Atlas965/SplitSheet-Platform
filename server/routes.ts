@@ -87,7 +87,7 @@ if (stripeKey) {
   // Validate that we have a secret key, not a public key
   if (stripeKey.startsWith('sk_')) {
     stripe = new Stripe(stripeKey, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2025-08-27.basil",
     });
     console.log('Stripe initialized with secret key');
   } else {
@@ -613,110 +613,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/get-or-create-subscription', isAuthenticated, async (req: any, res) => {
     try {
       if (!stripe) {
-        return res.status(503).json({ error: { message: "Stripe is not configured. Add STRIPE_SECRET_KEY to your environment." } });
+        return res.status(503).json({ message: "Stripe is not configured. Please contact support." });
       }
 
       const userId = req.user.claims.sub;
-      const user   = await storage.getUser(userId);
-      if (!user) return res.status(404).json({ error: { message: "User not found" } });
-      if (!user.email) return res.status(400).json({ error: { message: "No email address on file" } });
+      let user = await storage.getUser(userId);
 
-      const { plan = 'pro' } = req.body;
-      if (!['pro', 'label'].includes(plan)) {
-        return res.status(400).json({ error: { message: `Invalid plan: ${plan}` } });
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
       }
 
-      // ── Resolve or reuse existing Stripe customer ──────────────────────────
-      let customerId = user.stripeCustomerId as string | undefined;
-
-      if (customerId) {
-        try {
-          const existing = await stripe.customers.retrieve(customerId);
-          if ((existing as any).deleted) customerId = undefined;
-        } catch {
-          customerId = undefined;
-        }
-      }
-
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: user.email,
-          name:  [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email,
-          metadata: { splitsheet_user_id: userId },
-        });
-        customerId = customer.id;
-        await storage.updateUserStripeInfo(userId, customerId, user.stripeSubscriptionId ?? '');
-      }
-
-      // ── Check for existing active subscription ─────────────────────────────
       if (user.stripeSubscriptionId) {
-        try {
-          const existingSub = await stripe.subscriptions.retrieve(
-            user.stripeSubscriptionId,
-            { expand: ['latest_invoice.payment_intent'] }
-          );
-          const isActive    = ['active', 'trialing'].includes(existingSub.status);
-          const currentTier = (existingSub.metadata?.tier ?? 'pro') as string;
-
-          if (isActive && currentTier === plan) {
-            return res.json({ alreadyActive: true, plan, subscriptionId: existingSub.id });
-          }
-
-          if (isActive && currentTier !== plan) {
-            await stripe.subscriptions.cancel(user.stripeSubscriptionId);
-          }
-
-          if (!isActive && existingSub.status === 'incomplete') {
-            const secret = (existingSub.latest_invoice as any)?.payment_intent?.client_secret;
-            if (secret) return res.json({ subscriptionId: existingSub.id, clientSecret: secret, plan });
-          }
-        } catch (err: any) {
-          console.warn('[SUBSCRIPTION] Could not retrieve existing sub:', err.message);
-        }
-      }
-
-      // ── Resolve price ID — create inline price if env var missing ──────────
-      const priceEnvMap: Record<string, string | undefined> = {
-        pro:   process.env.STRIPE_PRO_PRICE_ID,
-        label: process.env.STRIPE_LABEL_PRICE_ID,
-      };
-      const amountMap: Record<string, number> = { pro: 1900, label: 4900 };
-
-      let priceId: string;
-      if (priceEnvMap[plan]) {
-        priceId = priceEnvMap[plan] as string;
-      } else {
-        console.warn(`[SUBSCRIPTION] STRIPE_${plan.toUpperCase()}_PRICE_ID not set — creating inline price (demo mode).`);
-        const inlinePrice = await stripe.prices.create({
-          unit_amount:  amountMap[plan],
-          currency:     'cad',
-          recurring:    { interval: 'month' },
-          product_data: { name: `SplitSheet ${plan.charAt(0).toUpperCase() + plan.slice(1)} Plan` },
+        const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        res.json({
+          subscriptionId: subscription.id,
+          clientSecret: (subscription.latest_invoice as any)?.payment_intent?.client_secret,
         });
-        priceId = inlinePrice.id;
+        return;
       }
 
-      // ── Create subscription ────────────────────────────────────────────────
-      const subscription = await stripe.subscriptions.create({
-        customer:         customerId,
-        items:            [{ price: priceId }],
-        payment_behavior: 'default_incomplete',
-        expand:           ['latest_invoice.payment_intent'],
-        metadata:         { tier: plan, userId },
+      if (!user.email) {
+        throw new Error('No user email on file');
+      }
+
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: `${user.firstName} ${user.lastName}`,
       });
 
-      await storage.updateUserStripeInfo(userId, customerId, subscription.id);
+      // Determine price ID based on plan
+      const { plan = 'pro' } = req.body;
+      let priceId;
+      let tier;
 
-      const clientSecret = (subscription.latest_invoice as any)?.payment_intent?.client_secret ?? null;
-      if (!clientSecret) {
-        return res.json({ subscriptionId: subscription.id, alreadyActive: true, plan });
+      switch (plan) {
+        case 'pro':
+          priceId = process.env.STRIPE_PRO_PRICE_ID || 'price_pro_default';
+          tier = 'pro';
+          break;
+        case 'label':
+          priceId = process.env.STRIPE_LABEL_PRICE_ID || 'price_label_default';
+          tier = 'label';
+          break;
+        default:
+          priceId = process.env.STRIPE_PRO_PRICE_ID || 'price_pro_default';
+          tier = 'pro';
       }
 
-      return res.json({ subscriptionId: subscription.id, clientSecret, plan });
+      const subscription = await stripe.subscriptions.create({
+        customer: customer.id,
+        items: [{
+          price: priceId,
+        }],
+        payment_behavior: 'default_incomplete',
+        expand: ['latest_invoice.payment_intent'],
+        metadata: {
+          tier: tier,
+          userId: userId,
+        },
+      });
 
+      await storage.updateUserStripeInfo(userId, customer.id, subscription.id);
+
+      res.json({
+        subscriptionId: subscription.id,
+        clientSecret: (subscription.latest_invoice as any)?.payment_intent?.client_secret,
+      });
     } catch (error: any) {
-      console.error('[SUBSCRIPTION ERROR]', error?.message ?? error);
-      return res.status(400).json({ error: { message: error?.message ?? 'Subscription failed' } });
+      console.error("Stripe subscription error:", error);
+      return res.status(400).json({ error: { message: error.message } });
     }
   });
 
@@ -1427,6 +1392,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to get activity" });
     }
   });
+  app.use(cors({
+  origin: process.env.ALLOWED_DOMAINS?.split(",") || "*",
+}));
+
 
   // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
 
@@ -1474,66 +1443,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(500).json({ message: "Failed to update asset" });
     }
-  });
-
-  // ─── ASSET LIFECYCLE (archive / restore / deactivate / delete-draft) ────────
-
-  app.get('/api/assets/archived', isAuthenticated, async (req: any, res) => {
-    try {
-      const assets = await storage.getSongAssetsByStatus(req.user.claims.sub, "archived");
-      res.json(assets);
-    } catch (e) { res.status(500).json({ message: "Failed to fetch archived assets" }); }
-  });
-
-  app.patch('/api/assets/:id/archive', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
-      const updated = await storage.archiveSongAsset(req.params.id, userId);
-      res.json(updated);
-    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to archive" }); }
-  });
-
-  app.patch('/api/assets/:id/restore', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
-      const updated = await storage.restoreSongAsset(req.params.id, userId);
-      res.json(updated);
-    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to restore" }); }
-  });
-
-  app.patch('/api/assets/:id/deactivate', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
-      const updated = await storage.deactivateSongAsset(req.params.id, userId);
-      res.json(updated);
-    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to deactivate" }); }
-  });
-
-  app.delete('/api/assets/:id/draft', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
-      await storage.deleteDraftSongAsset(req.params.id, userId);
-      res.json({ success: true });
-    } catch (e: any) { res.status(400).json({ message: e.message || "Cannot delete asset" }); }
-  });
-
-  app.get('/api/assets/:id/activity', isAuthenticated, async (req: any, res) => {
-    try {
-      const logs = await storage.getAssetActivityLog(req.params.id);
-      res.json(logs);
-    } catch (e) { res.status(500).json({ message: "Failed to fetch activity" }); }
   });
 
   // ─── OWNERSHIP LEDGER ─────────────────────────────────────────────────────
@@ -1664,6 +1573,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ─── CONFIRMATIONS ────────────────────────────────────────────────────────
+
+  // Generate confirmation links for a contract
+  app.post('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const collaborators = await storage.getContractCollaborators(req.params.id);
+      const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
+
+      const newConfirmations = [];
+      const crypto = await import("crypto");
+
+      for (const collaborator of collaborators) {
+        // Check if confirmation already exists for this collaborator
+        const existing = existingConfirmations.find(c => c.collaboratorId === collaborator.id);
+        if (existing) {
+          newConfirmations.push(existing);
+          continue;
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const confirmation = await storage.createConfirmation({
+          contractId: req.params.id,
+          collaboratorId: collaborator.id,
+          token,
+          status: 'pending',
+          expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 hours
+        });
+        newConfirmations.push(confirmation);
+      }
+
+      res.json(newConfirmations);
+    } catch (error) {
+      console.error("Error generating confirmations:", error);
+      res.status(500).json({ message: "Failed to generate confirmations" });
+    }
+  });
+
+  // Get confirmations for a contract (operator view)
+  app.get('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+
+      const confirmations = await storage.getConfirmationsByContract(req.params.id);
+      res.json(confirmations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch confirmations" });
+    }
+  });
+
+  // Public: Get confirmation details by token
+  app.get('/api/confirmations/:token', async (req, res) => {
+    try {
+      const confirmation = await storage.getConfirmationByToken(req.params.token);
+      if (!confirmation) return res.status(404).json({ message: "Invalid or expired link" });
+
+      if (confirmation.expiresAt && confirmation.expiresAt < new Date()) {
+        return res.status(410).json({ message: "This link has expired" });
+      }
+
+      const [contract, collaborator, allCollaborators] = await Promise.all([
+        storage.getContract(confirmation.contractId),
+        storage.getContractCollaborators(confirmation.contractId).then(cols => cols.find(c => c.id === confirmation.collaboratorId)),
+        storage.getContractCollaborators(confirmation.contractId)
+      ]);
+
+      if (!contract || !collaborator) return res.status(404).json({ message: "Contract details not found" });
+
+      res.json({
+        confirmation,
+        contract: {
+          title: contract.title,
+          type: contract.type,
+          data: contract.data,
+        },
+        collaborator,
+        allCollaborators
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch confirmation details" });
+    }
+  });
+
+  // Public: Submit confirmation
+  app.post('/api/confirmations/:token/submit', async (req, res) => {
+    try {
+      const confirmation = await storage.getConfirmationByToken(req.params.token);
+      if (!confirmation) return res.status(404).json({ message: "Invalid link" });
+
+      const { status, notes, name, email } = req.body; // status: 'confirmed' or 'requested_change'
+
+      const updates: any = {
+        status,
+        notes,
+        confirmedAt: new Date(),
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      };
+
+      const updatedConfirmation = await storage.updateConfirmation(confirmation.id, updates);
+
+      // If confirmed, also update the collaborator status in the main table
+      if (status === 'confirmed') {
+        await storage.updateCollaboratorStatus(confirmation.collaboratorId, 'signed');
+
+        // Check if all collaborators have confirmed
+        const allConfirmations = await storage.getConfirmationsByContract(confirmation.contractId);
+        const allConfirmed = allConfirmations.every(c => c.status === 'confirmed');
+
+        if (allConfirmed) {
+          await storage.updateContract(confirmation.contractId, { status: 'signed' });
+        }
+      }
+
+      res.json(updatedConfirmation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to submit confirmation" });
+    }
+  });
+
   // ─── USER EARNINGS ────────────────────────────────────────────────────────
 
   app.get('/api/earnings', isAuthenticated, async (req: any, res) => {
@@ -1678,156 +1714,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch earnings" });
     }
   });
+  // routes/assets.ts
+  app.put("/api/assets/:id/ownership", async (req, res) => {
+    const { id } = req.params;
+    const { splits } = req.body;
 
-  // ─── SERVICE BUSINESS — CLIENTS ──────────────────────────────────────────
+    const total = splits.reduce((sum, s) => sum + s.percent, 0);
+    if (total !== 100) {
+      return res.status(400).json({ error: "Must equal 100%" });
+    }
 
-  app.get('/api/clients', isAuthenticated, async (req: any, res) => {
-    try {
-      const list = await storage.getClients(req.user.claims.sub);
-      res.json(list);
-    } catch { res.status(500).json({ message: "Failed to fetch clients" }); }
-  });
+    const newVersion = {
+      assetId: id,
+      splits,
+      createdAt: new Date(),
+    };
 
-  app.post('/api/clients', isAuthenticated, async (req: any, res) => {
-    try {
-      const client = await storage.createClient({ ...req.body, operatorId: req.user.claims.sub });
-      res.status(201).json(client);
-    } catch { res.status(500).json({ message: "Failed to create client" }); }
-  });
+    await db.ownershipVersions.insert(newVersion);
 
-  app.get('/api/clients/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const client = await storage.getClient(req.params.id);
-      if (!client) return res.status(404).json({ message: "Client not found" });
-      res.json(client);
-    } catch { res.status(500).json({ message: "Failed to fetch client" }); }
-  });
-
-  app.patch('/api/clients/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const client = await storage.updateClient(req.params.id, req.body);
-      res.json(client);
-    } catch { res.status(500).json({ message: "Failed to update client" }); }
-  });
-
-  app.delete('/api/clients/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      await storage.deleteClient(req.params.id);
-      res.json({ success: true });
-    } catch { res.status(500).json({ message: "Failed to delete client" }); }
-  });
-
-  app.get('/api/clients/:id/projects', isAuthenticated, async (req: any, res) => {
-    try {
-      const projects = await storage.getServiceProjectsByClient(req.params.id);
-      res.json(projects);
-    } catch { res.status(500).json({ message: "Failed to fetch projects" }); }
-  });
-
-  // ─── SERVICE BUSINESS — PROJECTS ─────────────────────────────────────────
-
-  app.get('/api/projects', isAuthenticated, async (req: any, res) => {
-    try {
-      const projects = await storage.getServiceProjects(req.user.claims.sub);
-      res.json(projects);
-    } catch { res.status(500).json({ message: "Failed to fetch projects" }); }
-  });
-
-  app.post('/api/projects', isAuthenticated, async (req: any, res) => {
-    try {
-      const project = await storage.createServiceProject({ ...req.body, operatorId: req.user.claims.sub });
-      res.status(201).json(project);
-    } catch { res.status(500).json({ message: "Failed to create project" }); }
-  });
-
-  app.get('/api/projects/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const project = await storage.getServiceProject(req.params.id);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      res.json(project);
-    } catch { res.status(500).json({ message: "Failed to fetch project" }); }
-  });
-
-  app.patch('/api/projects/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const project = await storage.updateServiceProject(req.params.id, req.body);
-      res.json(project);
-    } catch { res.status(500).json({ message: "Failed to update project" }); }
-  });
-
-  app.delete('/api/projects/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      await storage.deleteServiceProject(req.params.id);
-      res.json({ success: true });
-    } catch { res.status(500).json({ message: "Failed to delete project" }); }
-  });
-
-  // ─── SERVICE BUSINESS — CONTRIBUTORS ─────────────────────────────────────
-
-  app.get('/api/projects/:id/contributors', isAuthenticated, async (req: any, res) => {
-    try {
-      const contributors = await storage.getProjectContributors(req.params.id);
-      res.json(contributors);
-    } catch { res.status(500).json({ message: "Failed to fetch contributors" }); }
-  });
-
-  app.post('/api/projects/:id/contributors', isAuthenticated, async (req: any, res) => {
-    try {
-      const contributor = await storage.addProjectContributor({ ...req.body, projectId: req.params.id });
-      res.status(201).json(contributor);
-    } catch { res.status(500).json({ message: "Failed to add contributor" }); }
-  });
-
-  app.patch('/api/projects/:projectId/contributors/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const contributor = await storage.updateProjectContributor(req.params.id, req.body);
-      res.json(contributor);
-    } catch { res.status(500).json({ message: "Failed to update contributor" }); }
-  });
-
-  app.delete('/api/projects/:projectId/contributors/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      await storage.removeProjectContributor(req.params.id);
-      res.json({ success: true });
-    } catch { res.status(500).json({ message: "Failed to remove contributor" }); }
-  });
-
-  app.post('/api/projects/:id/send-confirmations', isAuthenticated, async (req: any, res) => {
-    try {
-      const contributors = await storage.generateConfirmationTokens(req.params.id);
-      const host = req.headers.origin || `https://${req.headers.host}`;
-      const links = contributors.map(c => ({
-        id: c.id,
-        name: c.name,
-        email: c.email,
-        token: c.confirmationToken,
-        confirmUrl: `${host}/confirm/${c.confirmationToken}`,
-      }));
-      res.json({ contributors: links });
-    } catch { res.status(500).json({ message: "Failed to generate confirmation links" }); }
-  });
-
-  // ─── PUBLIC — CONFIRMATION (no auth) ────────────────────────────────────
-
-  app.get('/api/confirm/:token', async (req, res) => {
-    try {
-      const contributor = await storage.getContributorByToken(req.params.token);
-      if (!contributor) return res.status(404).json({ message: "Invalid confirmation link" });
-      const project = await storage.getServiceProject(contributor.projectId);
-      const allContributors = await storage.getProjectContributors(contributor.projectId);
-      res.json({ contributor, project, allContributors });
-    } catch { res.status(500).json({ message: "Failed to load confirmation" }); }
-  });
-
-  app.post('/api/confirm/:token', async (req, res) => {
-    try {
-      const contributor = await storage.getContributorByToken(req.params.token);
-      if (!contributor) return res.status(404).json({ message: "Invalid or expired link" });
-      if (contributor.confirmedAt) return res.status(400).json({ message: "Already confirmed" });
-      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '';
-      const updated = await storage.confirmContributor(req.params.token, ip);
-      res.json({ success: true, contributor: updated });
-    } catch { res.status(500).json({ message: "Failed to confirm" }); }
+    res.json({ success: true });
   });
 
   const httpServer = createServer(app);

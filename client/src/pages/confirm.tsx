@@ -1,252 +1,238 @@
-import { useEffect, useState } from "react";
-import { useParams } from "wouter";
+import { useState, useEffect } from "react";
+import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import Logo from "@/components/Logo";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import {
-  CheckCircle2, Music2, Clock, AlertCircle, Users, FileText,
-} from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
+import { Loader2, CheckCircle2, AlertCircle, Music, Users, Percent, ShieldCheck } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 
-interface ConfirmData {
-  contributor: {
-    id: string;
-    name: string;
-    email: string | null;
-    role: string;
-    pro: string | null;
-    ipi: string | null;
-    ownershipPercentage: string;
-    confirmedAt: string | null;
-  };
-  project: {
-    id: string;
-    title: string;
-    songTitle: string;
-    status: string;
-  };
-  allContributors: {
-    id: string;
-    name: string;
-    role: string;
-    ownershipPercentage: string;
-    confirmedAt: string | null;
-  }[];
-}
-
-export default function Confirm() {
-  const { token } = useParams<{ token: string }>();
+export default function ConfirmPage() {
+  const [, params] = useRoute("/confirm/:token");
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const [agreed, setAgreed] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [requestChange, setRequestChange] = useState(false);
+  const [notes, setNotes] = useState("");
 
-  const { data, isLoading, isError } = useQuery<ConfirmData>({
-    queryKey: ["/api/confirm", token],
-    queryFn: () => fetch(`/api/confirm/${token}`).then(r => {
-      if (!r.ok) throw new Error("Invalid link");
-      return r.json();
-    }),
-    enabled: !!token,
-    retry: false,
+  const { data, isLoading, error } = useQuery({
+    queryKey: [`/api/confirmations/${params?.token}`],
+    enabled: !!params?.token,
   });
 
-  const confirmMutation = useMutation({
-    mutationFn: () => fetch(`/api/confirm/${token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).then(r => r.json()),
-    onSuccess: () => setConfirmed(true),
+  const mutation = useMutation({
+    mutationFn: async (status: "confirmed" | "requested_change") => {
+      const res = await apiRequest("POST", `/api/confirmations/${params?.token}/submit`, {
+        status,
+        notes: status === "requested_change" ? notes : "",
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Your response has been recorded.",
+      });
+      queryClient.invalidateQueries({ queryKey: [`/api/confirmations/${params?.token}`] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to submit response.",
+        variant: "destructive",
+      });
+    },
   });
 
-  const alreadyConfirmed = !!data?.contributor.confirmedAt;
-  const total = data?.allContributors.reduce((s, c) => s + parseFloat(c.ownershipPercentage), 0) ?? 0;
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
-  if (isLoading) return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
-    </div>
-  );
+  if (error || !data) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
+        <AlertCircle className="h-12 w-12 text-destructive mb-4" />
+        <h1 className="text-2xl font-bold mb-2">Invalid or Expired Link</h1>
+        <p className="text-muted-foreground mb-6">This confirmation link is no longer valid or has expired.</p>
+        <Button onClick={() => setLocation("/")}>Go to Homepage</Button>
+      </div>
+    );
+  }
 
-  if (isError || !data) return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="max-w-md w-full">
-        <CardContent className="py-12 text-center">
-          <AlertCircle className="h-12 w-12 mx-auto mb-4 text-red-400" />
-          <h2 className="text-xl font-bold mb-2">Link Not Found</h2>
-          <p className="text-muted-foreground text-sm">
-            This confirmation link is invalid or has expired. Please contact the person who sent it.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
-  );
+  const { confirmation, contract, collaborator, allCollaborators } = data;
 
-  const { contributor, project, allContributors } = data;
+  if (confirmation.status !== "pending") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
+        <CheckCircle2 className="h-16 w-16 text-green-500 mb-4" />
+        <h1 className="text-2xl font-bold mb-2">Response Recorded</h1>
+        <p className="text-muted-foreground mb-6">
+          Thank you! Your {confirmation.status === "confirmed" ? "confirmation" : "change request"} has been sent to the project owner.
+        </p>
+        <Card className="w-full max-w-md text-left">
+          <CardHeader>
+            <CardTitle className="text-lg">{contract.title}</CardTitle>
+            <CardDescription>Split Sheet Agreement</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Your Role:</span>
+              <span className="font-medium">{collaborator.role}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Your Share:</span>
+              <span className="font-medium">{collaborator.ownershipPercentage}%</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Status:</span>
+              <Badge variant={confirmation.status === "confirmed" ? "default" : "outline"}>
+                {confirmation.status === "confirmed" ? "Confirmed" : "Change Requested"}
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="bg-card border-b border-border px-6 py-4">
-        <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <Logo />
-          <div>
-            <span className="font-bold text-foreground">SplitSheet</span>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Split Sheet Confirmation</p>
+    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 text-primary mb-2">
+            <ShieldCheck className="h-6 w-6" />
           </div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Review Split Sheet</h1>
+          <p className="text-slate-500">Please review the ownership details for this track.</p>
         </div>
-      </header>
 
-      <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
-
-        {/* Status banner */}
-        {(confirmed || alreadyConfirmed) ? (
-          <Card className="border-green-200 bg-green-50">
-            <CardContent className="py-8 text-center">
-              <CheckCircle2 className="h-14 w-14 mx-auto mb-4 text-green-600" />
-              <h2 className="text-2xl font-bold text-green-900">You're confirmed!</h2>
-              <p className="text-green-700 mt-2">
-                Your agreement to this split sheet has been recorded.
-                {alreadyConfirmed && contributor.confirmedAt && (
-                  <span className="block text-sm mt-1 text-green-600">
-                    Confirmed on {new Date(contributor.confirmedAt).toLocaleDateString()}
-                  </span>
-                )}
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card className="border-blue-200 bg-blue-50">
-            <CardContent className="py-5">
-              <div className="flex items-start gap-3">
-                <FileText className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold text-blue-900">You've been asked to confirm a split sheet</p>
-                  <p className="text-sm text-blue-700 mt-0.5">
-                    Review the ownership splits below and confirm your agreement at the bottom of this page.
-                    No account required.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Project details */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Music2 className="h-4 w-4" /> {project.songTitle}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">{project.title}</p>
-          </CardContent>
-        </Card>
-
-        {/* Your stake */}
-        <Card className="border-primary/20 bg-primary/5">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Your Stake — {contributor.name}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Role</p>
-                <p className="font-semibold capitalize">{contributor.role}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Ownership</p>
-                <p className="font-bold text-2xl text-primary">{parseFloat(contributor.ownershipPercentage).toFixed(2)}%</p>
-              </div>
-              {contributor.pro && (
-                <div>
-                  <p className="text-xs text-muted-foreground">PRO</p>
-                  <p className="font-semibold">{contributor.pro}</p>
-                </div>
-              )}
-              {contributor.ipi && (
-                <div>
-                  <p className="text-xs text-muted-foreground">IPI/CAE</p>
-                  <p className="font-mono text-sm">{contributor.ipi}</p>
-                </div>
-              )}
+        <Card className="border-none shadow-sm">
+          <CardHeader className="pb-4">
+            <div className="flex items-center gap-2 text-primary mb-1">
+              <Music className="h-4 w-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Project Details</span>
             </div>
-            <Progress value={parseFloat(contributor.ownershipPercentage)} className="h-3" />
-          </CardContent>
-        </Card>
-
-        {/* All contributors */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4" /> All Contributors
-            </CardTitle>
+            <CardTitle className="text-2xl">{contract.title}</CardTitle>
+            <CardDescription>Created by {contract.data?.ownerName || "Project Owner"}</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {allContributors.map(c => (
-              <div key={c.id} className="space-y-1">
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className={`font-medium ${c.id === contributor.id ? "text-primary" : ""}`}>{c.name}</span>
-                    <Badge variant="outline" className="text-[10px] capitalize">{c.role}</Badge>
-                    {c.confirmedAt ? (
-                      <Badge className="bg-green-100 text-green-700 text-[10px]">
-                        <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" /> Confirmed
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-yellow-100 text-yellow-700 text-[10px]">
-                        <Clock className="h-2.5 w-2.5 mr-0.5" /> Pending
-                      </Badge>
-                    )}
+          <CardContent className="space-y-6">
+            <div className="bg-slate-50 rounded-lg p-4 border border-slate-100">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-slate-400" />
+                  <h3 className="font-semibold text-slate-700">Contributors</h3>
+                </div>
+                <Badge variant="secondary">{allCollaborators.length} Total</Badge>
+              </div>
+              <div className="space-y-3">
+                {allCollaborators.map((col: any) => (
+                  <div key={col.id} className={`flex items-center justify-between p-2 rounded-md ${col.id === collaborator.id ? 'bg-primary/5 border border-primary/10' : ''}`}>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-slate-900">
+                        {col.name} {col.id === collaborator.id && <span className="text-xs text-primary font-normal ml-1">(You)</span>}
+                      </span>
+                      <span className="text-xs text-slate-500">{col.role}</span>
+                    </div>
+                    <div className="flex items-center gap-1 font-mono font-medium text-slate-700">
+                      <Percent className="h-3 w-3 text-slate-400" />
+                      {col.ownershipPercentage}
+                    </div>
                   </div>
-                  <span className="font-bold">{parseFloat(c.ownershipPercentage).toFixed(2)}%</span>
-                </div>
-                <Progress value={parseFloat(c.ownershipPercentage)} className="h-1.5" />
+                ))}
               </div>
-            ))}
-            <Separator className="my-2" />
-            <div className="flex justify-between text-sm font-semibold">
-              <span>Total</span>
-              <span className={Math.abs(total - 100) < 0.01 ? "text-green-700" : "text-red-600"}>
-                {total.toFixed(2)}%
-              </span>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Confirmation action */}
-        {!confirmed && !alreadyConfirmed && (
-          <Card>
-            <CardContent className="py-6 space-y-5">
-              <div className="flex items-start gap-3">
-                <Checkbox id="agree" checked={agreed} onCheckedChange={v => setAgreed(!!v)} data-testid="checkbox-agree" />
-                <Label htmlFor="agree" className="text-sm leading-relaxed cursor-pointer">
-                  I, <strong>{contributor.name}</strong>, confirm that I agree to the ownership split shown above for the song
-                  "<strong>{project.songTitle}</strong>". I understand this is a binding acknowledgment of the described ownership percentages.
-                </Label>
+            <Separator />
+
+            {!requestChange ? (
+              <div className="space-y-4">
+                <div className="flex items-start space-x-3 pt-2">
+                  <Checkbox 
+                    id="agree" 
+                    checked={agreed} 
+                    onCheckedChange={(checked) => setAgreed(checked as boolean)}
+                    className="mt-1"
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <label
+                      htmlFor="agree"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                    >
+                      I confirm that the ownership percentages listed above are correct.
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      By checking this, you agree to the split terms for this project.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <Button 
+                    className="flex-1 h-12 text-base" 
+                    disabled={!agreed || mutation.isPending}
+                    onClick={() => mutation.mutate("confirmed")}
+                  >
+                    {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Confirm Agreement
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="flex-1 h-12 text-base"
+                    onClick={() => setRequestChange(true)}
+                    disabled={mutation.isPending}
+                  >
+                    Request Change
+                  </Button>
+                </div>
               </div>
-              <Button
-                className="w-full"
-                size="lg"
-                disabled={!agreed || confirmMutation.isPending}
-                onClick={() => confirmMutation.mutate()}
-                data-testid="button-confirm-agreement"
-              >
-                {confirmMutation.isPending ? "Confirming…" : "I Confirm This Split Sheet"}
-              </Button>
-              <p className="text-[11px] text-muted-foreground text-center">
-                Your confirmation is time-stamped and stored securely. No account or login required.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
+            ) : (
+              <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">What needs to be changed?</label>
+                  <Textarea 
+                    placeholder="Describe the corrections needed..." 
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="min-h-[100px]"
+                  />
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button 
+                    className="flex-1" 
+                    variant="destructive"
+                    disabled={!notes.trim() || mutation.isPending}
+                    onClick={() => mutation.mutate("requested_change")}
+                  >
+                    {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Submit Request
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    className="flex-1"
+                    onClick={() => setRequestChange(false)}
+                    disabled={mutation.isPending}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+          <CardFooter className="bg-slate-50/50 border-t border-slate-100 py-4 flex justify-center">
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold">
+              Powered by SplitSheet &bull; Secure Confirmation
+            </p>
+          </CardFooter>
+        </Card>
       </div>
-
-      <footer className="text-center py-8 text-xs text-muted-foreground">
-        Powered by <strong>SplitSheet</strong> · SoundLedger Technologies
-      </footer>
     </div>
   );
 }
