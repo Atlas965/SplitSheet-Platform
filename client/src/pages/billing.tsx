@@ -50,18 +50,18 @@ interface Contract {
 }
 
 // ── Plan config ───────────────────────────────────────────────────────────────
-type PlanKey = "free" | "pro" | "label";
+type PlanKey = "free" | "session" | "pro";
 
-const PLANS: Record<PlanKey, { name: string; price: string; contractLimit: number | null }> = {
-  free:  { name: "Free",  price: "$0",  contractLimit: 3   },
-  pro:   { name: "Pro",   price: "$19", contractLimit: null },
-  label: { name: "Label", price: "$49", contractLimit: null },
+const PLANS: Record<PlanKey, { name: string; price: string; contractLimit: number | null; billing: string }> = {
+  free:    { name: "Starter Split",      price: "$0",      contractLimit: 1,    billing: "Free · no card needed" },
+  session: { name: "Split Session",      price: "$25 CAD", contractLimit: 5,    billing: "Per completed session" },
+  pro:     { name: "Multi-Creator Pro",  price: "$50–75",  contractLimit: null, billing: "Per project · quote-based" },
 };
 
 const PLAN_FEATURES: Record<PlanKey, string[]> = {
-  free:  ["3 agreements / month", "Split sheet template", "PDF export", "e-Signature", "Email support"],
-  pro:   ["Unlimited agreements", "All contract templates", "Collaborator tracking", "Payment dashboard", "Activity log", "Receipt vault", "Priority support"],
-  label: ["Everything in Pro", "Team management", "Multi-artist roster", "Custom templates", "SMS notifications", "Dedicated support"],
+  free:    ["1 collaboration project", "Up to 2 contributors", "Basic split allocation", "Contributor confirmation links", "PDF export"],
+  session: ["Up to 5 contributors", "Split percentage setup", "Contributor confirmation tracking", "Agreement workflow", "PDF export", "Audit log storage", "Email confirmations"],
+  pro:     ["Up to 10 contributors", "Multiple revision rounds", "Priority support", "Contributor reminders", "Enhanced audit history", "Organised project dashboard", "Exportable records"],
 };
 
 // ── Upgrade Dialog ────────────────────────────────────────────────────────────
@@ -135,19 +135,19 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
           <p className="text-xs text-muted-foreground mt-0.5">Choose the plan that fits your music career.</p>
         </DialogHeader>
         <div className="p-6 space-y-4">
-          {(["pro", "label"] as PlanKey[]).map((plan) => {
+          {(["session", "pro"] as PlanKey[]).map((plan) => {
             const cfg = PLANS[plan];
             const isCurrent    = plan === currentPlan;
             const isLoading    = loadingPlan === plan;
             const anyLoading   = loadingPlan !== null;
 
             return (
-              <div key={plan} className={`rounded-xl border p-5 ${plan === "pro" ? "border-accent/60 bg-accent/5" : "border-border bg-card"}`}>
+              <div key={plan} className={`rounded-xl border p-5 ${plan === "session" ? "border-accent/60 bg-accent/5" : "border-border bg-card"}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-lg text-foreground">{cfg.name}</span>
-                      {plan === "pro" && (
+                      {plan === "session" && (
                         <span className="text-xs bg-accent text-accent-foreground rounded-full px-2 py-0.5 font-semibold">Most Popular</span>
                       )}
                       {isCurrent && (
@@ -155,8 +155,9 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
                       )}
                     </div>
                     <p className="text-2xl font-bold text-foreground mt-1">
-                      {cfg.price}<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                      {cfg.price}
                     </p>
+                    <p className="text-xs text-muted-foreground">{cfg.billing}</p>
                   </div>
                   {!isCurrent && (
                     <Button
@@ -167,7 +168,9 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
                     >
                       {isLoading
                         ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Starting…</>
-                        : <><span>Upgrade</span><ArrowRight className="h-3 w-3 ml-1" /></>}
+                        : plan === "pro"
+                          ? <><span>Get Quote</span><ArrowRight className="h-3 w-3 ml-1" /></>
+                          : <><span>Start Session</span><ArrowRight className="h-3 w-3 ml-1" /></>}
                     </Button>
                   )}
                 </div>
@@ -184,7 +187,7 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
           <p className="text-xs text-muted-foreground text-center">
             Need more?{" "}
             <a href="mailto:enterprise@splitsheet.ca" className="text-accent hover:underline">
-              Contact us for Enterprise pricing →
+              For labels and publishers, contact us →
             </a>
           </p>
         </div>
@@ -377,7 +380,7 @@ function downloadInvoiceCSV(contracts: Contract[], planName: string, planPrice: 
   // Append subscription row if paid
   if (planPrice !== "$0") {
     const today = new Date().toLocaleDateString("en-CA");
-    rows.unshift(`${today},"${planName} Plan Subscription",active,${planPrice}/mo,subscription`);
+    rows.unshift(`${today},"${planName} Plan Subscription",active,${planPrice} — session,subscription`);
   }
 
   const csv = header + rows.join("\n");
@@ -442,9 +445,14 @@ export default function Billing() {
     );
   }
 
-  // Derive plan from live subscription data → user record → default free
+  // Map legacy tier names to new service model keys
+  const tierMap: Record<string, PlanKey> = {
+    free: "free", starter: "free",
+    pro: "session", session: "session",
+    label: "pro", studio: "pro",
+  };
   const rawTier = subscriptionData?.tier ?? (user as any)?.subscriptionTier ?? "free";
-  const planKey: PlanKey = (["free", "pro", "label"].includes(rawTier) ? rawTier : "free") as PlanKey;
+  const planKey: PlanKey = tierMap[rawTier] ?? "free";
   const plan = PLANS[planKey];
   const isActive = subscriptionData?.hasSubscription && subscriptionData?.status === "active";
 
@@ -593,9 +601,9 @@ export default function Billing() {
                 <>
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="text-3xl font-bold text-accent">{plan.name} Plan</p>
+                      <p className="text-3xl font-bold text-accent">{plan.name}</p>
                       <p className="text-muted-foreground mt-1 text-sm">
-                        {plan.price}/month{planKey !== "free" ? " · Billed monthly" : " · No credit card required"}
+                        {plan.price} · {plan.billing}
                       </p>
                     </div>
                     <Button
@@ -603,7 +611,7 @@ export default function Billing() {
                       onClick={() => setShowUpgrade(true)}
                       data-testid="button-change-plan"
                     >
-                      {planKey === "free" ? "Upgrade Plan" : "Change Plan"}
+                      {planKey === "free" ? "Upgrade Session" : "Change Plan"}
                     </Button>
                   </div>
 
@@ -707,7 +715,7 @@ export default function Billing() {
                     You're on the Free plan — no charges have been made.
                   </p>
                   <Button className="mt-4" size="sm" onClick={() => setShowUpgrade(true)}>
-                    Upgrade to Pro <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+                    Start a Split Session — $25 CAD <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
                   </Button>
                 </div>
               ) : subscriptionData?.currentPeriodStart ? (
@@ -722,7 +730,7 @@ export default function Billing() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold text-foreground text-sm">{plan.price}/mo</p>
+                      <p className="font-semibold text-foreground text-sm">{plan.price}</p>
                       <button
                         className="text-accent text-xs hover:underline mt-0.5 flex items-center gap-1 ml-auto"
                         onClick={() => toast({ title: "Invoice", description: "Manage invoices in your Stripe customer portal." })}
@@ -840,10 +848,10 @@ export default function Billing() {
               {planKey === "free" && (
                 <div className="mt-5 pt-4 border-t border-border">
                   <p className="text-xs text-muted-foreground mb-3">
-                    Free plan: 3 contracts/month max. Upgrade for unlimited.
+                    Free plan: 1 project, 2 contributors max. Start a Split Session for $25 CAD to unlock more.
                   </p>
                   <Button size="sm" className="w-full" onClick={() => setShowUpgrade(true)}>
-                    Upgrade to Pro — $19/mo <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+                    Start a Split Session — $25 CAD <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
                   </Button>
                 </div>
               )}

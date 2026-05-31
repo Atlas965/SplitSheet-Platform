@@ -1,244 +1,211 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import OperatorLayout from "@/components/OperatorLayout";
+import Logo from "@/components/Logo";
+import { Music2, Search, Plus, CheckCircle2, Clock, FileEdit } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
-  FolderOpen, Plus, Music2, Clock, CheckCircle2, Archive,
-  ChevronRight, Search, AlertCircle,
-} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import Footer from "@/components/Footer";
 
-interface Project {
+interface Contract {
   id: string;
   title: string;
-  songTitle: string;
-  clientId: string | null;
+  type: string;
   status: string;
-  notes: string | null;
+  data?: any;
   createdAt: string;
   updatedAt: string;
 }
 
-interface Client {
-  id: string;
-  name: string;
-  type: string;
-}
-
-const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
-  draft:                { label: "Draft",              color: "bg-gray-100 text-gray-700",   icon: AlertCircle },
-  pending_confirmation: { label: "Pending Confirmation", color: "bg-yellow-100 text-yellow-700", icon: Clock },
-  confirmed:            { label: "Confirmed",          color: "bg-green-100 text-green-700", icon: CheckCircle2 },
-  archived:             { label: "Archived",           color: "bg-slate-100 text-slate-600", icon: Archive },
+const STATUS_CONFIG: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
+  signed:  { label: "Signed",   className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
+  pending: { label: "Pending",  className: "bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800", icon: <Clock className="h-3 w-3" /> },
+  draft:   { label: "Draft",    className: "bg-muted text-muted-foreground border-border", icon: <FileEdit className="h-3 w-3" /> },
+  active:  { label: "Active",   className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
 };
 
-const STATUSES = Object.keys(STATUS_CONFIG);
+const TYPE_LABELS: Record<string, string> = {
+  "split-sheet":  "Split Sheet",
+  "performance":  "Performance",
+  "producer":     "Producer",
+  "management":   "Management",
+};
 
 export default function Projects() {
-  const { toast } = useToast();
-  const { isAuthenticated, isLoading } = useAuth();
-  const [, navigate] = useLocation();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ title: "", songTitle: "", clientId: "", notes: "" });
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
   }, [isAuthenticated, isLoading]);
 
-  const { data: projects = [], isLoading: projectsLoading } = useQuery<Project[]>({
-    queryKey: ["/api/projects"],
+  const { data: contracts = [], isLoading: contractsLoading } = useQuery<Contract[]>({
+    queryKey: ["/api/contracts"],
     enabled: isAuthenticated,
   });
 
-  const { data: clients = [] } = useQuery<Client[]>({
-    queryKey: ["/api/clients"],
-    enabled: isAuthenticated,
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data: typeof form) => apiRequest("POST", "/api/projects", { ...data, clientId: data.clientId || null }),
-    onSuccess: (project: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      setShowAdd(false);
-      setForm({ title: "", songTitle: "", clientId: "", notes: "" });
-      navigate(`/projects/${project.id}`);
-      toast({ title: "Project Created", description: "Opening split sheet editor…" });
-    },
-    onError: () => toast({ title: "Error", description: "Failed to create project.", variant: "destructive" }),
-  });
-
-  const filtered = projects.filter(p => {
-    const matchSearch = p.title.toLowerCase().includes(search.toLowerCase()) ||
-      p.songTitle.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "all" || p.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
-
-  // Group by status for pipeline view
-  const counts = STATUSES.reduce((acc, s) => ({ ...acc, [s]: projects.filter(p => p.status === s).length }), {} as Record<string, number>);
-
-  const clientMap = clients.reduce((acc, c) => ({ ...acc, [c.id]: c }), {} as Record<string, Client>);
-
-  if (isLoading) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
-    </div>
+  const filtered = contracts.filter((c) =>
+    c.title.toLowerCase().includes(search.toLowerCase()) ||
+    c.type.toLowerCase().includes(search.toLowerCase())
   );
 
+  if (isLoading || !isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  const userInitial = (user as any)?.firstName?.[0] ?? (user as any)?.email?.[0]?.toUpperCase() ?? "U";
+
+  // Summary stats
+  const total   = contracts.length;
+  const signed  = contracts.filter((c) => c.status === "signed" || c.status === "active").length;
+  const pending = contracts.filter((c) => c.status === "pending").length;
+  const draft   = contracts.filter((c) => c.status === "draft").length;
+
   return (
-    <OperatorLayout>
-      <div className="p-6 max-w-5xl mx-auto">
+    <div className="min-h-screen bg-background">
+      <nav className="bg-card border-b border-border sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+          <div className="flex items-center gap-3">
+            <Link href="/"><Logo /></Link>
+            <Link href="/" className="text-xl font-bold text-primary">SplitSheet</Link>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Dashboard</Link>
+            <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm">{userInitial}</div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <FolderOpen className="h-6 w-6" /> Projects
+            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+              <Music2 className="h-6 w-6" /> Projects
             </h1>
-            <p className="text-muted-foreground text-sm mt-0.5">
-              Split sheet jobs — from intake through confirmation
+            <p className="text-muted-foreground text-sm mt-1">
+              All your songs, tracks, and music projects
             </p>
           </div>
-          <Dialog open={showAdd} onOpenChange={setShowAdd}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-new-project">
-                <Plus className="h-4 w-4 mr-2" /> New Project
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>New Split Sheet Project</DialogTitle></DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <Label>Project Title *</Label>
-                  <Input placeholder="e.g. Midnight Drive Split Sheet" value={form.title}
-                    onChange={e => setForm({ ...form, title: e.target.value })} data-testid="input-project-title" />
-                </div>
-                <div>
-                  <Label>Song Title *</Label>
-                  <Input placeholder="e.g. Midnight Drive" value={form.songTitle}
-                    onChange={e => setForm({ ...form, songTitle: e.target.value })} data-testid="input-project-song" />
-                </div>
-                <div>
-                  <Label>Client (optional)</Label>
-                  <Select value={form.clientId} onValueChange={v => setForm({ ...form, clientId: v })}>
-                    <SelectTrigger data-testid="select-project-client"><SelectValue placeholder="Select a client…" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">None</SelectItem>
-                      {clients.map(c => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Notes</Label>
-                  <Textarea placeholder="Session details, studio, date…" value={form.notes}
-                    onChange={e => setForm({ ...form, notes: e.target.value })} data-testid="input-project-notes" />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button>
-                  <Button onClick={() => createMutation.mutate(form)}
-                    disabled={!form.title || !form.songTitle || createMutation.isPending}
-                    data-testid="button-confirm-project">
-                    {createMutation.isPending ? "Creating…" : "Create & Open"}
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+          <Button asChild>
+            <Link href="/templates">
+              <Plus className="h-4 w-4 mr-1.5" /> New Project
+            </Link>
+          </Button>
         </div>
 
-        {/* Pipeline stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-          {STATUSES.map(s => {
-            const cfg = STATUS_CONFIG[s];
-            const Icon = cfg.icon;
-            return (
-              <button key={s} onClick={() => setStatusFilter(statusFilter === s ? "all" : s)}
-                className={`rounded-xl p-4 text-left transition-all border ${statusFilter === s ? "ring-2 ring-primary" : "border-transparent"} ${cfg.color}`}
-                data-testid={`filter-${s}`}>
-                <div className="flex items-center gap-2 mb-1">
-                  <Icon className="h-4 w-4" />
-                  <span className="text-2xl font-bold">{counts[s] ?? 0}</span>
-                </div>
-                <p className="text-xs font-medium">{cfg.label}</p>
-              </button>
-            );
-          })}
-        </div>
+        {/* Stats row */}
+        {total > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+            {[
+              { label: "Total",   val: total,   color: "text-foreground" },
+              { label: "Signed",  val: signed,  color: "text-green-600 dark:text-green-400" },
+              { label: "Pending", val: pending, color: "text-yellow-600 dark:text-yellow-400" },
+              { label: "Drafts",  val: draft,   color: "text-muted-foreground" },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="bg-card border border-border rounded-xl px-4 py-3 text-center">
+                <p className={`text-2xl font-bold ${color}`}>{val}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Search */}
-        <div className="relative mb-5">
+        <div className="relative mb-6 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Search by project or song title…" value={search}
-            onChange={e => setSearch(e.target.value)} data-testid="input-search-projects" />
+          <Input
+            placeholder="Search projects…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
         </div>
 
-        {/* Project list */}
-        {projectsLoading ? (
-          <div className="flex justify-center py-12">
-            <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full" />
+        {/* List */}
+        {contractsLoading ? (
+          <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
+            <div className="animate-spin w-5 h-5 border-2 border-accent border-t-transparent rounded-full" />
+            Loading projects…
           </div>
         ) : filtered.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="py-16 text-center text-muted-foreground">
-              <Music2 className="h-10 w-10 mx-auto mb-3 opacity-20" />
-              <p className="font-medium">{search || statusFilter !== "all" ? "No projects match" : "No projects yet"}</p>
-              {!search && statusFilter === "all" && (
-                <p className="text-sm mt-1">Create your first split sheet project to get started.</p>
-              )}
-            </CardContent>
-          </Card>
+          <div className="bg-card border border-border rounded-xl text-center py-16">
+            <Music2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="font-medium text-foreground">
+              {search ? "No projects match your search" : "No projects yet"}
+            </p>
+            <p className="text-sm text-muted-foreground mt-1 mb-4">
+              {search ? "Try a different keyword." : "Create your first split sheet to get started."}
+            </p>
+            {!search && (
+              <Button asChild size="sm">
+                <Link href="/contract/split-sheet">Create split sheet</Link>
+              </Button>
+            )}
+          </div>
         ) : (
-          <div className="space-y-3">
-            {filtered.map(project => {
-              const cfg = STATUS_CONFIG[project.status] ?? STATUS_CONFIG.draft;
-              const Icon = cfg.icon;
-              const client = project.clientId ? clientMap[project.clientId] : null;
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map((contract) => {
+              const statusCfg = STATUS_CONFIG[contract.status] ?? STATUS_CONFIG.draft;
+              const collaborators = contract.data?.collaborators ?? [];
+
               return (
-                <Link key={project.id} href={`/projects/${project.id}`}>
-                  <Card className="hover:shadow-md transition-all cursor-pointer group" data-testid={`card-project-${project.id}`}>
-                    <CardContent className="p-5 flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${cfg.color}`}>
-                        <Icon className="h-5 w-5" />
+                <Link key={contract.id} href={`/contracts/${contract.id}`}>
+                  <div className="bg-card border border-border rounded-xl p-5 hover:border-accent/40 hover:shadow-sm transition-all cursor-pointer group">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 group-hover:bg-accent/20 transition-colors">
+                        <Music2 className="h-4 w-4 text-accent" />
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold">{project.title}</p>
-                          <Badge className={`${cfg.color} text-xs`}>{cfg.label}</Badge>
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full border flex items-center gap-1 ${statusCfg.className}`}>
+                        {statusCfg.icon}{statusCfg.label}
+                      </span>
+                    </div>
+
+                    <h3 className="font-semibold text-foreground mb-1 line-clamp-1 group-hover:text-accent transition-colors">
+                      {contract.title}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      {TYPE_LABELS[contract.type] ?? contract.type}
+                    </p>
+
+                    {/* Split bars */}
+                    {collaborators.length > 0 && (
+                      <div className="mb-3">
+                        <div className="flex w-full h-2 rounded-full overflow-hidden mb-2">
+                          {collaborators.map((c: any, i: number) => {
+                            const colors = ["#3b6ef5","#22a06b","#f59e0b","#e05252","#9b59b6"];
+                            return (
+                              <div
+                                key={i}
+                                style={{ width: `${c.ownershipPercentage}%`, background: colors[i % colors.length] }}
+                              />
+                            );
+                          })}
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          🎵 {project.songTitle}
-                          {client && <span className="ml-2">· {client.name}</span>}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {new Date(project.updatedAt).toLocaleDateString()}
+                        <p className="text-xs text-muted-foreground">
+                          {collaborators.length} collaborator{collaborators.length !== 1 ? "s" : ""}
                         </p>
                       </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 group-hover:translate-x-0.5 transition-transform" />
-                    </CardContent>
-                  </Card>
+                    )}
+
+                    <p className="text-xs text-muted-foreground">
+                      Updated {new Date(contract.updatedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+                    </p>
+                  </div>
                 </Link>
               );
             })}
           </div>
         )}
       </div>
-    </OperatorLayout>
+      <Footer />
+    </div>
   );
 }

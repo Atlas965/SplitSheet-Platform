@@ -1,0 +1,203 @@
+Here is a clean Hybrid Pricing Model for SplitSheet that you can directly use for product, investor decks, or Replit implementation.
+
+SplitSheet Hybrid Pricing Model
+
+Overview
+
+SplitSheet uses a hybrid pricing structure combining:
+
+* Session-based payments (primary creator-facing model)
+* Subscription tiers (recurring SaaS revenue layer)
+* Enterprise licensing (scale + institutional adoption)
+
+This structure aligns with real music industry behavior where collaborations happen per project, but professional users require ongoing workflows and infrastructure.
+
+⸻
+
+🎵 1. Free Tier — Starter Access
+
+$0
+
+Designed for onboarding and viral adoption.
+
+Includes:
+
+* 1 collaboration project
+* Up to 2 contributors
+* Basic split creation tool
+* Contributor confirmation links
+* Timestamped agreement summary
+* PDF export
+
+Purpose:
+
+* Reduce friction
+* Enable first experience
+* Drive network effects
+
+⸻
+
+🎛 2. Pay-Per-Session — Core Model
+
+$25 CAD per completed session
+
+The primary revenue driver for independent creators.
+
+Includes:
+
+* Up to 5 contributors
+* Split percentage configuration
+* Contributor verification workflow
+* Agreement completion tracking
+* PDF export package
+* Audit log storage
+* Email confirmations
+
+Purpose:
+
+* Match real-world collaboration flow
+* Monetize active usage without forcing subscription
+* Keep pricing aligned with project-based music creation
+
+⸻
+
+🎚 3. Multi-Creator Project Tier
+
+$50–$75 CAD per project
+
+For advanced collaboration environments.
+
+Includes:
+
+* Up to 10 contributors
+* Multi-round revisions
+* Enhanced audit history
+* Contributor reminders system
+* Project dashboard
+* Priority processing option
+* Full exportable records
+
+Purpose:
+
+* Capture higher-value, complex projects
+* Serve producer camps, writing camps, and studio sessions
+
+⸻
+
+⚡ 4. Add-On Revenue — Express Processing
+
++$25 CAD per session
+
+Optional upgrade for urgent workflows.
+
+Includes:
+
+* Priority processing queue
+* Fast contributor notifications
+* Expedited completion handling
+
+Purpose:
+
+* Monetize urgency and time-sensitive releases
+* High-margin supplementary revenue stream
+
+⸻
+
+🎼 5. Creator Pro Subscription
+
+$15 CAD per month
+
+For active independent creators.
+
+Includes:
+
+* Unlimited sessions (replaces per-session fees for subscribers)
+* Project history storage
+* Saved contributor profiles
+* Collaboration analytics
+* Workflow automation tools
+* Discounted premium exports
+
+Purpose:
+
+* Convert high-frequency users into recurring revenue
+* Stabilize cash flow
+
+⸻
+
+🎧 6. Studio Pro Subscription
+
+$49 CAD per month
+
+For studios, teams, and small labels.
+
+Includes:
+
+* Unlimited projects and contributors
+* Team management dashboard
+* Role-based permissions
+* Advanced audit logs
+* Bulk exports
+* Organization-level analytics
+* Priority support
+
+Purpose:
+
+* Expand into professional infrastructure layer
+* Enable multi-user organizational adoption
+
+⸻
+
+🏢 7. Enterprise Licensing
+
+Custom Pricing
+
+For:
+
+* Labels
+* Publishers
+* Rights organizations
+* Distribution companies
+* PRO/CMO integrations
+
+Includes:
+
+* API access
+* White-label deployment
+* Bulk ingestion tools
+* Compliance reporting
+* Dedicated account management
+* Custom integrations
+
+Purpose:
+
+* Institutional revenue expansion
+* Platform infrastructure standardization
+
+⸻
+
+Revenue Logic Summary
+
+SplitSheet revenue is generated through three layers:
+
+1. Transaction Layer (Session Fees)
+    * Core usage monetization
+    * Aligns with project-based creation behavior
+2. Subscription Layer (Recurring SaaS)
+    * Converts heavy users into predictable monthly revenue
+3. Enterprise Layer (Infrastructure Licensing)
+    * High-value contracts with industry institutions
+
+⸻
+
+Strategic Rationale
+
+* Music collaboration is project-based → supports session pricing
+* Professional usage is recurring → supports subscriptions
+* Industry adoption is institutional → supports enterprise licensing
+
+This hybrid structure ensures:
+
+* Low friction onboarding
+* High conversion potential
+* Long-term scalable SaaS revenue

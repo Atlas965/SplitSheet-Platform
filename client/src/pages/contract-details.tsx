@@ -17,7 +17,8 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users, Share2, MessageSquare, Smartphone, Copy, Check } from "lucide-react";
+import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users, Share2, MessageSquare, Smartphone, Copy, Check, Music, DollarSign, Banknote } from "lucide-react";
+import { type Release, type RevenueEntry, type Payout } from "@shared/schema";
 
 interface Contract {
   id: string;
@@ -28,6 +29,18 @@ interface Contract {
   createdAt: string;
   updatedAt: string;
   createdBy: string;
+}
+
+interface ReleaseDisplay extends Release {
+  id: string;
+}
+
+interface RevenueEntryDisplay extends RevenueEntry {
+  id: string;
+}
+
+interface PayoutDisplay extends Payout {
+  id: string;
 }
 
 export default function ContractDetails() {
@@ -78,6 +91,21 @@ export default function ContractDetails() {
     queryKey: ["/api/contracts", id],
     enabled: !!id && isAuthenticated,
     retry: false,
+  });
+
+  const { data: releases, isLoading: releasesLoading } = useQuery<ReleaseDisplay[]>({
+    queryKey: [`/api/releases?projectId=${id}`],
+    enabled: !!id && isAuthenticated,
+  });
+
+  const { data: revenueEntries, isLoading: revenueEntriesLoading } = useQuery<RevenueEntryDisplay[]>({
+    queryKey: [`/api/revenue-entries?projectId=${id}`],
+    enabled: !!id && isAuthenticated,
+  });
+
+  const { data: payouts, isLoading: payoutsLoading } = useQuery<PayoutDisplay[]>({
+    queryKey: [`/api/payouts?projectId=${id}`],
+    enabled: !!id && isAuthenticated,
   });
 
   const updateStatusMutation = useMutation({
@@ -302,6 +330,84 @@ export default function ContractDetails() {
                   <Label className="font-semibold">Mechanical Royalties</Label>
                   <p className="text-muted-foreground capitalize">{contract.data.mechanicalRoyalties || 'Equal'}</p>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* NEW: Releases Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Music className="h-5 w-5" /> Releases</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {releasesLoading ? (
+                  <p className="text-muted-foreground">Loading releases...</p>
+                ) : releases && releases.length > 0 ? (
+                  <div className="space-y-3">
+                    {releases.map((release) => (
+                      <div key={release.id} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                        <div>
+                          <p className="font-medium">{release.distributorName}</p>
+                          <p className="text-sm text-muted-foreground">{release.status} - {new Date(release.releaseDate!).toLocaleDateString()}</p>
+                        </div>
+                        <Badge variant="secondary">{release.platformDistributionTargets?.join(', ')}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No releases associated with this project.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* NEW: Revenue Entries Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" /> Revenue Entries</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {revenueEntriesLoading ? (
+                  <p className="text-muted-foreground">Loading revenue entries...</p>
+                ) : revenueEntries && revenueEntries.length > 0 ? (
+                  <div className="space-y-3">
+                    {revenueEntries.map((entry) => (
+                      <div key={entry.id} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                        <div>
+                          <p className="font-medium">{entry.source}</p>
+                          <p className="text-sm text-muted-foreground">{entry.amount} {entry.currency} ({new Date(entry.reportingPeriodStart!).toLocaleDateString()} - {new Date(entry.reportingPeriodEnd!).toLocaleDateString()})</p>
+                        </div>
+                        {entry.releaseId && <Badge variant="outline">Release: {entry.releaseId.substring(0, 8)}...</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No revenue entries for this project.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* NEW: Payouts Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Banknote className="h-5 w-5" /> Payouts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {payoutsLoading ? (
+                  <p className="text-muted-foreground">Loading payouts...</p>
+                ) : payouts && payouts.length > 0 ? (
+                  <div className="space-y-3">
+                    {payouts.map((payout) => (
+                      <div key={payout.id} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                        <div>
+                          <p className="font-medium">Contributor ID: {payout.contributorId.substring(0, 8)}...</p>
+                          <p className="text-sm text-muted-foreground">{payout.amount} {payout.currency} - {payout.status}</p>
+                        </div>
+                        <Badge variant="secondary">Revenue Entry: {payout.revenueEntryId.substring(0, 8)}...</Badge>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No payouts generated for this project.</p>
+                )}
               </CardContent>
             </Card>
           </div>
