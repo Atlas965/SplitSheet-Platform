@@ -670,6 +670,58 @@ export type InsertRevenueEntry = z.infer<typeof insertRevenueEntrySchema>;
 export type Payout = typeof payouts.$inferSelect;
 export type InsertPayout = z.infer<typeof insertPayoutSchema>;
 
+// ─── SERVICE BUSINESS ──────────────────────────────────────────────────────
+
+export const clients = pgTable("clients", {
+  id:         text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  operatorId: text("operator_id").notNull(),
+  name:       text("name").notNull(),
+  email:      text("email"),
+  phone:      text("phone"),
+  type:       text("type").notNull().default("artist"),
+  notes:      text("notes"),
+  createdAt:  timestamp("created_at").defaultNow(),
+  updatedAt:  timestamp("updated_at").defaultNow(),
+});
+
+export const serviceProjects = pgTable("service_projects", {
+  id:         text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  operatorId: text("operator_id").notNull(),
+  clientId:   text("client_id").references(() => clients.id, { onDelete: "set null" }),
+  title:      text("title").notNull(),
+  songTitle:  text("song_title").notNull(),
+  status:     text("status").notNull().default("draft"),
+  notes:      text("notes"),
+  createdAt:  timestamp("created_at").defaultNow(),
+  updatedAt:  timestamp("updated_at").defaultNow(),
+});
+
+export const projectContributors = pgTable("project_contributors", {
+  id:                text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  projectId:         text("project_id").notNull().references(() => serviceProjects.id, { onDelete: "cascade" }),
+  name:              text("name").notNull(),
+  email:             text("email"),
+  role:              text("role").notNull().default("songwriter"),
+  pro:               text("pro"),
+  ipi:               text("ipi"),
+  ownershipPercentage: text("ownership_percentage").notNull().default("0"),
+  confirmationToken: text("confirmation_token").unique(),
+  confirmedAt:       timestamp("confirmed_at"),
+  confirmationIp:    text("confirmation_ip"),
+  createdAt:         timestamp("created_at").defaultNow(),
+});
+
+export const insertClientSchema = createInsertSchema(clients).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertServiceProjectSchema = createInsertSchema(serviceProjects).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertProjectContributorSchema = createInsertSchema(projectContributors).omit({ id: true, createdAt: true });
+
+export type Client = typeof clients.$inferSelect;
+export type InsertClient = z.infer<typeof insertClientSchema>;
+export type ServiceProject = typeof serviceProjects.$inferSelect;
+export type InsertServiceProject = z.infer<typeof insertServiceProjectSchema>;
+export type ProjectContributor = typeof projectContributors.$inferSelect;
+export type InsertProjectContributor = z.infer<typeof insertProjectContributorSchema>;
+
 // Activity tracking schemas
 export const activityEventSchema = z.object({
   activityType: z.string().min(1).max(50),

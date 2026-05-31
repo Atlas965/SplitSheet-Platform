@@ -50,18 +50,22 @@ interface Contract {
 }
 
 // ── Plan config ───────────────────────────────────────────────────────────────
-type PlanKey = "free" | "session" | "pro";
+type PlanKey = "free" | "session" | "pro" | "creator_pro" | "studio_pro";
 
 const PLANS: Record<PlanKey, { name: string; price: string; contractLimit: number | null; billing: string }> = {
-  free:    { name: "Starter Split",      price: "$0",      contractLimit: 1,    billing: "Free · no card needed" },
-  session: { name: "Split Session",      price: "$25 CAD", contractLimit: 5,    billing: "Per completed session" },
-  pro:     { name: "Multi-Creator Pro",  price: "$50–75",  contractLimit: null, billing: "Per project · quote-based" },
+  free:        { name: "Starter Split",    price: "$0",         contractLimit: 1,    billing: "Free · no card needed" },
+  session:     { name: "Pay-Per-Session",  price: "$25 CAD",    contractLimit: 5,    billing: "Per completed session" },
+  pro:         { name: "Multi-Creator",    price: "$50–$75 CAD", contractLimit: null, billing: "Per project · quote-based" },
+  creator_pro: { name: "Creator Pro",      price: "$15 CAD/mo", contractLimit: null, billing: "Unlimited sessions" },
+  studio_pro:  { name: "Studio Pro",       price: "$49 CAD/mo", contractLimit: null, billing: "Unlimited projects & team" },
 };
 
 const PLAN_FEATURES: Record<PlanKey, string[]> = {
-  free:    ["1 collaboration project", "Up to 2 contributors", "Basic split allocation", "Contributor confirmation links", "PDF export"],
-  session: ["Up to 5 contributors", "Split percentage setup", "Contributor confirmation tracking", "Agreement workflow", "PDF export", "Audit log storage", "Email confirmations"],
-  pro:     ["Up to 10 contributors", "Multiple revision rounds", "Priority support", "Contributor reminders", "Enhanced audit history", "Organised project dashboard", "Exportable records"],
+  free:        ["1 collaboration project", "Up to 2 contributors", "Basic split allocation", "Contributor confirmation links", "Timestamped agreement summary", "PDF export"],
+  session:     ["Up to 5 contributors", "Split percentage configuration", "Contributor verification workflow", "Agreement completion tracking", "PDF export package", "Audit log storage", "Email confirmations"],
+  pro:         ["Up to 10 contributors", "Multi-round revisions", "Enhanced audit history", "Contributor reminders system", "Project dashboard", "Priority processing option", "Full exportable records"],
+  creator_pro: ["Unlimited sessions (no per-session fee)", "Project history storage", "Saved contributor profiles", "Collaboration analytics", "Workflow automation tools", "Discounted premium exports"],
+  studio_pro:  ["Unlimited projects and contributors", "Team management dashboard", "Role-based permissions", "Advanced audit logs", "Bulk exports", "Organization-level analytics", "Priority support"],
 };
 
 // ── Upgrade Dialog ────────────────────────────────────────────────────────────
@@ -135,7 +139,7 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
           <p className="text-xs text-muted-foreground mt-0.5">Choose the plan that fits your music career.</p>
         </DialogHeader>
         <div className="p-6 space-y-4">
-          {(["session", "pro"] as PlanKey[]).map((plan) => {
+          {(["session", "pro", "creator_pro", "studio_pro"] as PlanKey[]).map((plan) => {
             const cfg = PLANS[plan];
             const isCurrent    = plan === currentPlan;
             const isLoading    = loadingPlan === plan;
@@ -450,6 +454,7 @@ export default function Billing() {
     free: "free", starter: "free",
     pro: "session", session: "session",
     label: "pro", studio: "pro",
+    creator_pro: "creator_pro", studio_pro: "studio_pro",
   };
   const rawTier = subscriptionData?.tier ?? (user as any)?.subscriptionTier ?? "free";
   const planKey: PlanKey = tierMap[rawTier] ?? "free";

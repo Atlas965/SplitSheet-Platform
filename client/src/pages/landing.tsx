@@ -408,188 +408,140 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-6">
             <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Simple, Session-Based Pricing
+              Hybrid Pricing Built for Music
             </h2>
             <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Pay per project — not a monthly subscription. Only pay when you complete a session.
+              Session-based for individual creators. Subscriptions for recurring workflows. Enterprise for institutions.
             </p>
           </div>
 
           {/* Positioning clarifier */}
-          <div className="max-w-2xl mx-auto mb-12 bg-muted border border-border rounded-xl px-6 py-4 text-center">
+          <div className="max-w-2xl mx-auto mb-10 bg-muted border border-border rounded-xl px-6 py-4 text-center">
             <p className="text-sm text-muted-foreground leading-relaxed">
               <span className="font-semibold text-foreground">SplitSheet is a collaboration workflow platform</span> — not a law firm or legal service.
               We help you organise agreements, confirm contributors, and export documented records.
             </p>
           </div>
 
-          {/* 3-column main plans */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto mb-8">
-
-            {/* Free — Starter Split */}
-            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <div className="mb-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">🎵 Starter Split</p>
-                <h3 className="text-2xl font-bold mb-1 text-foreground">Free</h3>
-                <div className="text-4xl font-bold text-primary mb-1">$0</div>
-                <p className="text-muted-foreground text-sm">No credit card · no time limit</p>
-              </div>
-              <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-                Try the full workflow with a single project. Perfect for first-time collaborations.
-              </p>
-              <ul className="space-y-2.5 mb-8 flex-1">
-                {[
-                  "1 collaboration project",
-                  "Up to 2 contributors",
-                  "Basic split allocation",
-                  "Contributor confirmation links",
-                  "Timestamped agreement summary",
-                  "PDF export",
-                ].map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm">
-                    <i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" />
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
-              <a
-                href="/api/login"
-                className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm"
-              >
-                Start Free
-              </a>
-            </div>
-
-            {/* Split Session — $25 */}
-            <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col">
-              <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                <span className="bg-accent text-accent-foreground px-4 py-1 rounded-full text-sm font-semibold whitespace-nowrap">
-                  Most Popular
-                </span>
-              </div>
-              <div className="mb-2">
-                <p className="text-xs font-semibold text-accent uppercase tracking-wider mb-2">🎛 Split Session</p>
-                <h3 className="text-2xl font-bold mb-1 text-foreground">$25 <span className="text-base font-normal text-muted-foreground">CAD</span></h3>
-                <div className="text-sm font-medium text-accent mb-1">Per completed session</div>
-                <p className="text-muted-foreground text-sm">Pay once per project · no recurring charges</p>
-              </div>
-              <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-                For independent artists and producers completing real collaboration agreements.
-              </p>
-              <ul className="space-y-2.5 mb-8 flex-1">
-                {[
-                  "Up to 5 contributors",
-                  "Split percentage setup",
-                  "Contributor confirmation tracking",
-                  "Agreement completion workflow",
-                  "PDF export summary",
-                  "Audit log storage",
-                  "Email confirmations",
-                ].map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm">
-                    <i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" />
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
-              <a
-                href="/api/login"
-                className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm"
-              >
-                Start a Session →
-              </a>
-            </div>
-
-            {/* Collaboration Pro — $50–75 */}
-            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <div className="mb-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">🎚 Multi-Creator Project</p>
-                <h3 className="text-2xl font-bold mb-1 text-foreground">$50 – $75 <span className="text-base font-normal text-muted-foreground">CAD</span></h3>
-                <div className="text-sm font-medium text-foreground mb-1">Per project</div>
-                <p className="text-muted-foreground text-sm">Based on complexity &amp; contributor count</p>
-              </div>
-              <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-                For larger collaborations, producer groups, or projects needing multiple revision rounds.
-              </p>
-              <ul className="space-y-2.5 mb-8 flex-1">
-                {[
-                  "Up to 10 contributors",
-                  "Multiple revision rounds",
-                  "Priority support",
-                  "Contributor reminders",
-                  "Enhanced audit history",
-                  "Organised project dashboard",
-                  "Exportable project records",
-                ].map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm">
-                    <i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" />
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
-              <a
-                href="mailto:hello@splitsheet.ca?subject=Collaboration Pro Inquiry"
-                className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm"
-              >
-                Get a Quote →
-              </a>
-            </div>
-
+          {/* Transaction Layer Label */}
+          <div className="max-w-5xl mx-auto mb-3">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">📦 Transaction Layer — Pay Per Project</p>
           </div>
 
-          {/* Express add-on banner */}
-          <div className="max-w-5xl mx-auto mb-8">
+          {/* 3-column transaction plans */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto mb-6">
+
+            {/* Free */}
+            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎵 Starter Access</p>
+              <div className="text-4xl font-bold text-primary mb-1">$0</div>
+              <p className="text-muted-foreground text-sm mb-4">No credit card · no time limit</p>
+              <ul className="space-y-2 mb-8 flex-1">
+                {["1 collaboration project","Up to 2 contributors","Basic split allocation","Contributor confirmation links","Timestamped agreement summary","PDF export"].map(f => (
+                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
+                ))}
+              </ul>
+              <a href="/api/login" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Start Free</a>
+            </div>
+
+            {/* Pay-Per-Session $25 */}
+            <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col">
+              <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                <span className="bg-accent text-accent-foreground px-4 py-1 rounded-full text-sm font-semibold whitespace-nowrap">Most Popular</span>
+              </div>
+              <p className="text-xs font-semibold text-accent uppercase tracking-wider mb-3">🎛 Pay-Per-Session</p>
+              <div className="text-4xl font-bold text-primary mb-1">$25 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
+              <p className="text-sm font-medium text-accent mb-4">Per completed session</p>
+              <ul className="space-y-2 mb-8 flex-1">
+                {["Up to 5 contributors","Split percentage configuration","Contributor verification workflow","Agreement completion tracking","PDF export package","Audit log storage","Email confirmations"].map(f => (
+                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
+                ))}
+              </ul>
+              <a href="/api/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Session →</a>
+            </div>
+
+            {/* Multi-Creator $50–75 */}
+            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎚 Multi-Creator Project</p>
+              <div className="text-4xl font-bold text-primary mb-1">$50–$75 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
+              <p className="text-muted-foreground text-sm mb-4">Per project · complexity-based</p>
+              <ul className="space-y-2 mb-8 flex-1">
+                {["Up to 10 contributors","Multi-round revisions","Enhanced audit history","Contributor reminders system","Project dashboard","Priority processing option","Full exportable records"].map(f => (
+                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
+                ))}
+              </ul>
+              <a href="mailto:hello@splitsheet.ca?subject=Multi-Creator Project" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Get a Quote →</a>
+            </div>
+          </div>
+
+          {/* Express add-on */}
+          <div className="max-w-5xl mx-auto mb-10">
             <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/40 rounded-lg flex items-center justify-center shrink-0 text-xl">
-                  ⚡
-                </div>
+                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/40 rounded-lg flex items-center justify-center shrink-0 text-xl">⚡</div>
                 <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <p className="font-bold text-foreground">Express Session</p>
-                    <span className="text-xs font-bold bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded-full">
-                      +$25 CAD add-on
-                    </span>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="font-bold text-foreground">Express Processing Add-On</p>
+                    <span className="text-xs font-bold bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded-full">+$25 CAD per session</span>
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Need confirmations before today's release? Rush Split gives you priority processing, fast contributor reminder flow, and expedited completion handling.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Priority processing queue, fast contributor notifications, and expedited completion. High-margin add-on for urgent workflows — perfect before a release deadline.</p>
                 </div>
               </div>
-              <a
-                href="mailto:hello@splitsheet.ca?subject=Express Session Request"
-                className="shrink-0 bg-amber-500 text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-amber-600 transition-colors text-sm whitespace-nowrap"
-              >
-                Request Rush Split
-              </a>
+              <a href="mailto:hello@splitsheet.ca?subject=Express Processing" className="shrink-0 bg-amber-500 text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-amber-600 transition-colors text-sm whitespace-nowrap">Request Express →</a>
             </div>
           </div>
 
-          {/* Coming soon — Creator Support Plan */}
+          {/* Subscription Layer */}
+          <div className="max-w-5xl mx-auto mb-4">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🔁 Subscription Layer — Recurring SaaS Revenue</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto mb-10">
+            {/* Creator Pro $15/mo */}
+            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎼 Creator Pro</p>
+              <div className="text-4xl font-bold text-primary mb-1">$15 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
+              <p className="text-muted-foreground text-sm mb-4">For active independent creators</p>
+              <ul className="space-y-2 mb-8 flex-1">
+                {["Unlimited sessions (replaces per-session fees)","Project history storage","Saved contributor profiles","Collaboration analytics","Workflow automation tools","Discounted premium exports"].map(f => (
+                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
+                ))}
+              </ul>
+              <a href="/api/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
+            </div>
+            {/* Studio Pro $49/mo */}
+            <div className="bg-card p-8 rounded-xl border-2 border-primary/40 flex flex-col relative">
+              <div className="absolute -top-3.5 right-5">
+                <span className="bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full">Studio &amp; Teams</span>
+              </div>
+              <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-3">🎧 Studio Pro</p>
+              <div className="text-4xl font-bold text-primary mb-1">$49 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
+              <p className="text-muted-foreground text-sm mb-4">For studios, teams, and small labels</p>
+              <ul className="space-y-2 mb-8 flex-1">
+                {["Unlimited projects and contributors","Team management dashboard","Role-based permissions","Advanced audit logs","Bulk exports","Organization-level analytics","Priority support"].map(f => (
+                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
+                ))}
+              </ul>
+              <a href="/api/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
+            </div>
+          </div>
+
+          {/* Enterprise Layer */}
+          <div className="max-w-5xl mx-auto mb-4">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🏢 Enterprise Layer — Institutional Licensing</p>
+          </div>
           <div className="max-w-5xl mx-auto">
-            <div className="bg-muted/50 border border-dashed border-border rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 opacity-75">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center shrink-0 text-lg">
-                  🗓
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <p className="font-semibold text-foreground">Creator Support Plan</p>
-                    <span className="text-xs font-medium bg-muted text-muted-foreground border border-border px-2 py-0.5 rounded-full">
-                      Coming soon · $10–20/month
-                    </span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Unlimited project history, collaboration analytics, saved contributor profiles, and recurring team workflows. Launching after early traction.
-                  </p>
+            <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">Enterprise Licensing</p>
+                <h3 className="text-2xl font-bold mb-2">Custom Pricing</h3>
+                <p className="text-slate-300 text-sm max-w-lg leading-relaxed">For labels, publishers, rights organizations, distribution companies, and PRO/CMO integrations. Includes API access, white-label deployment, bulk ingestion tools, compliance reporting, dedicated account management, and custom integrations.</p>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {["Labels","Publishers","Rights Orgs","Distributors","PROs / CMOs"].map(t => (
+                    <span key={t} className="text-xs bg-white/10 border border-white/20 text-white px-2.5 py-1 rounded-full">{t}</span>
+                  ))}
                 </div>
               </div>
-              <button
-                disabled
-                className="shrink-0 bg-muted text-muted-foreground px-5 py-2.5 rounded-lg font-semibold text-sm whitespace-nowrap cursor-not-allowed border border-border"
-              >
-                Notify Me
-              </button>
+              <a href="mailto:enterprise@splitsheet.ca?subject=Enterprise Licensing Inquiry" className="shrink-0 bg-white text-slate-900 px-6 py-3 rounded-lg font-semibold hover:bg-slate-100 transition-colors text-sm whitespace-nowrap">Contact Enterprise →</a>
             </div>
           </div>
 

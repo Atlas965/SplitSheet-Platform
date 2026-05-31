@@ -20,6 +20,9 @@ import {
   releases,
   revenueEntries,
   payouts,
+  clients,
+  serviceProjects,
+  projectContributors,
   type User,
   type UpsertUser,
   type Contract,
@@ -51,6 +54,12 @@ import {
   type InsertRevenueEntry,
   type Payout,
   type InsertPayout,
+  type Client,
+  type InsertClient,
+  type ServiceProject,
+  type InsertServiceProject,
+  type ProjectContributor,
+  type InsertProjectContributor,
 } from "@shared/schema";
 
 import { db } from "./db";
@@ -152,6 +161,28 @@ export interface IStorage {
   getPayoutsByProjectId(projectId: string): Promise<Payout[]>;
   getPayoutsByContributorId(contributorId: string): Promise<Payout[]>;
   updatePayoutStatus(id: string, status: string): Promise<Payout>;
+
+  // Service Business
+  getClients(operatorId: string): Promise<Client[]>;
+  getClient(id: string): Promise<Client | undefined>;
+  createClient(client: InsertClient): Promise<Client>;
+  updateClient(id: string, updates: Partial<Client>): Promise<Client>;
+  deleteClient(id: string): Promise<void>;
+
+  getServiceProjects(operatorId: string): Promise<ServiceProject[]>;
+  getServiceProjectsByClient(clientId: string): Promise<ServiceProject[]>;
+  getServiceProject(id: string): Promise<ServiceProject | undefined>;
+  createServiceProject(project: InsertServiceProject): Promise<ServiceProject>;
+  updateServiceProject(id: string, updates: Partial<ServiceProject>): Promise<ServiceProject>;
+  deleteServiceProject(id: string): Promise<void>;
+
+  getProjectContributors(projectId: string): Promise<ProjectContributor[]>;
+  addProjectContributor(contributor: InsertProjectContributor): Promise<ProjectContributor>;
+  updateProjectContributor(id: string, updates: Partial<ProjectContributor>): Promise<ProjectContributor>;
+  removeProjectContributor(id: string): Promise<void>;
+  getContributorByToken(token: string): Promise<ProjectContributor | undefined>;
+  confirmContributor(token: string, ip: string): Promise<ProjectContributor>;
+  generateConfirmationTokens(projectId: string): Promise<ProjectContributor[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -311,6 +342,143 @@ export class DatabaseStorage implements IStorage {
   async getPayoutsByProjectId() { return []; }
   async getPayoutsByContributorId() { return []; }
   async updatePayoutStatus() { return {} as any; }
+
+  // ── getAnalyticsData ────────────────────────────────────────────────────────
+  async getAnalyticsData(userId?: string): Promise<any> {
+    if (userId) {
+      const userContracts = await db.select().from(contracts).where(eq(contracts.createdBy, userId));
+      const total = userContracts.length;
+      const pending = userContracts.filter(c => c.status === "pending").length;
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const completedThisMonth = userContracts.filter(c =>
+        c.status === "signed" && c.updatedAt && new Date(c.updatedAt) >= monthStart
+      ).length;
+      return { totalContracts: total, pendingSignatures: pending, completedThisMonth, revenueSplit: 0 };
+    }
+    const allContracts = await db.select().from(contracts);
+    return {
+      totalContracts: allContracts.length,
+      pendingSignatures: allContracts.filter(c => c.status === "pending").length,
+      completedThisMonth: 0,
+      revenueSplit: 0,
+    };
+  }
+
+  async trackUserActivity(userId: string, activityType: string, activityData?: any): Promise<void> {
+    await db.insert(userActivity).values({ userId, activityType, activityData: activityData ?? {} });
+  }
+
+  async trackUserActivitiesBulk(userId: string, activities: Array<{ activityType: string; activityData?: any }>): Promise<void> {
+    for (const a of activities) await this.trackUserActivity(userId, a.activityType, a.activityData);
+  }
+
+  async getUserRecommendations() { return []; }
+
+  // ── Service Business — Clients ──────────────────────────────────────────────
+  async getClients(operatorId: string): Promise<Client[]> {
+    return db.select().from(clients).where(eq(clients.operatorId, operatorId)).orderBy(desc(clients.createdAt));
+  }
+
+  async getClient(id: string): Promise<Client | undefined> {
+    const [c] = await db.select().from(clients).where(eq(clients.id, id));
+    return c;
+  }
+
+  async createClient(client: InsertClient): Promise<Client> {
+    const [c] = await db.insert(clients).values(client).returning();
+    return c;
+  }
+
+  async updateClient(id: string, updates: Partial<Client>): Promise<Client> {
+    const [c] = await db.update(clients).set({ ...updates, updatedAt: new Date() }).where(eq(clients.id, id)).returning();
+    return c;
+  }
+
+  async deleteClient(id: string): Promise<void> {
+    await db.delete(clients).where(eq(clients.id, id));
+  }
+
+  // ── Service Business — Projects ─────────────────────────────────────────────
+  async getServiceProjects(operatorId: string): Promise<ServiceProject[]> {
+    return db.select().from(serviceProjects).where(eq(serviceProjects.operatorId, operatorId)).orderBy(desc(serviceProjects.createdAt));
+  }
+
+  async getServiceProjectsByClient(clientId: string): Promise<ServiceProject[]> {
+    return db.select().from(serviceProjects).where(eq(serviceProjects.clientId, clientId)).orderBy(desc(serviceProjects.createdAt));
+  }
+
+  async getServiceProject(id: string): Promise<ServiceProject | undefined> {
+    const [p] = await db.select().from(serviceProjects).where(eq(serviceProjects.id, id));
+    return p;
+  }
+
+  async createServiceProject(project: InsertServiceProject): Promise<ServiceProject> {
+    const [p] = await db.insert(serviceProjects).values(project).returning();
+    return p;
+  }
+
+  async updateServiceProject(id: string, updates: Partial<ServiceProject>): Promise<ServiceProject> {
+    const [p] = await db.update(serviceProjects).set({ ...updates, updatedAt: new Date() }).where(eq(serviceProjects.id, id)).returning();
+    return p;
+  }
+
+  async deleteServiceProject(id: string): Promise<void> {
+    await db.delete(projectContributors).where(eq(projectContributors.projectId, id));
+    await db.delete(serviceProjects).where(eq(serviceProjects.id, id));
+  }
+
+  // ── Service Business — Contributors ─────────────────────────────────────────
+  async getProjectContributors(projectId: string): Promise<ProjectContributor[]> {
+    return db.select().from(projectContributors).where(eq(projectContributors.projectId, projectId)).orderBy(projectContributors.createdAt);
+  }
+
+  async addProjectContributor(contributor: InsertProjectContributor): Promise<ProjectContributor> {
+    const [c] = await db.insert(projectContributors).values(contributor).returning();
+    return c;
+  }
+
+  async updateProjectContributor(id: string, updates: Partial<ProjectContributor>): Promise<ProjectContributor> {
+    const [c] = await db.update(projectContributors).set(updates).where(eq(projectContributors.id, id)).returning();
+    return c;
+  }
+
+  async removeProjectContributor(id: string): Promise<void> {
+    await db.delete(projectContributors).where(eq(projectContributors.id, id));
+  }
+
+  async getContributorByToken(token: string): Promise<ProjectContributor | undefined> {
+    const [c] = await db.select().from(projectContributors).where(eq(projectContributors.confirmationToken, token));
+    return c;
+  }
+
+  async confirmContributor(token: string, ip: string): Promise<ProjectContributor> {
+    const [c] = await db.update(projectContributors)
+      .set({ confirmedAt: new Date(), confirmationIp: ip })
+      .where(eq(projectContributors.confirmationToken, token))
+      .returning();
+    const all = await this.getProjectContributors(c.projectId);
+    if (all.length > 0 && all.every(x => x.confirmedAt !== null)) {
+      await this.updateServiceProject(c.projectId, { status: "confirmed" });
+    }
+    return c;
+  }
+
+  async generateConfirmationTokens(projectId: string): Promise<ProjectContributor[]> {
+    const contribs = await this.getProjectContributors(projectId);
+    const updated: ProjectContributor[] = [];
+    for (const c of contribs) {
+      if (!c.confirmationToken) {
+        const token = `${projectId.slice(0, 8)}-${c.id.slice(0, 8)}-${Date.now().toString(36)}`;
+        const [u] = await db.update(projectContributors).set({ confirmationToken: token }).where(eq(projectContributors.id, c.id)).returning();
+        updated.push(u);
+      } else {
+        updated.push(c);
+      }
+    }
+    await this.updateServiceProject(projectId, { status: "pending_confirmation" });
+    return updated;
+  }
 }
 
 // ✅ IMPORTANT FIX: MUST BE OUTSIDE CLASS
