@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "-MZMhGqdt8UXTh0Me_Srl"
+uri = "file://README.md"
+type = "text"
+title = "SplitSheet README.md"
