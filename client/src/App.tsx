@@ -26,6 +26,10 @@ import Notifications from "@/pages/notifications";
 import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
 import ConfirmSplit from "@/pages/confirm-split";
+import Creators from "@/pages/creators";
+import CreatorDetail from "@/pages/creator-detail";
+import Organizations from "@/pages/organizations";
+import OrganizationDetail from "@/pages/organization-detail";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -66,6 +70,10 @@ function Router() {
           <Route path="/notifications" component={Notifications} />
           <Route path="/clients" component={Clients} />
           <Route path="/projects" component={Projects} />
+          <Route path="/creators" component={Creators} />
+          <Route path="/creators/:id" component={CreatorDetail} />
+          <Route path="/organizations" component={Organizations} />
+          <Route path="/organizations/:id" component={OrganizationDetail} />
           {/* /contract/new redirects to split-sheet — fixes the 404 */}
           <Route path="/contract/new" component={() => {
             window.location.replace("/contract/split-sheet");

@@ -1483,13 +1483,223 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Rights & Metadata Expansion (update existing song asset routes)
-  // The patch /api/assets/:id route already handles updates to song assets,
-  // and the new fields (proRegistrationStatus, publishingStatus, externalDistributorId)
-  // are already added to the schema. No new routes are strictly needed here,
-  // but the frontend would need to be updated to expose these fields.
+  // ── Identity Layer — Creators ─────────────────────────────────────────────────
 
-  // External Integration Layer (structural only - no new routes needed yet)
+  app.get('/api/creators', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const data = await storage.getCreators(userId);
+      res.json(data);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch creators" }); }
+  });
+
+  app.get('/api/creators/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const creator = await storage.getCreator(req.params.id);
+      if (!creator) return res.status(404).json({ message: "Creator not found" });
+      res.json(creator);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch creator" }); }
+  });
+
+  app.post('/api/creators', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const shortId = () => Math.random().toString(36).slice(2, 10).toUpperCase();
+      const slCreatorId = `SL-CREATOR-${shortId()}`;
+      const creator = await storage.createCreator({ ...req.body, createdBy: userId, slCreatorId });
+      res.status(201).json(creator);
+    } catch (e) { res.status(500).json({ message: "Failed to create creator" }); }
+  });
+
+  app.patch('/api/creators/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const creator = await storage.updateCreator(req.params.id, req.body);
+      res.json(creator);
+    } catch (e) { res.status(500).json({ message: "Failed to update creator" }); }
+  });
+
+  app.delete('/api/creators/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteCreator(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete creator" }); }
+  });
+
+  // ── Identity Layer — Organizations ────────────────────────────────────────────
+
+  app.get('/api/organizations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const data = await storage.getOrganizations(userId);
+      res.json(data);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch organizations" }); }
+  });
+
+  app.get('/api/organizations/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const org = await storage.getOrganization(req.params.id);
+      if (!org) return res.status(404).json({ message: "Organization not found" });
+      res.json(org);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch organization" }); }
+  });
+
+  app.post('/api/organizations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const shortId = () => Math.random().toString(36).slice(2, 10).toUpperCase();
+      const slOrgId = `SL-ORG-${shortId()}`;
+      const org = await storage.createOrganization({ ...req.body, createdBy: userId, slOrgId });
+      // Auto-add creator as owner
+      await storage.addOrgMember({ orgId: org.id, userId, role: "owner" });
+      res.status(201).json(org);
+    } catch (e) { res.status(500).json({ message: "Failed to create organization" }); }
+  });
+
+  app.patch('/api/organizations/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const org = await storage.updateOrganization(req.params.id, req.body);
+      res.json(org);
+    } catch (e) { res.status(500).json({ message: "Failed to update organization" }); }
+  });
+
+  app.delete('/api/organizations/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteOrganization(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete organization" }); }
+  });
+
+  // ── Org Members ───────────────────────────────────────────────────────────────
+
+  app.get('/api/organizations/:id/members', isAuthenticated, async (req: any, res) => {
+    try {
+      const members = await storage.getOrgMembers(req.params.id);
+      res.json(members);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch members" }); }
+  });
+
+  app.post('/api/organizations/:id/members', isAuthenticated, async (req: any, res) => {
+    try {
+      const member = await storage.addOrgMember({ orgId: req.params.id, ...req.body });
+      res.status(201).json(member);
+    } catch (e) { res.status(500).json({ message: "Failed to add member" }); }
+  });
+
+  app.patch('/api/organizations/:id/members/:userId/role', isAuthenticated, async (req: any, res) => {
+    try {
+      const member = await storage.updateOrgMemberRole(req.params.id, req.params.userId, req.body.role);
+      res.json(member);
+    } catch (e) { res.status(500).json({ message: "Failed to update role" }); }
+  });
+
+  app.delete('/api/organizations/:id/members/:userId', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.removeOrgMember(req.params.id, req.params.userId);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to remove member" }); }
+  });
+
+  // ── API Keys ──────────────────────────────────────────────────────────────────
+
+  app.get('/api/organizations/:id/api-keys', isAuthenticated, async (req: any, res) => {
+    try {
+      const keys = await storage.getApiKeys(req.params.id);
+      // Never return the hash; return prefix + metadata only
+      res.json(keys.map(k => ({ ...k, keyHash: undefined })));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch API keys" }); }
+  });
+
+  app.post('/api/organizations/:id/api-keys', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { name, scopes } = req.body;
+      // Generate raw key (shown once) + store hash
+      const crypto = await import("crypto");
+      const rawKey = `sl_live_${crypto.randomBytes(24).toString("hex")}`;
+      const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
+      const keyPrefix = `sl_live_${rawKey.slice(8, 16)}`;
+      const key = await storage.createApiKey({
+        orgId: req.params.id, userId, name,
+        keyHash, keyPrefix,
+        scopes: scopes ?? [],
+      });
+      // Return the raw key once
+      res.status(201).json({ ...key, keyHash: undefined, rawKey });
+    } catch (e) { res.status(500).json({ message: "Failed to create API key" }); }
+  });
+
+  app.delete('/api/organizations/:id/api-keys/:keyId', isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.revokeApiKey(req.params.keyId);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to revoke API key" }); }
+  });
+
+  // ── Ownership Events (immutable event log) ────────────────────────────────────
+
+  app.get('/api/assets/:id/events', isAuthenticated, async (req: any, res) => {
+    try {
+      const events = await storage.getOwnershipEvents(req.params.id);
+      res.json(events);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch events" }); }
+  });
+
+  app.post('/api/assets/:id/events', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      const event = await storage.appendOwnershipEvent({
+        songAssetId: req.params.id,
+        eventType:   req.body.eventType,
+        actorId:     userId,
+        actorName:   (user as any)?.firstName ?? userId,
+        previousState: req.body.previousState ?? null,
+        newState:    req.body.newState ?? null,
+        reason:      req.body.reason ?? null,
+        metadata:    req.body.metadata ?? null,
+      });
+      res.status(201).json(event);
+    } catch (e) { res.status(500).json({ message: "Failed to append event" }); }
+  });
+
+  // ── Mock Revenue Ingestion (Royalty Engine foundation) ────────────────────────
+
+  app.post('/api/revenue/ingest', isAuthenticated, async (req: any, res) => {
+    try {
+      // Mock DSP ingestion layer — accepts batch revenue records
+      const { records } = req.body; // [{ assetId, source, amount, currency, description, periodStart, periodEnd }]
+      if (!Array.isArray(records) || records.length === 0) {
+        return res.status(400).json({ message: "records array is required" });
+      }
+      const created = [];
+      for (const r of records) {
+        // Create revenue event
+        const event = await storage.createRevenueEntry({
+          projectId: r.assetId,
+          releaseId: null,
+          platform: r.source,
+          streams: r.streams ?? 0,
+          revenue: r.amount?.toString() ?? "0",
+          currency: r.currency ?? "USD",
+          reportingPeriod: r.periodStart ? `${r.periodStart} – ${r.periodEnd ?? ""}` : null,
+          rawData: r.metadata ?? null,
+        });
+        created.push(event);
+      }
+      res.status(201).json({ ingested: created.length, records: created });
+    } catch (e) { res.status(500).json({ message: "Ingestion failed" }); }
+  });
+
+  // ── SL-SONG ID assignment ─────────────────────────────────────────────────────
+
+  app.post('/api/assets/:id/assign-sl-id', isAuthenticated, async (req: any, res) => {
+    try {
+      const shortId = Math.random().toString(36).slice(2, 10).toUpperCase();
+      const slSongId = `SL-SONG-${shortId}`;
+      const asset = await storage.updateSongAsset(req.params.id, { slSongId } as any);
+      res.json(asset);
+    } catch (e) { res.status(500).json({ message: "Failed to assign SL-SONG ID" }); }
+  });
 
   const server = createServer(app);
   return server;

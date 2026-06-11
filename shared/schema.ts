@@ -261,18 +261,27 @@ export const songAssets = pgTable("song_assets", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
+  slSongId: varchar("sl_song_id").unique(), // Permanent SoundLedger ID: SL-SONG-xxxxxxxx
   title: varchar("title").notNull(),
   artistName: varchar("artist_name"),
-  isrc: varchar("isrc"), // International Standard Recording Code
+  isrc: varchar("isrc"),  // International Standard Recording Code
+  iswc: varchar("iswc"),  // International Standard Musical Work Code
+  lyrics: text("lyrics"),
   createdBy: varchar("created_by")
     .references(() => users.id)
     .notNull(),
   contractId: varchar("contract_id").references(() => contracts.id),
-  status: varchar("status").default("active"), // active, archived
+  status: varchar("status").default("active"), // active, archived, deactivated
+  type: varchar("type").default("original"),   // original, cover, sample-based, arrangement
   metadata: jsonb("metadata"),
-  proRegistrationStatus: varchar("pro_registration_status"), // NEW: PRO registration status
-  publishingStatus: varchar("publishing_status"), // NEW: publishing status
-  externalDistributorId: varchar("external_distributor_id"), // NEW: external distributor ID
+  proRegistrationStatus: varchar("pro_registration_status"),
+  publishingStatus: varchar("publishing_status"),
+  externalDistributorId: varchar("external_distributor_id"),
+  iswcRegistered: boolean("iswc_registered").default(false),
+  archivedAt: timestamp("archived_at"),
+  archivedBy: varchar("archived_by"),
+  deactivatedAt: timestamp("deactivated_at"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -721,6 +730,99 @@ export type ServiceProject = typeof serviceProjects.$inferSelect;
 export type InsertServiceProject = z.infer<typeof insertServiceProjectSchema>;
 export type ProjectContributor = typeof projectContributors.$inferSelect;
 export type InsertProjectContributor = z.infer<typeof insertProjectContributorSchema>;
+
+// ─── IDENTITY LAYER ──────────────────────────────────────────────────────────
+
+// Creators — persistent songwriter/producer/artist/publisher identities
+export const creators = pgTable("creators", {
+  id:          text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  slCreatorId: text("sl_creator_id").unique().notNull(), // SL-CREATOR-xxxxxxxx
+  userId:      text("user_id").references(() => users.id, { onDelete: "set null" }),
+  name:        text("name").notNull(),
+  email:       text("email"),
+  type:        text("type").notNull().default("songwriter"), // songwriter, producer, artist, publisher
+  ipi:         text("ipi"),       // IPI/CAE number
+  pro:         text("pro"),       // PRO affiliation: SOCAN, ASCAP, BMI, SESAC, PRS, etc.
+  isni:        text("isni"),      // International Standard Name Identifier
+  bio:         text("bio"),
+  website:     text("website"),
+  metadata:    jsonb("metadata"), // flexible extra fields
+  createdBy:   text("created_by").references(() => users.id),
+  createdAt:   timestamp("created_at").defaultNow(),
+  updatedAt:   timestamp("updated_at").defaultNow(),
+});
+
+// Organizations — labels, studios, publishers, distributors
+export const organizations = pgTable("organizations", {
+  id:      text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  slOrgId: text("sl_org_id").unique().notNull(), // SL-ORG-xxxxxxxx
+  name:    text("name").notNull(),
+  type:    text("type").notNull().default("label"), // label, studio, publisher, distributor, pro
+  email:   text("email"),
+  website: text("website"),
+  country: text("country"),
+  metadata: jsonb("metadata"),
+  createdBy: text("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Organization members — RBAC: who belongs to which org with what role
+export const organizationMembers = pgTable("organization_members", {
+  id:       text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  orgId:    text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId:   text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role:     text("role").notNull().default("member"), // owner, admin, member, viewer
+  joinedAt: timestamp("joined_at").defaultNow(),
+});
+
+// API keys — per-organization external API access
+export const apiKeys = pgTable("api_keys", {
+  id:          text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  orgId:       text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+  userId:      text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  name:        text("name").notNull(),
+  keyHash:     text("key_hash").notNull().unique(), // store hashed; prefix shown to user
+  keyPrefix:   text("key_prefix").notNull(),        // e.g. "sl_live_xxxx" for display
+  scopes:      text("scopes").array().notNull().default([]), // ["read:songs","write:ownership",...]
+  lastUsedAt:  timestamp("last_used_at"),
+  expiresAt:   timestamp("expires_at"),
+  revokedAt:   timestamp("revoked_at"),
+  createdAt:   timestamp("created_at").defaultNow(),
+});
+
+// Ownership events — immutable append-only event ledger (never update, only insert)
+export const ownershipEvents = pgTable("ownership_events", {
+  id:            text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  songAssetId:   text("song_asset_id").notNull().references(() => songAssets.id, { onDelete: "cascade" }),
+  eventType:     text("event_type").notNull(), // OwnershipCreated | OwnershipUpdated | ContributorAdded | ContributorRemoved | RightsTransferred | ContractSigned
+  actorId:       text("actor_id").references(() => users.id),   // who performed the action
+  actorName:     text("actor_name"),                             // snapshot of actor name
+  previousState: jsonb("previous_state"),                        // full snapshot before
+  newState:      jsonb("new_state"),                             // full snapshot after
+  reason:        text("reason"),                                 // human-readable explanation
+  metadata:      jsonb("metadata"),                              // extra context
+  occurredAt:    timestamp("occurred_at").defaultNow(),          // immutable timestamp
+});
+
+// ─── INSERT SCHEMAS + TYPES ───────────────────────────────────────────────────
+
+export const insertCreatorSchema = createInsertSchema(creators).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertOrganizationMemberSchema = createInsertSchema(organizationMembers).omit({ id: true, joinedAt: true });
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({ id: true, createdAt: true });
+export const insertOwnershipEventSchema = createInsertSchema(ownershipEvents).omit({ id: true, occurredAt: true });
+
+export type Creator = typeof creators.$inferSelect;
+export type InsertCreator = z.infer<typeof insertCreatorSchema>;
+export type Organization = typeof organizations.$inferSelect;
+export type InsertOrganization = z.infer<typeof insertOrganizationSchema>;
+export type OrganizationMember = typeof organizationMembers.$inferSelect;
+export type InsertOrganizationMember = z.infer<typeof insertOrganizationMemberSchema>;
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type OwnershipEvent = typeof ownershipEvents.$inferSelect;
+export type InsertOwnershipEvent = z.infer<typeof insertOwnershipEventSchema>;
 
 // Activity tracking schemas
 export const activityEventSchema = z.object({

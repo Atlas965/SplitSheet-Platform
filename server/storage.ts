@@ -23,6 +23,11 @@ import {
   clients,
   serviceProjects,
   projectContributors,
+  creators,
+  organizations,
+  organizationMembers,
+  apiKeys,
+  ownershipEvents,
   type User,
   type UpsertUser,
   type Contract,
@@ -60,6 +65,16 @@ import {
   type InsertServiceProject,
   type ProjectContributor,
   type InsertProjectContributor,
+  type Creator,
+  type InsertCreator,
+  type Organization,
+  type InsertOrganization,
+  type OrganizationMember,
+  type InsertOrganizationMember,
+  type ApiKey,
+  type InsertApiKey,
+  type OwnershipEvent,
+  type InsertOwnershipEvent,
 } from "@shared/schema";
 
 import { db } from "./db";
@@ -183,6 +198,36 @@ export interface IStorage {
   getContributorByToken(token: string): Promise<ProjectContributor | undefined>;
   confirmContributor(token: string, ip: string): Promise<ProjectContributor>;
   generateConfirmationTokens(projectId: string): Promise<ProjectContributor[]>;
+
+  // Identity Layer — Creators
+  getCreators(operatorId: string): Promise<Creator[]>;
+  getCreator(id: string): Promise<Creator | undefined>;
+  createCreator(data: InsertCreator): Promise<Creator>;
+  updateCreator(id: string, updates: Partial<Creator>): Promise<Creator>;
+  deleteCreator(id: string): Promise<void>;
+
+  // Identity Layer — Organizations
+  getOrganizations(operatorId: string): Promise<Organization[]>;
+  getOrganization(id: string): Promise<Organization | undefined>;
+  createOrganization(data: InsertOrganization): Promise<Organization>;
+  updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization>;
+  deleteOrganization(id: string): Promise<void>;
+
+  // Org Members
+  getOrgMembers(orgId: string): Promise<OrganizationMember[]>;
+  addOrgMember(data: InsertOrganizationMember): Promise<OrganizationMember>;
+  removeOrgMember(orgId: string, userId: string): Promise<void>;
+  updateOrgMemberRole(orgId: string, userId: string, role: string): Promise<OrganizationMember>;
+
+  // API Keys
+  getApiKeys(orgId: string): Promise<ApiKey[]>;
+  createApiKey(data: InsertApiKey): Promise<ApiKey>;
+  revokeApiKey(id: string): Promise<void>;
+  getApiKeyByHash(hash: string): Promise<ApiKey | undefined>;
+
+  // Ownership Events (immutable append-only)
+  appendOwnershipEvent(event: InsertOwnershipEvent): Promise<OwnershipEvent>;
+  getOwnershipEvents(songAssetId: string): Promise<OwnershipEvent[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -306,18 +351,41 @@ export class DatabaseStorage implements IStorage {
   async getNegotiationConversations() { return []; }
   async addNegotiationConversation() { return {}; }
 
-  async createSongAsset() { return {} as any; }
-  async getSongAssets() { return []; }
-  async getSongAsset() { return undefined; }
-  async updateSongAsset() { return {} as any; }
+  async createSongAsset(asset: any) {
+    const [a] = await db.insert(songAssets).values(asset).returning();
+    return a;
+  }
+  async getSongAssets(userId: string) {
+    return db.select().from(songAssets).where(eq(songAssets.createdBy, userId)).orderBy(desc(songAssets.createdAt));
+  }
+  async getSongAsset(id: string) {
+    const [a] = await db.select().from(songAssets).where(eq(songAssets.id, id));
+    return a;
+  }
+  async updateSongAsset(id: string, updates: any) {
+    const [a] = await db.update(songAssets).set({ ...updates, updatedAt: new Date() }).where(eq(songAssets.id, id)).returning();
+    return a;
+  }
 
-  async createOwnershipRecord() { return {} as any; }
-  async getCurrentOwnership() { return []; }
-  async getOwnershipHistory() { return []; }
+  async createOwnershipRecord(record: any) {
+    const [r] = await db.insert(ownershipRecords).values(record).returning();
+    return r;
+  }
+  async getCurrentOwnership(assetId: string) {
+    return db.select().from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId)).orderBy(desc(ownershipRecords.createdAt));
+  }
+  async getOwnershipHistory(assetId: string) {
+    return db.select().from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId)).orderBy(desc(ownershipRecords.createdAt));
+  }
   async updateOwnershipSplit() { return []; }
 
-  async recordRevenueEvent() { return {} as any; }
-  async getRevenueEvents() { return []; }
+  async recordRevenueEvent(event: any) {
+    const [e] = await db.insert(revenueEvents).values(event).returning();
+    return e;
+  }
+  async getRevenueEvents(assetId: string) {
+    return db.select().from(revenueEvents).where(eq(revenueEvents.assetId, assetId)).orderBy(desc(revenueEvents.createdAt));
+  }
   async calculatePayouts() { return []; }
   async executePayouts() { return []; }
 
@@ -334,14 +402,31 @@ export class DatabaseStorage implements IStorage {
   async getReleasesByProjectId() { return []; }
   async updateRelease() { return {} as any; }
 
-  async createRevenueEntry() { return {} as any; }
-  async getRevenueEntriesByProjectId() { return []; }
-  async getRevenueEntriesByReleaseId() { return []; }
+  async createRevenueEntry(entry: any) {
+    const [e] = await db.insert(revenueEntries).values(entry).returning();
+    return e;
+  }
+  async getRevenueEntriesByProjectId(projectId: string) {
+    return db.select().from(revenueEntries).where(eq(revenueEntries.projectId, projectId)).orderBy(desc(revenueEntries.createdAt));
+  }
+  async getRevenueEntriesByReleaseId(releaseId: string) {
+    return db.select().from(revenueEntries).where(eq(revenueEntries.releaseId, releaseId)).orderBy(desc(revenueEntries.createdAt));
+  }
 
-  async createPayout() { return {} as any; }
-  async getPayoutsByProjectId() { return []; }
-  async getPayoutsByContributorId() { return []; }
-  async updatePayoutStatus() { return {} as any; }
+  async createPayout(payout: any) {
+    const [p] = await db.insert(payouts).values(payout).returning();
+    return p;
+  }
+  async getPayoutsByProjectId(projectId: string) {
+    return db.select().from(payouts).where(eq(payouts.projectId, projectId)).orderBy(desc(payouts.createdAt));
+  }
+  async getPayoutsByContributorId(contributorId: string) {
+    return db.select().from(payouts).where(eq(payouts.contributorId, contributorId)).orderBy(desc(payouts.createdAt));
+  }
+  async updatePayoutStatus(id: string, status: string) {
+    const [p] = await db.update(payouts).set({ status }).where(eq(payouts.id, id)).returning();
+    return p;
+  }
 
   // ── getAnalyticsData ────────────────────────────────────────────────────────
   async getAnalyticsData(userId?: string): Promise<any> {
@@ -478,6 +563,87 @@ export class DatabaseStorage implements IStorage {
     }
     await this.updateServiceProject(projectId, { status: "pending_confirmation" });
     return updated;
+  }
+
+  // ── Identity Layer — Creators ────────────────────────────────────────────────
+  async getCreators(operatorId: string): Promise<Creator[]> {
+    return db.select().from(creators).where(eq(creators.createdBy, operatorId)).orderBy(desc(creators.createdAt));
+  }
+  async getCreator(id: string): Promise<Creator | undefined> {
+    const [c] = await db.select().from(creators).where(eq(creators.id, id));
+    return c;
+  }
+  async createCreator(data: InsertCreator): Promise<Creator> {
+    const [c] = await db.insert(creators).values(data).returning();
+    return c;
+  }
+  async updateCreator(id: string, updates: Partial<Creator>): Promise<Creator> {
+    const [c] = await db.update(creators).set({ ...updates, updatedAt: new Date() }).where(eq(creators.id, id)).returning();
+    return c;
+  }
+  async deleteCreator(id: string): Promise<void> {
+    await db.delete(creators).where(eq(creators.id, id));
+  }
+
+  // ── Identity Layer — Organizations ───────────────────────────────────────────
+  async getOrganizations(operatorId: string): Promise<Organization[]> {
+    return db.select().from(organizations).where(eq(organizations.createdBy, operatorId)).orderBy(desc(organizations.createdAt));
+  }
+  async getOrganization(id: string): Promise<Organization | undefined> {
+    const [o] = await db.select().from(organizations).where(eq(organizations.id, id));
+    return o;
+  }
+  async createOrganization(data: InsertOrganization): Promise<Organization> {
+    const [o] = await db.insert(organizations).values(data).returning();
+    return o;
+  }
+  async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization> {
+    const [o] = await db.update(organizations).set({ ...updates, updatedAt: new Date() }).where(eq(organizations.id, id)).returning();
+    return o;
+  }
+  async deleteOrganization(id: string): Promise<void> {
+    await db.delete(organizations).where(eq(organizations.id, id));
+  }
+
+  // ── Org Members ──────────────────────────────────────────────────────────────
+  async getOrgMembers(orgId: string): Promise<OrganizationMember[]> {
+    return db.select().from(organizationMembers).where(eq(organizationMembers.orgId, orgId));
+  }
+  async addOrgMember(data: InsertOrganizationMember): Promise<OrganizationMember> {
+    const [m] = await db.insert(organizationMembers).values(data).returning();
+    return m;
+  }
+  async removeOrgMember(orgId: string, userId: string): Promise<void> {
+    await db.delete(organizationMembers).where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId)));
+  }
+  async updateOrgMemberRole(orgId: string, userId: string, role: string): Promise<OrganizationMember> {
+    const [m] = await db.update(organizationMembers).set({ role }).where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, userId))).returning();
+    return m;
+  }
+
+  // ── API Keys ─────────────────────────────────────────────────────────────────
+  async getApiKeys(orgId: string): Promise<ApiKey[]> {
+    return db.select().from(apiKeys).where(eq(apiKeys.orgId, orgId)).orderBy(desc(apiKeys.createdAt));
+  }
+  async createApiKey(data: InsertApiKey): Promise<ApiKey> {
+    const [k] = await db.insert(apiKeys).values(data).returning();
+    return k;
+  }
+  async revokeApiKey(id: string): Promise<void> {
+    await db.update(apiKeys).set({ revokedAt: new Date() }).where(eq(apiKeys.id, id));
+  }
+  async getApiKeyByHash(hash: string): Promise<ApiKey | undefined> {
+    const [k] = await db.select().from(apiKeys).where(eq(apiKeys.keyHash, hash));
+    return k;
+  }
+
+  // ── Ownership Events (immutable append-only) ─────────────────────────────────
+  async appendOwnershipEvent(event: InsertOwnershipEvent): Promise<OwnershipEvent> {
+    const [e] = await db.insert(ownershipEvents).values(event).returning();
+    return e;
+  }
+  async getOwnershipEvents(songAssetId: string): Promise<OwnershipEvent[]> {
+    return db.select().from(ownershipEvents).where(eq(ownershipEvents.songAssetId, songAssetId)).orderBy(desc(ownershipEvents.occurredAt));
   }
 }
 

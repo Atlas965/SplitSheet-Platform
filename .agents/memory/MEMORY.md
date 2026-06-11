@@ -1,0 +1,4 @@
+- [Identity Layer Tables](identity-layer.md) — creators/organizations/org_members/api_keys/ownership_events tables: how they're structured and the immutable-append-only rule for ownership_events.
+- [SL ID Generation](sl-ids.md) — SL-CREATOR/SL-ORG/SL-SONG IDs generated server-side with Math.random().toString(36).slice(2,10).toUpperCase(); never in frontend.
+- [API Key Security Pattern](api-key-security.md) — raw key returned once on POST, only SHA-256 hash stored in DB; keyPrefix shown in UI for identification.
+- [DatabaseStorage Stubs](storage-stubs.md) — Many DatabaseStorage methods were stubs returning {} or []; when adding routes that use them, always implement real DB queries first.

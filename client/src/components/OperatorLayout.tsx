@@ -11,14 +11,17 @@ import {
 import {
   LayoutDashboard, Users, FolderOpen, FileText, BookOpen,
   ChevronDown, LogOut, User, CreditCard, Menu, X,
+  Mic2, Building2,
 } from "lucide-react";
 
 const NAV = [
-  { href: "/",         label: "Dashboard",        icon: LayoutDashboard },
-  { href: "/clients",  label: "Clients",           icon: Users },
-  { href: "/projects", label: "Projects",          icon: FolderOpen, badge: "New" },
-  { href: "/contracts",label: "Music Agreements",  icon: FileText },
-  { href: "/ownership",label: "Rights Ledger",     icon: BookOpen },
+  { href: "/",              label: "Dashboard",       icon: LayoutDashboard },
+  { href: "/clients",       label: "Clients",         icon: Users },
+  { href: "/projects",      label: "Projects",        icon: FolderOpen },
+  { href: "/creators",      label: "Creator Registry",icon: Mic2 },
+  { href: "/organizations", label: "Organizations",   icon: Building2 },
+  { href: "/contracts",     label: "Music Agreements",icon: FileText },
+  { href: "/ownership",     label: "Rights Ledger",   icon: BookOpen },
 ];
 
 export default function OperatorLayout({ children }: { children: React.ReactNode }) {

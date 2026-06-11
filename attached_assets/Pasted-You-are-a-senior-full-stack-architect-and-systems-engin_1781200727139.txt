@@ -1,0 +1,216 @@
+You are a senior full-stack architect and systems engineer. Build a production-grade SaaS platform called SoundLedger Technologies Inc. — a Music Rights Infrastructure System (not a simple split sheet app).
+
+1. Core Mission
+
+SoundLedger is the system of record for music ownership and rights. It tracks:
+
+* Who created music
+* Who owns what percentage
+* How rights change over time
+* How agreements are signed
+* How royalties flow
+
+It must function as:
+
+* Rights registry
+* Contract system
+* Ownership ledger
+* Royalty tracking system
+* Metadata vault
+* API-first infrastructure platform
+
+2. System Philosophy
+
+* Everything is event-driven and auditable
+* Nothing is overwritten; everything is versioned
+* Every song and creator has a permanent ID
+* Platform is multi-tenant (operators, studios, labels)
+* Contributor access is link-based (no required accounts for external users)
+
+3. Core Modules (MUST IMPLEMENT ALL)
+
+A. Identity Layer
+
+Create persistent entities:
+
+* Creator (songwriter, producer, artist, publisher)
+* Organization (label, studio, publisher)
+    Each gets:
+* Permanent SoundLedger ID (SL-CREATOR, SL-ORG)
+* Metadata profile
+* External identifiers (IPI/CAE, PRO affiliation)
+
+B. Song Registry Layer
+
+* Song asset creation
+* Permanent Song ID (SL-SONG)
+* Metadata: title, contributors, ISRC, ISWC, lyrics, files
+* Link songs to creators and organizations
+
+C. Rights & Ownership Ledger (CORE ENGINE)
+
+Implement immutable event system:
+
+* OwnershipCreated
+* OwnershipUpdated
+* ContributorAdded
+* ContributorRemoved
+* RightsTransferred
+* ContractSigned
+
+Each event must store:
+
+* timestamp
+* actor
+* previous state
+* new state
+* reason
+
+Never overwrite ownership data—append events only.
+
+D. Split Sheet System (ENTRY PRODUCT)
+
+* Create project
+* Add contributors
+* Assign ownership %
+* Validate total = 100%
+* Generate confirmation links
+* Contributor confirms via token link (no login)
+* Auto-transition project:
+    draft → pending_confirmation → confirmed
+
+E. Contract System
+
+* Contract templates (split sheet, producer agreement, publishing agreement)
+* Dynamic contract generator
+* E-sign via token links
+* Signature tracking
+* Contract versioning
+
+F. Royalty Engine (FOUNDATION ONLY)
+
+Implement:
+
+* Revenue event ingestion model
+* Ownership-based split calculation
+* Payout records
+* Balance tracking per creator
+    Do NOT integrate external DSP APIs yet—use mock ingestion layer.
+
+G. Metadata Vault
+
+Store all song-related data:
+
+* Lyrics
+* Credits
+* ISRC / ISWC placeholders
+* Files
+* Contract documents
+    Everything linked to SL-SONG-ID.
+
+H. Rights Ledger UI
+
+Build dashboard:
+
+* Active songs
+* Ownership history timeline
+* Revenue breakdown
+* Contributor list
+* Event log viewer
+
+I. API-FIRST DESIGN
+
+Expose REST API for:
+
+* creators
+* songs
+* ownership events
+* contracts
+* revenue events
+
+Design it so external systems can integrate later (labels, PROs, distributors).
+
+J. Enterprise Readiness Layer
+
+Implement:
+
+* Multi-tenant architecture
+* Role-based access control (RBAC)
+* Organization workspaces
+* Audit logs
+* API keys per organization
+
+4. Data Architecture Requirements
+
+Use PostgreSQL with:
+
+* normalized tables for entities
+* event table for ownership history
+* JSONB for flexible metadata
+* strict foreign key relationships
+
+Mandatory tables:
+
+* users
+* organizations
+* creators
+* songs
+* ownership_events
+* contracts
+* contract_signatures
+* revenue_events
+* payout_records
+
+5. Critical Rules
+
+* No destructive updates to ownership (append-only ledger)
+* Every action must be auditable
+* Every song and creator must have a global unique ID
+* External users (contributors) use token-based access only
+* System must support future integrations with PROs and distributors
+
+6. Architecture Stack (Suggested)
+
+Frontend:
+
+* React + TypeScript
+* Tailwind + component library
+* TanStack Query
+
+Backend:
+
+* Node.js + Express (or NestJS preferred)
+* REST API architecture
+
+Database:
+
+* PostgreSQL
+* Drizzle ORM or Prisma
+
+Auth:
+
+* Session-based + OAuth for operators
+* Token-based access for contributors
+
+7. Future Expansion Hooks (DO NOT BUILD YET, BUT DESIGN FOR)
+
+* PRO integrations (SOCAN, ASCAP, BMI, SESAC)
+* The MLC integration
+* DSP ingestion (Spotify, Apple Music, YouTube)
+* Royalty advances / financing layer
+* Catalog valuation engine
+* Marketplace for rights trading
+
+8. Output Expectations
+
+Generate:
+
+* Full backend architecture
+* Database schema
+* API routes
+* Frontend dashboard UI
+* Event-driven ledger system
+* Token-based confirmation system
+* Minimal working MVP first, then scale system design
+
+Start by designing the system architecture, then implement step-by-step in modular services.
