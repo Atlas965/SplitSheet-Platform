@@ -1,6 +1,6 @@
 # SplitSheet — Music Agreement & Rights Management Platform
 
-> Built by **SoundLedger Technologies** · Canadian copyright principles · Operator-managed service model
+> Built by **SoundLedger Technologies inc ** · Canadian copyright principles · Operator-managed service model
 
 SplitSheet is a full-stack music industry platform that combines split sheet management, contributor confirmation workflows, rights ledger tracking, and document generation into one operator-controlled system. It is designed for music service providers (producers, studios, publishers) who manage agreements on behalf of their clients — not as a self-serve product for end users.
 
@@ -654,4 +654,4 @@ SplitSheet is a **workflow and documentation platform**, not a law firm or legal
 
 ---
 
-*SplitSheet · SoundLedger Technologies · Built in Canada*
+*SplitSheet · SoundLedger Technologies inc · Built in Canada*
