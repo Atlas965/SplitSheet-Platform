@@ -11,8 +11,10 @@ import {
 import {
   LayoutDashboard, Users, FolderOpen, FileText, BookOpen,
   ChevronDown, LogOut, User, CreditCard, Menu, X,
-  Mic2, Building2,
+  Mic2, Building2, HelpCircle,
 } from "lucide-react";
+import CoPilot from "@/components/CoPilot";
+import OnboardingWalkthrough, { resetOnboarding } from "@/components/OnboardingWalkthrough";
 
 const NAV = [
   { href: "/",              label: "Dashboard",       icon: LayoutDashboard },
@@ -85,6 +87,12 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
               <Link href="/billing" className="flex items-center cursor-pointer"><CreditCard className="mr-2 h-4 w-4" /> Billing</Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onClick={() => resetOnboarding()}>
+              <HelpCircle className="mr-2 h-4 w-4" /> Restart Walkthrough
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive focus:text-destructive cursor-pointer"
               onClick={() => { window.location.href = "/api/logout"; }}>
               <LogOut className="mr-2 h-4 w-4" /> Sign out
@@ -96,6 +104,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
   );
 
   return (
+    <>
     <div className="min-h-screen bg-background flex">
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-56 shrink-0 border-r border-border bg-card">
@@ -130,5 +139,12 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
         </main>
       </div>
     </div>
+
+    {/* SoundLedger Co-Pilot — floating AI assistant */}
+    <CoPilot />
+
+    {/* First-run onboarding walkthrough */}
+    <OnboardingWalkthrough />
+    </>
   );
 }
