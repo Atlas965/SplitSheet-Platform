@@ -428,49 +428,36 @@ export default function Landing() {
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">📦 Transaction Layer — Pay Per Project</p>
           </div>
 
-          {/* 3-column transaction plans */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto mb-6">
+          {/* 2-column transaction plans */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-6">
 
             {/* Free */}
             <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎵 Starter Access</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎵 Free</p>
               <div className="text-4xl font-bold text-primary mb-1">$0</div>
               <p className="text-muted-foreground text-sm mb-4">No credit card · no time limit</p>
               <ul className="space-y-2 mb-8 flex-1">
-                {["1 collaboration project","Up to 2 contributors","Basic split allocation","Contributor confirmation links","Timestamped agreement summary","PDF export"].map(f => (
+                {["1 project","Up to 2 contributors","Basic splits","PDF export"].map(f => (
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
               <a href="/api/login" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Start Free</a>
             </div>
 
-            {/* Pay-Per-Session $25 */}
+            {/* Pay Per Project $29 */}
             <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col">
               <div className="absolute -top-4 left-1/2 -translate-x-1/2">
                 <span className="bg-accent text-accent-foreground px-4 py-1 rounded-full text-sm font-semibold whitespace-nowrap">Most Popular</span>
               </div>
-              <p className="text-xs font-semibold text-accent uppercase tracking-wider mb-3">🎛 Pay-Per-Session</p>
-              <div className="text-4xl font-bold text-primary mb-1">$25 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
-              <p className="text-sm font-medium text-accent mb-4">Per completed session</p>
+              <p className="text-xs font-semibold text-accent uppercase tracking-wider mb-3">📁 Pay Per Project</p>
+              <div className="text-4xl font-bold text-primary mb-1">$29 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
+              <p className="text-sm font-medium text-accent mb-4">Per project · pay as you go</p>
               <ul className="space-y-2 mb-8 flex-1">
-                {["Up to 5 contributors","Split percentage configuration","Contributor verification workflow","Agreement completion tracking","PDF export package","Audit log storage","Email confirmations"].map(f => (
+                {["Up to 10 contributors","Unlimited revisions until finalized","Audit log","Email confirmations","PDF export package","Cloud storage"].map(f => (
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
-              <a href="/api/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Session →</a>
-            </div>
-
-            {/* Multi-Creator $50–75 */}
-            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎚 Multi-Creator Project</p>
-              <div className="text-4xl font-bold text-primary mb-1">$50–$75 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
-              <p className="text-muted-foreground text-sm mb-4">Per project · complexity-based</p>
-              <ul className="space-y-2 mb-8 flex-1">
-                {["Up to 10 contributors","Multi-round revisions","Enhanced audit history","Contributor reminders system","Project dashboard","Priority processing option","Full exportable records"].map(f => (
-                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
-                ))}
-              </ul>
-              <a href="mailto:hello@splitsheet.ca?subject=Multi-Creator Project" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Get a Quote →</a>
+              <a href="/api/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Project →</a>
             </div>
           </div>
 
@@ -496,28 +483,28 @@ export default function Landing() {
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🔁 Subscription Layer — Recurring SaaS Revenue</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto mb-10">
-            {/* Creator Pro $15/mo */}
+            {/* Creator Pro $19/mo */}
             <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎼 Creator Pro</p>
-              <div className="text-4xl font-bold text-primary mb-1">$15 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
+              <div className="text-4xl font-bold text-primary mb-1">$19 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
               <p className="text-muted-foreground text-sm mb-4">For active independent creators</p>
               <ul className="space-y-2 mb-8 flex-1">
-                {["Unlimited sessions (replaces per-session fees)","Project history storage","Saved contributor profiles","Collaboration analytics","Workflow automation tools","Discounted premium exports"].map(f => (
+                {["Unlimited projects","Unlimited contributors","AI Assistant enabled","Saved contributor profiles","Templates","Analytics dashboard","Priority support","Discounted exports"].map(f => (
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
               <a href="/api/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
             </div>
-            {/* Studio Pro $49/mo */}
+            {/* Studio Pro $59/mo */}
             <div className="bg-card p-8 rounded-xl border-2 border-primary/40 flex flex-col relative">
               <div className="absolute -top-3.5 right-5">
                 <span className="bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full">Studio &amp; Teams</span>
               </div>
               <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-3">🎧 Studio Pro</p>
-              <div className="text-4xl font-bold text-primary mb-1">$49 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
+              <div className="text-4xl font-bold text-primary mb-1">$59 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
               <p className="text-muted-foreground text-sm mb-4">For studios, teams, and small labels</p>
               <ul className="space-y-2 mb-8 flex-1">
-                {["Unlimited projects and contributors","Team management dashboard","Role-based permissions","Advanced audit logs","Bulk exports","Organization-level analytics","Priority support"].map(f => (
+                {["Everything in Creator Pro","Team workspaces","Role-based permissions","Organization dashboard","Bulk exports","Advanced audit logs","API access (starter)","Priority support"].map(f => (
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>

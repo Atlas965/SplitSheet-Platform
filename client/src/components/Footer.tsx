@@ -135,7 +135,7 @@ function TermsContent() {
           marginBottom: "16px",
         }}
       >
-        SplitSheet Inc. – SplitSheet Product · Governing Law: Ontario, Canada
+        SoundLedger Technologies Inc. – SplitSheet Product · Governing Law: Ontario, Canada
       </p>
 
       <Section title="1. Acceptance of Terms">
@@ -260,7 +260,7 @@ function PrivacyContent() {
           marginBottom: "16px",
         }}
       >
-        SplitSheet Inc. – SplitSheet Product · GDPR & Canadian Privacy Law
+        SoundLedger Technologies Inc. – SplitSheet Product · GDPR & Canadian Privacy Law
         Aligned
       </p>
 
@@ -353,7 +353,7 @@ function SplitTemplateContent() {
           marginBottom: "16px",
         }}
       >
-        SplitSheet Inc. · Standard Split Agreement Template · Ontario, Canada
+        SoundLedger Technologies Inc. · Standard Split Agreement Template · Ontario, Canada
       </p>
 
       <div
@@ -447,7 +447,7 @@ function SplitTemplateContent() {
       <Section title="Intellectual Property">
         <P>
           All SplitSheet content, logos, and templates are exclusive property of{" "}
-          <strong>SplitSheet Inc.</strong>
+          <strong>SoundLedger Technologies Inc.</strong>
         </P>
       </Section>
 
@@ -622,7 +622,7 @@ export default function Footer() {
             }}
           >
             <p style={{ fontSize: "12px", color: "var(--muted-foreground)" }}>
-              © {year} SplitSheet Inc. All rights reserved.
+              © {year} SoundLedger Technologies Inc. All rights reserved.
             </p>
 
             {/* Compliance badges */}

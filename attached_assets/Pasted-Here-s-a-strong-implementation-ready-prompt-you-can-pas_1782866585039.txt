@@ -1,0 +1,237 @@
+Here’s a strong implementation-ready prompt you can paste into your dev AI (Claude, Cursor, Replit, etc.) to build this pricing system cleanly:
+
+⸻
+
+🔧 PROMPT: Implement SplitSheet Pricing & Billing System
+
+You are a senior full-stack engineer building the pricing and billing system for SplitSheet by SoundLedger Technologies Inc.
+
+🎯 Objective
+
+Implement a simple, non-confusing pricing structure with a clear customer journey:
+
+* Free tier
+* Pay-per-project tier
+* Subscription tiers (Creator Pro, Studio Pro)
+* Enterprise tier (custom)
+* Optional add-ons (Express Processing, Premium Document Package)
+
+The system must be easy to understand, easy to purchase, and scalable for SaaS growth.
+
+⸻
+
+🧱 Pricing Structure (Source of Truth)
+
+1. FREE
+
+* $0
+* 1 project
+* Up to 2 contributors
+* Basic splits
+* PDF export
+
+⸻
+
+2. PAY PER PROJECT
+
+* $29 CAD per project
+* Up to 10 contributors
+* Unlimited revisions until finalized
+* Audit log
+* Email confirmations
+* PDF export package
+* Cloud storage
+
+Add-on:
+
+* Express Processing: +$25 per project
+
+⸻
+
+3. CREATOR PRO (Subscription)
+
+* $19 CAD/month
+* Unlimited projects
+* Unlimited contributors
+* AI Assistant enabled
+* Saved contributor profiles
+* Templates
+* Analytics dashboard
+* Priority support
+* Discounted exports
+
+⸻
+
+4. STUDIO PRO (Subscription)
+
+* $59 CAD/month
+* Everything in Creator Pro
+* Team workspaces
+* Role-based permissions
+* Organization dashboard
+* Bulk exports
+* Advanced audit logs
+* API access (starter)
+* Priority support
+
+⸻
+
+5. ENTERPRISE
+
+* Custom pricing
+* White-label option
+* Full API access
+* SLA support
+* Dedicated onboarding
+* Compliance & reporting tools
+* Large-scale integrations (labels, publishers, PROs/CMOs)
+
+⸻
+
+⚙️ Functional Requirements
+
+1. Pricing Engine
+
+Build a pricing engine that:
+
+* Determines user eligibility for each plan
+* Prevents overlap confusion (user can only “use one model at a time” per project)
+* Handles upgrades/downgrades cleanly
+
+⸻
+
+2. Checkout Flow
+
+Implement 3 clear flows:
+
+A. Free → Paid Project
+
+* User starts free project
+* Prompt upgrade when exceeding limits
+
+B. Pay-Per-Project Checkout
+
+* One-time payment per project
+* Optional add-on toggle (Express Processing)
+
+C. Subscription Checkout
+
+* Monthly billing cycle
+* Stripe or equivalent integration
+* Auto-renewal + cancellation support
+
+⸻
+
+3. Add-ons System
+
+* Add-ons must be modular
+* Can attach to:
+    * Pay-per-project purchases
+* Must be optional toggles at checkout
+
+⸻
+
+4. User Experience Rules
+
+* NEVER show all pricing options at once
+* Show only context-relevant option
+    * New users → Free + Pay-per-project
+    * Returning users → Subscription upsell
+    * Teams → Studio Pro first
+* Keep UI minimal and guided
+
+⸻
+
+5. Data Models (Required)
+
+Create models for:
+
+* User
+* Organization (Studio Pro + Enterprise)
+* Project
+* Subscription
+* One-time Project Purchase
+* Add-on Purchase
+* Invoice
+* Usage limits tracker
+
+⸻
+
+6. Billing Logic Rules
+
+* Creator Pro overrides Pay-per-project fees (no double charging)
+* Studio Pro includes Creator Pro features
+* Free tier has hard limits
+* Enterprise bypasses all limits
+* Add-ons are always separate line items
+
+⸻
+
+7. Stripe Integration (or equivalent)
+
+* Support:
+    * One-time payments
+    * Monthly subscriptions
+    * Webhooks for payment success/failure
+* Store billing history per user/org
+
+⸻
+
+8. Analytics Tracking
+
+Track:
+
+* Conversion from Free → Paid
+* Pay-per-project usage rate
+* Subscription upgrades
+* Add-on usage
+* Churn rate
+
+⸻
+
+🎨 UX REQUIREMENTS
+
+Build pricing UI as:
+
+* Clean tier cards (not a table)
+* One primary CTA per tier
+* Progressive disclosure (don’t overwhelm users)
+* Emphasize “best for you” labels:
+    * Occasional creator → Pay Per Project
+    * Active creator → Creator Pro
+    * Studio → Studio Pro
+
+⸻
+
+🧠 Key Product Philosophy
+
+* Simplicity over options
+* One decision at a time
+* Prevent pricing confusion entirely
+* Optimize for conversion, not feature listing
+* Pricing must scale from indie artists → enterprise rights organizations
+
+⸻
+
+🚀 Output Required
+
+Deliver:
+
+1. Database schema
+2. API endpoints
+3. Pricing engine logic
+4. Stripe integration flow
+5. UI structure for pricing page
+6. Upgrade/downgrade flows
+7. Add-on system implementation
+
+⸻
+
+If anything is unclear, make the simplest assumption that reduces user confusion and improves conversion.
+
+⸻
+
+If you want, I can also next:
+
+* Turn this into a Stripe product configuration plan
+* Or design your actual pricing page UI layout (high conversion SaaS style)
