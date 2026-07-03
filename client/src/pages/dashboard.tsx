@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen } from "lucide-react";
+import CopilotChatbot from "@/components/CopilotChatbot";
 
 interface DashboardStats {
   totalContracts: number;
@@ -320,6 +321,9 @@ export default function Dashboard() {
           {/* Quick Actions */}
           <div className="bg-card p-6 rounded-xl border border-border">
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
+            <div className="mt-8">
+              <CopilotChatbot />
+            </div>
             <div className="space-y-3">
               <Button asChild className="w-full justify-start space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90" data-testid="button-create-contract">
                 <Link href="/templates">
