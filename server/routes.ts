@@ -1709,25 +1709,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch earnings" });
     }
   });
-  // routes/assets.ts
-  app.put("/api/assets/:id/ownership", async (req, res) => {
-    const { id } = req.params;
-    const { splits } = req.body;
+  // ─── SOUNDLEDGER CO-PILOT (AI ASSISTANT) ────────────────────────────────────
 
-    const total = splits.reduce((sum, s) => sum + s.percent, 0);
-    if (total !== 100) {
-      return res.status(400).json({ error: "Must equal 100%" });
+  const COPILOT_SYSTEM_PROMPT = `You are SoundLedger Co-Pilot, the built-in AI assistant embedded directly inside the SplitSheet platform, built and operated by SoundLedger Technologies Inc.
+
+CRITICAL GROUNDING RULES:
+- Only answer using the factual information about SplitSheet given below. Never invent features, prices, page names, or workflows that are not listed here.
+- If you don't know something or it isn't covered below, say so plainly and suggest the user contact support or check the relevant page — never guess or make something up.
+- Keep answers concise, practical, and step-by-step when explaining how to do something in the app.
+- You are speaking to the operator (the person running SplitSheet as their service business), not an end customer signing a contract.
+
+WHAT SPLITSHEET IS:
+SplitSheet is an operator-run music rights and contract management console. The operator (a service provider, admin, or studio) uses it to manage their own clients, run split-sheet projects, generate legally-informed music contracts, and track song ownership — it is not a self-serve tool for the artists themselves.
+
+MAIN AREAS (left sidebar):
+- Dashboard — command-center overview: client count, active projects, pending confirmations, confirmed projects, recent activity, quick actions.
+- Clients — the artists, producers, songwriters, and labels the operator works with (derived from contract collaborators). Search, view contact info, and see contract history per client.
+- Projects — the pipeline of song/contract projects with status (Draft, Pending, Signed/Confirmed), search, and split visualizations.
+- Creator Registry / Organizations — directory of individual creators and organizations in the system.
+- Music Agreements (Contracts) — create, edit, and manage contracts: split sheets, performance agreements, producer agreements, and management agreements. Lawyer-informed templates with customizable fields, e-signatures, and PDF export.
+- Rights Ledger (Ownership) — the cap table for songs: ownership percentages, ISWC/ISRC identifiers, revenue by source, activity log, archive/restore/deactivate a song asset.
+
+CORE WORKFLOWS:
+- Creating a contract: go to Music Agreements → choose a template (split sheet, performance, producer, management) → fill in fields → add collaborators with their ownership percentage (must total 100%) → save → send for signature.
+- Split sheet confirmations: contributors can review and confirm their ownership share via a link, without needing to log in — confirmations are timestamped and IP-logged for legal record.
+- Managing song assets: in the Rights Ledger, an operator can add a song asset with title, ISWC, type, and ownership splits; assets can be archived, restored, deactivated, or (if still a draft) deleted, with all actions logged in the activity log.
+
+PRICING (for reference only, do not push sales):
+- Free — $0
+- Pay Per Project — $29 CAD per project
+- Creator Pro — $19/month
+- Studio Pro — $59/month
+- Enterprise — custom pricing
+
+ACCOUNT & BILLING:
+- Billing and subscription management live under the user menu (bottom of sidebar) → Billing, not in the main navigation, since this is an operator tool rather than a self-serve subscription product.
+- Authentication is handled via Replit sign-in.
+
+TONE: Professional, direct, and helpful — like a knowledgeable colleague, not a sales bot. Never use hype language or fabricate testimonials/statistics.`;
+
+  app.post('/api/copilot', isAuthenticated, async (req: any, res) => {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({ message: "Co-Pilot is not configured. Missing OpenAI API key." });
     }
 
-    const newVersion = {
-      assetId: id,
-      splits,
-      createdAt: new Date(),
-    };
+    const { messages } = req.body;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ message: "messages array is required" });
+    }
 
-    await db.ownershipVersions.insert(newVersion);
+    const trimmedHistory = messages.slice(-12).map((m: any) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content ?? "").slice(0, 2000),
+    }));
 
-    res.json({ success: true });
+    try {
+      const response = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        messages: [
+          { role: "system", content: COPILOT_SYSTEM_PROMPT },
+          ...trimmedHistory,
+        ],
+        max_tokens: 650,
+        temperature: 0.3,
+      });
+
+      const reply = response.choices[0]?.message?.content?.trim()
+        || "I'm not sure how to answer that yet — could you rephrase your question?";
+
+      res.json({ reply });
+    } catch (error) {
+      console.error("Co-Pilot error:", error);
+      res.status(500).json({ message: "Co-Pilot ran into an issue. Please try again." });
+    }
   });
 
   const httpServer = createServer(app);

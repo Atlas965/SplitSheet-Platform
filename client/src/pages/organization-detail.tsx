@@ -3,7 +3,6 @@ import { useParams, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import OperatorLayout from "@/components/OperatorLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -86,19 +85,19 @@ export default function OrganizationDetail() {
   };
 
   if (isLoading) return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-4xl mx-auto animate-pulse space-y-4">
         <div className="h-6 bg-muted rounded w-1/4" /><div className="h-40 bg-muted rounded" />
       </div>
-    </OperatorLayout>
+    </>
   );
 
-  if (!org) return <OperatorLayout><div className="p-6 text-center text-muted-foreground">Organization not found.</div></OperatorLayout>;
+  if (!org) return <><div className="p-6 text-center text-muted-foreground">Organization not found.</div></>;
 
   const activeKeys = apiKeys.filter((k: any) => !k.revokedAt);
 
   return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-4xl mx-auto">
         <Link href="/organizations">
           <button className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-5 transition-colors" data-testid="button-back-orgs">
@@ -269,6 +268,6 @@ export default function OrganizationDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </OperatorLayout>
+    </>
   );
 }

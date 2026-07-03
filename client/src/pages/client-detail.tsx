@@ -4,7 +4,6 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import OperatorLayout from "@/components/OperatorLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,24 +77,24 @@ export default function ClientDetail() {
   });
 
   if (isLoading || clientLoading) return (
-    <OperatorLayout>
+    <>
       <div className="flex justify-center py-24">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
       </div>
-    </OperatorLayout>
+    </>
   );
 
   if (!client) return (
-    <OperatorLayout>
+    <>
       <div className="p-8 text-center text-muted-foreground">Client not found.</div>
-    </OperatorLayout>
+    </>
   );
 
   const activeProjects  = projects.filter(p => p.status !== "archived");
   const confirmedProjects = projects.filter(p => p.status === "confirmed");
 
   return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-4xl mx-auto">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-5">
@@ -222,6 +221,6 @@ export default function ClientDetail() {
           </div>
         </DialogContent>
       </Dialog>
-    </OperatorLayout>
+    </>
   );
 }

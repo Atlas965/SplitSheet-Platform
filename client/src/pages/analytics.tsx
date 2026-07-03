@@ -3,7 +3,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Link } from "wouter";
-import Logo from "@/components/Logo";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { TrendingUp, Users, UserCheck, MessageSquare, Activity, BarChart3 } from "lucide-react";
 import { activityTracker } from "@/lib/activityTracker";
@@ -52,16 +51,6 @@ export default function Analytics() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <nav className="bg-card border-b border-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-3">
-                <Logo />
-                <span className="text-xl font-bold text-primary">SplitSheet</span>
-              </div>
-            </div>
-          </div>
-        </nav>
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="animate-pulse space-y-4">
             <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded w-48"></div>
@@ -74,53 +63,7 @@ export default function Analytics() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Logo />
-              <span className="text-xl font-bold text-primary">SplitSheet</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground">
-                <i className="fas fa-bell"></i>
-              </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Dashboard Tabs */}
-        <div className="mb-8">
-          <div className="border-b border-border">
-            <nav className="-mb-px flex space-x-8">
-              <Link href="/" className="nav-item" data-testid="tab-overview">
-                <i className="fas fa-home mr-2"></i>Overview
-              </Link>
-              <Link href="/contracts" className="nav-item" data-testid="tab-contracts">
-                <i className="fas fa-file-contract mr-2"></i>Contracts
-              </Link>
-              <Link href="/profile" className="nav-item" data-testid="tab-profile">
-                <i className="fas fa-user mr-2"></i>Profile
-              </Link>
-              <Link href="/analytics" className="nav-item nav-active" data-testid="tab-analytics">
-                <i className="fas fa-chart-bar mr-2"></i>Analytics
-              </Link>
-              <Link href="/templates" className="nav-item" data-testid="tab-templates">
-                <i className="fas fa-layer-group mr-2"></i>Templates
-              </Link>
-              <Link href="/billing" className="nav-item" data-testid="tab-billing">
-                <i className="fas fa-credit-card mr-2"></i>Billing
-              </Link>
-            </nav>
-          </div>
-        </div>
-
         <div className="mb-6">
           <div className="flex items-center justify-between">
             <div>

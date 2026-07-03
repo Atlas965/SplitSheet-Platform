@@ -3,7 +3,6 @@ import { useParams, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import OperatorLayout from "@/components/OperatorLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -78,24 +77,24 @@ export default function CreatorDetail() {
   };
 
   if (isLoading) return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-3xl mx-auto">
         <div className="animate-pulse space-y-4">
           <div className="h-6 bg-muted rounded w-1/4" />
           <div className="h-32 bg-muted rounded" />
         </div>
       </div>
-    </OperatorLayout>
+    </>
   );
 
   if (!creator) return (
-    <OperatorLayout>
+    <>
       <div className="p-6 text-center text-muted-foreground">Creator not found.</div>
-    </OperatorLayout>
+    </>
   );
 
   return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-3xl mx-auto">
         <Link href="/creators">
           <button className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-5 transition-colors" data-testid="button-back-creators">
@@ -247,7 +246,7 @@ export default function CreatorDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </OperatorLayout>
+    </>
   );
 }
 

@@ -3,7 +3,6 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import OperatorLayout from "@/components/OperatorLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -77,7 +76,7 @@ export default function Organizations() {
   });
 
   return (
-    <OperatorLayout>
+    <>
       <div className="p-6 max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -223,6 +222,6 @@ export default function Organizations() {
           </Form>
         </DialogContent>
       </Dialog>
-    </OperatorLayout>
+    </>
   );
 }

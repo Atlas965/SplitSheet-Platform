@@ -6,7 +6,6 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
-import Logo from "@/components/Logo";
 import SignatureCanvas, { type SignaturePayload } from "@/components/SignatureCanvas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -535,16 +534,6 @@ export default function ContractDetails() {
   if (contractLoading) {
     return (
       <div className="min-h-screen bg-background">
-        <nav className="bg-card border-b border-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-3">
-                <Logo />
-                <span className="text-xl font-bold text-primary">SplitSheet</span>
-              </div>
-            </div>
-          </div>
-        </nav>
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
         </div>
@@ -555,16 +544,6 @@ export default function ContractDetails() {
   if (!contract) {
     return (
       <div className="min-h-screen bg-background">
-        <nav className="bg-card border-b border-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-3">
-                <Logo />
-                <span className="text-xl font-bold text-primary">SplitSheet</span>
-              </div>
-            </div>
-          </div>
-        </nav>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center">
             <h2 className="text-2xl font-bold mb-4">Contract Not Found</h2>
@@ -580,26 +559,6 @@ export default function ContractDetails() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Logo />
-              <span className="text-xl font-bold text-primary">SplitSheet</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground">
-                <i className="fas fa-bell"></i>
-              </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Breadcrumb */}
         <div className="mb-6">

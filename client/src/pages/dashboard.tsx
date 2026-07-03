@@ -4,12 +4,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import Logo from "@/components/Logo";
 import StatCard from "@/components/StatCard";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen } from "lucide-react";
+import { Users, Plus, Bell, Upload, Download, Trash2, BookOpen } from "lucide-react";
 
 interface DashboardStats {
   totalContracts: number;
@@ -85,149 +83,25 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Logo />
-              <span className="text-xl font-bold text-primary">SplitSheet</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
-                <Bell className="h-4 w-4" />
-              </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Navigation Dropdown Menu */}
-        <div className="mb-8">
-          <div className="border-b border-border pb-4">
-            <nav className="relative">
-              {/* Main Navigation Dropdown */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  {/* Primary Action - Dashboard */}
-                  <Link href="/" className="nav-item nav-active" data-testid="tab-overview">
-                    <Home className="mr-2 h-4 w-4" />Dashboard
-                  </Link>
-
-                  {/* Navigation Dropdown - Accessible */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="nav-item flex items-center space-x-2" data-testid="nav-dropdown-trigger">
-                        <Menu className="mr-1 h-4 w-4" />
-                        <span>Navigation</span>
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="w-64" align="start" data-testid="nav-dropdown-menu">
-                      {/* Highest Precedence - Core Functions */}
-                      <DropdownMenuLabel>Core Functions</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-profile">
-                        <Link href="/profile" className="flex items-center w-full">
-                          <User className="mr-3 h-4 w-4" />
-                          <span>Profile</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Essential</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-contracts">
-                        <Link href="/contracts" className="flex items-center w-full">
-                          <FileText className="mr-3 h-4 w-4" />
-                          <span>Contracts</span>
-                          <span className="ml-auto text-xs text-muted-foreground">High</span>
-                        </Link>
-                      </DropdownMenuItem>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Medium-High Precedence - Communication */}
-                      <DropdownMenuLabel>Communication</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-messages">
-                        <Link href="/messages" className="flex items-center w-full">
-                          <Mail className="mr-3 h-4 w-4" />
-                          <span>Messages</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-matches">
-                        <Link href="/matches" className="flex items-center w-full">
-                          <Users className="mr-3 h-4 w-4" />
-                          <span>Connections</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-search">
-                        <Link href="/search" className="flex items-center w-full">
-                          <Search className="mr-3 h-4 w-4" />
-                          <span>Search</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
-                        </Link>
-                      </DropdownMenuItem>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Lower Precedence - Tools & Admin */}
-                      <DropdownMenuLabel>Tools & Analytics</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-ownership">
-                        <Link href="/ownership" className="flex items-center w-full">
-                          <BookOpen className="mr-3 h-4 w-4" />
-                          <span>Rights Ledger</span>
-                          <span className="ml-auto text-xs text-muted-foreground">New</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-analytics">
-                        <Link href="/analytics" className="flex items-center w-full">
-                          <BarChart className="mr-3 h-4 w-4" />
-                          <span>Analytics</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-templates">
-                        <Link href="/templates" className="flex items-center w-full">
-                          <Layers className="mr-3 h-4 w-4" />
-                          <span>Templates</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-billing">
-                        <Link href="/billing" className="flex items-center w-full">
-                          <CreditCard className="mr-3 h-4 w-4" />
-                          <span>Billing</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Lowest</span>
-                        </Link>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-
-                {/* Quick Actions */}
-                <div className="flex items-center space-x-3">
-                  <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
-                    <Link href="/contract/new">
-                      <Plus className="mr-1 h-3 w-3" />
-                      New Contract
-                    </Link>
-                  </Button>
-                  <Button variant="ghost" size="sm" asChild data-testid="quick-messages">
-                    <Link href="/messages">
-                      <Mail className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                  <Button variant="ghost" size="sm" asChild data-testid="quick-notifications">
-                    <Link href="/notifications">
-                      <Bell className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </nav>
+        {/* Page header + quick actions */}
+        <div className="flex items-center justify-between mb-8 border-b border-border pb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Your command center for clients, projects, and agreements</p>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
+              <Link href="/contract/new">
+                <Plus className="mr-1 h-3 w-3" />
+                New Contract
+              </Link>
+            </Button>
+            <Button variant="ghost" size="sm" asChild data-testid="quick-notifications">
+              <Link href="/notifications">
+                <Bell className="h-4 w-4" />
+              </Link>
+            </Button>
           </div>
         </div>
 
