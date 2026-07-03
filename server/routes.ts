@@ -13,6 +13,7 @@ import {
   insertNegotiationConversationSchema,
   activityEventSchema,
   batchActivitiesSchema,
+  insertContractTemplateSchema,
   type ActivityEvent,
   type BatchActivities,
   type Negotiation,
@@ -1392,6 +1393,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to get activity" });
     }
   });
+
+  // ── Admin: contract template management ──
+  app.get('/api/admin/templates', isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const templates = await storage.getAllContractTemplatesAdmin();
+      res.json(templates);
+    } catch (error) {
+      console.error("Error getting templates:", error);
+      res.status(500).json({ message: "Failed to get templates" });
+    }
+  });
+
+  app.post('/api/admin/templates', isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const parsed = insertContractTemplateSchema.parse(req.body);
+      const template = await storage.createContractTemplate(parsed);
+      res.status(201).json(template);
+    } catch (error) {
+      console.error("Error creating template:", error);
+      res.status(400).json({ message: "Failed to create template" });
+    }
+  });
+
+  app.patch('/api/admin/templates/:id', isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const updates = insertContractTemplateSchema.partial().parse(req.body);
+      const template = await storage.updateContractTemplate(req.params.id, updates);
+      res.json(template);
+    } catch (error) {
+      console.error("Error updating template:", error);
+      res.status(400).json({ message: "Failed to update template" });
+    }
+  });
+
+  app.delete('/api/admin/templates/:id', isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      await storage.deleteContractTemplate(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting template:", error);
+      res.status(500).json({ message: "Failed to delete template" });
+    }
+  });
+
+  // ── Admin: revenue analytics ──
+  app.get('/api/admin/revenue-analytics', isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const analytics = await storage.getRevenueAnalytics();
+      res.json(analytics);
+    } catch (error) {
+      console.error("Error getting revenue analytics:", error);
+      res.status(500).json({ message: "Failed to get revenue analytics" });
+    }
+  });
+
   // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
 
   app.get('/api/assets', isAuthenticated, async (req: any, res) => {

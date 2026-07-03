@@ -11,12 +11,12 @@ import {
 import {
   LayoutDashboard, Users, FolderOpen, FileText, BookOpen,
   ChevronDown, LogOut, User, CreditCard, Menu, X,
-  Mic2, Building2, HelpCircle,
+  Mic2, Building2, HelpCircle, ShieldCheck,
 } from "lucide-react";
 import CoPilot from "@/components/CoPilot";
 import OnboardingWalkthrough, { resetOnboarding } from "@/components/OnboardingWalkthrough";
 
-const NAV = [
+const NAV: { href: string; label: string; icon: typeof LayoutDashboard; badge?: string }[] = [
   { href: "/",              label: "Dashboard",       icon: LayoutDashboard },
   { href: "/clients",       label: "Clients",         icon: Users },
   { href: "/projects",      label: "Projects",        icon: FolderOpen },
@@ -30,6 +30,10 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
   const [location] = useLocation();
   const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isAdmin = (user as any)?.role === "admin";
+  const navItems = isAdmin
+    ? [...NAV, { href: "/admin", label: "Admin Panel", icon: ShieldCheck }]
+    : NAV;
 
   const SidebarContent = () => (
     <nav className="flex flex-col h-full">
@@ -44,7 +48,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
 
       {/* Nav links */}
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-        {NAV.map(({ href, label, icon: Icon, badge }) => {
+        {navItems.map(({ href, label, icon: Icon, badge }) => {
           const active = location === href || (href !== "/" && location.startsWith(href));
           return (
             <Link key={href} href={href} onClick={() => setSidebarOpen(false)}>
