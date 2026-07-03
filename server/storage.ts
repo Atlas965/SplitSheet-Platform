@@ -56,11 +56,8 @@ export interface IStorage {
 
   // Contract template operations
   getContractTemplates(): Promise<ContractTemplate[]>;
-  getAllContractTemplatesAdmin(): Promise<ContractTemplate[]>;
   getContractTemplate(id: string): Promise<ContractTemplate | undefined>;
   createContractTemplate(template: InsertContractTemplate): Promise<ContractTemplate>;
-  updateContractTemplate(id: string, updates: Partial<ContractTemplate>): Promise<ContractTemplate>;
-  deleteContractTemplate(id: string): Promise<void>;
 
   // Contract operations
   getContracts(userId: string): Promise<Contract[]>;
@@ -104,9 +101,7 @@ export interface IStorage {
 
   // Admin methods
   getAllUsers(page: number, limit: number, search: string): Promise<any[]>;
-  getUserCount(search: string): Promise<number>;
   getRecentActivity(limit: number): Promise<any[]>;
-  getRevenueAnalytics(): Promise<any>;
 
   // Negotiation methods
   getNegotiations(userId: string): Promise<any[]>;
@@ -220,29 +215,6 @@ export class DatabaseStorage implements IStorage {
       .values(template)
       .returning();
     return newTemplate;
-  }
-
-  async getAllContractTemplatesAdmin(): Promise<ContractTemplate[]> {
-    return await db
-      .select()
-      .from(contractTemplates)
-      .orderBy(contractTemplates.name);
-  }
-
-  async updateContractTemplate(id: string, updates: Partial<ContractTemplate>): Promise<ContractTemplate> {
-    const [updated] = await db
-      .update(contractTemplates)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(contractTemplates.id, id))
-      .returning();
-    return updated;
-  }
-
-  async deleteContractTemplate(id: string): Promise<void> {
-    await db
-      .update(contractTemplates)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(contractTemplates.id, id));
   }
 
   // Contract operations
@@ -1127,80 +1099,6 @@ export class DatabaseStorage implements IStorage {
     .leftJoin(users, eq(userActivity.userId, users.id))
     .orderBy(desc(userActivity.createdAt))
     .limit(limit);
-  }
-
-  async getUserCount(search: string = ''): Promise<number> {
-    if (search) {
-      const [row] = await db.select({ count: count() }).from(users).where(
-        or(
-          sql`LOWER(${users.firstName}) LIKE LOWER(${'%' + search + '%'})`,
-          sql`LOWER(${users.lastName}) LIKE LOWER(${'%' + search + '%'})`,
-          sql`LOWER(${users.email}) LIKE LOWER(${'%' + search + '%'})`
-        )
-      );
-      return row?.count ?? 0;
-    }
-    const [row] = await db.select({ count: count() }).from(users);
-    return row?.count ?? 0;
-  }
-
-  async getRevenueAnalytics(): Promise<any> {
-    const [totalRevenueRow] = await db
-      .select({ total: sql<string>`COALESCE(SUM(${revenueEvents.amount}), 0)` })
-      .from(revenueEvents);
-
-    const [totalPayoutsRow] = await db
-      .select({ total: sql<string>`COALESCE(SUM(${payoutRecords.amount}), 0)` })
-      .from(payoutRecords);
-
-    const revenueBySource = await db
-      .select({
-        source: revenueEvents.source,
-        total: sql<string>`COALESCE(SUM(${revenueEvents.amount}), 0)`,
-      })
-      .from(revenueEvents)
-      .groupBy(revenueEvents.source)
-      .orderBy(desc(sql`SUM(${revenueEvents.amount})`));
-
-    const revenueByMonth = await db
-      .select({
-        month: sql<string>`TO_CHAR(${revenueEvents.createdAt}, 'YYYY-MM')`,
-        total: sql<string>`COALESCE(SUM(${revenueEvents.amount}), 0)`,
-      })
-      .from(revenueEvents)
-      .groupBy(sql`TO_CHAR(${revenueEvents.createdAt}, 'YYYY-MM')`)
-      .orderBy(sql`TO_CHAR(${revenueEvents.createdAt}, 'YYYY-MM')`);
-
-    const subscriptionBreakdown = await db
-      .select({
-        tier: users.subscriptionTier,
-        count: count(),
-      })
-      .from(users)
-      .groupBy(users.subscriptionTier);
-
-    const topEarners = await db
-      .select({
-        userId: userBalances.userId,
-        totalEarned: userBalances.totalEarned,
-        pendingBalance: userBalances.pendingBalance,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        email: users.email,
-      })
-      .from(userBalances)
-      .leftJoin(users, eq(userBalances.userId, users.id))
-      .orderBy(desc(sql`CAST(${userBalances.totalEarned} AS DECIMAL)`))
-      .limit(10);
-
-    return {
-      totalRevenue: totalRevenueRow?.total ?? "0",
-      totalPayouts: totalPayoutsRow?.total ?? "0",
-      revenueBySource,
-      revenueByMonth,
-      subscriptionBreakdown,
-      topEarners,
-    };
   }
 }
 

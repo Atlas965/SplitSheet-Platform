@@ -20,10 +20,9 @@ SplitSheet is a full-stack music industry platform that combines split sheet man
 10. [Authentication](#10-authentication)
 11. [Billing & Stripe Integration](#11-billing--stripe-integration)
 12. [PDF Generation](#12-pdf-generation)
-13. [Admin Panel](#13-admin-panel)
-14. [Environment Variables](#14-environment-variables)
-15. [Running Locally](#15-running-locally)
-16. [Project Structure](#16-project-structure)
+13. [Environment Variables](#13-environment-variables)
+14. [Running Locally](#14-running-locally)
+15. [Project Structure](#15-project-structure)
 
 ---
 
@@ -42,7 +41,6 @@ SplitSheet operates as an **internal operations tool** for a music service busin
 | **Music Agreements** | Create, manage, and sign legal document templates (split sheets, producer deals, etc.) |
 | **Rights Ledger** | Track song asset ownership, archive/deactivate assets, log activity |
 | **Billing** | Stripe-backed subscription and session-based payment handling |
-| **Admin Panel** | Restricted internal console for user management, template editing, and revenue analytics |
 
 ---
 
@@ -536,40 +534,7 @@ No server-side PDF rendering — all generation happens in the browser and the f
 
 ---
 
-## 13. Admin Panel
-
-The Admin Panel (`/admin`) is a restricted internal console available only to users with `role = "admin"` on the `users` table. It is gated by an `isAdmin` middleware on the server and hidden from the sidebar for non-admin operators.
-
-### Tabs
-
-| Tab | What It Does |
-|---|---|
-| **Overview** | High-level platform stats: total users, active projects, agreements, revenue snapshot |
-| **Users** | Search all operator accounts, promote/demote admin role, suspend or reactivate accounts |
-| **Templates** | Create, edit, and archive/restore contract templates via a JSON field editor |
-| **Revenue** | Revenue-by-month trend, revenue-by-source breakdown, subscription tier breakdown, and top earners |
-| **Monitoring** | Recent platform activity log |
-
-### Admin API Routes
-
-| Method | Route | Description |
-|---|---|---|
-| GET | `/api/admin/users` | List all user accounts |
-| PATCH | `/api/admin/users/:id` | Update a user's role or status |
-| GET | `/api/admin/activity` | Recent platform activity log |
-| GET | `/api/admin/templates` | List all contract templates, including inactive |
-| POST | `/api/admin/templates` | Create a new contract template |
-| PATCH | `/api/admin/templates/:id` | Edit a template's fields |
-| DELETE | `/api/admin/templates/:id` | Archive (soft-delete) a template |
-| GET | `/api/admin/revenue-analytics` | Aggregated revenue, payouts, and subscription analytics |
-
-### Granting Admin Access
-
-Admin access is controlled by the `role` column on `users` (`user` / `admin`). There is no self-serve way to become an admin — it must be set directly in the database for a trusted operator account.
-
----
-
-## 14. Environment Variables
+## 13. Environment Variables
 
 Set these in your Replit Secrets or `.env` file:
 
@@ -592,7 +557,7 @@ Set these in your Replit Secrets or `.env` file:
 
 ---
 
-## 15. Running Locally
+## 14. Running Locally
 
 ```bash
 # Install dependencies
@@ -624,7 +589,7 @@ npx drizzle-kit push
 
 ---
 
-## 16. Project Structure
+## 15. Project Structure
 
 ```
 client/src/
