@@ -4,7 +4,6 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import Logo from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +28,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import {
   Music, Plus, TrendingUp, DollarSign, History, Users, ChevronRight,
-  BarChart3, Clock, CheckCircle2, AlertCircle, Home, MoreVertical,
+  BarChart3, Clock, CheckCircle2, AlertCircle, MoreVertical,
   Archive, ArchiveRestore, PowerOff, Trash2, Activity, Eye, Shield,
 } from "lucide-react";
 
