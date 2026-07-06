@@ -13,7 +13,7 @@ import {
   ChevronDown, LogOut, User, CreditCard, Menu, X,
   Mic2, Building2, HelpCircle,
 } from "lucide-react";
-import CoPilot from "@/components/CoPilot";
+import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
 import OnboardingWalkthrough, { resetOnboarding } from "@/components/OnboardingWalkthrough";
 
 const NAV = [

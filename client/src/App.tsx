@@ -26,12 +26,8 @@ import Notifications from "@/pages/notifications";
 import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
 import ConfirmSplit from "@/pages/confirm-split";
-import Creators from "@/pages/creators";
-import CreatorDetail from "@/pages/creator-detail";
-import Organizations from "@/pages/organizations";
-import OrganizationDetail from "@/pages/organization-detail";
 import NotFound from "@/pages/not-found";
-import OperatorLayout from "@/components/OperatorLayout";
+import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -45,46 +41,41 @@ function Router() {
       {isLoading || !isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
-        <OperatorLayout>
-          <Switch>
-            <Route path="/" component={Dashboard} />
-            <Route path="/contracts" component={Contracts} />
-            <Route path="/contracts/:id" component={ContractDetails} />
-            <Route path="/contracts/:id/edit" component={ContractEdit} />
-            <Route path="/profile" component={Profile} />
-            <Route path="/analytics" component={Analytics} />
-            <Route path="/templates" component={Templates} />
-            <Route path="/billing" component={Billing} />
-            <Route path="/subscribe" component={() => {
-              const params = new URLSearchParams(window.location.search);
-              const plan   = params.get("plan") ?? "pro";
-              return <Subscribe plan={plan} />;
-            }} />
-            <Route path="/negotiations" component={Negotiations} />
-            <Route path="/negotiations/:id" component={NegotiationDetail} />
-            <Route path="/matches" component={Matches} />
-            <Route path="/messages" component={Messages} />
-            <Route path="/messages/:userId" component={Messages} />
-            <Route path="/search" component={Search} />
-            <Route path="/admin" component={Admin} />
-            <Route path="/ownership" component={Ownership} />
-            <Route path="/ownership/:id" component={Ownership} />
-            <Route path="/notifications" component={Notifications} />
-            <Route path="/clients" component={Clients} />
-            <Route path="/projects" component={Projects} />
-            <Route path="/creators" component={Creators} />
-            <Route path="/creators/:id" component={CreatorDetail} />
-            <Route path="/organizations" component={Organizations} />
-            <Route path="/organizations/:id" component={OrganizationDetail} />
-            {/* /contract/new redirects to split-sheet — fixes the 404 */}
-            <Route path="/contract/new" component={() => {
-              window.location.replace("/contract/split-sheet");
-              return null;
-            }} />
-            <Route path="/contract/:type" component={ContractForm} />
-            <Route component={NotFound} />
-          </Switch>
-        </OperatorLayout>
+        <>
+          <Route path="/" component={Dashboard} />
+          <Route path="/contracts" component={Contracts} />
+          <Route path="/contracts/:id" component={ContractDetails} />
+          <Route path="/contracts/:id/edit" component={ContractEdit} />
+          <Route path="/profile" component={Profile} />
+          <Route path="/analytics" component={Analytics} />
+          <Route path="/templates" component={Templates} />
+          <Route path="/billing" component={Billing} />
+          <Route path="/subscribe" component={() => {
+            const params = new URLSearchParams(window.location.search);
+            const plan   = params.get("plan") ?? "pro";
+            return <Subscribe plan={plan} />;
+          }} />
+          <Route path="/negotiations" component={Negotiations} />
+          <Route path="/negotiations/:id" component={NegotiationDetail} />
+          <Route path="/matches" component={Matches} />
+          <Route path="/messages" component={Messages} />
+          <Route path="/messages/:userId" component={Messages} />
+          <Route path="/search" component={Search} />
+          <Route path="/admin" component={Admin} />
+          <Route path="/ownership" component={Ownership} />
+          <Route path="/ownership/:id" component={Ownership} />
+          <Route path="/notifications" component={Notifications} />
+          <Route path="/clients" component={Clients} />
+          <Route path="/projects" component={Projects} />
+          {/* /contract/new redirects to split-sheet — fixes the 404 */}
+          <Route path="/contract/new" component={() => {
+            window.location.replace("/contract/split-sheet");
+            return null;
+          }} />
+          <Route path="/contract/:type" component={ContractForm} />
+          {/* CoPilot floating widget — renders on every authenticated page */}
+          <SoundLedgerCopilot />
+        </>
       )}
       <Route component={NotFound} />
     </Switch>
