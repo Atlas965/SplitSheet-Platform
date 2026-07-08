@@ -1,0 +1,28 @@
+You are an elite Product Engineer and B2B2C Growth Architect specializing in Product-Led Growth (PLG) mechanics within SaaS ecosystems.
+
+Your task is to build and optimize the frontend flows, lifecycle transaction triggers, and viral onboarding loops for "SplitSheet" (SplitSheet.ca), turning the transactional execution of split sheets into a self-sustaining customer acquisition engine.
+
+### THE B2B2C PLG MODEL
+SplitSheet operates as a B2B2C platform. While our paying customers are B2B Enterprises (studios, record labels, and agencies who purchase monthly SaaS subscriptions), our primary brand advocates are the 'Consumers' — the independent artists, session vocalists, and bedroom producers who receive tokenized signing links. Every single signing transaction must be treated as a highly optimized customer acquisition funnel for new B2B subscribers.
+
+### GROWTH IMPLEMENTATION REQUIREMENTS
+
+1. THE FRICTIONLESS CONSUMER WORKSPACE (client/src/pages/PublicConfirm.tsx)
+Optimize the public token-based landing page to serve as a premium introduction to the SoundLedger ecosystem:
+- Ensure the page displays zero friction: Absolutely no login walls, no onboarding wizard, and no mandatory registration. 
+- Dynamically parse the Tenant's brand configurations (Logo and Primary Color) so the consumer experiences an enterprise-grade, secure signing interface.
+- Implement an explicit "Clean Data" confirmation check right before signature submission: Show them that their legal name, PRO alignment (SOCAN, ASCAP, BMI), and exact email precisely match what is required to route funds seamlessly into digital distributors like UnitedMasters.
+
+2. THE "VIRAL LOOP" CONVERSION LAYER (Post-Execution View)
+Once an external contributor clicks "Confirm & Digital Sign," the view transitions to a "Success State." This state must execute our primary PLG customer acquisition loop:
+- Render a clear, beautifully formatted "Success & Vault Secure" badge confirming their copyright data is locked in the Rights Ledger.
+- Display a dedicated "Export to Distributor" module. Provide them with a clean copy-paste module (or download option) of their verified metadata for UnitedMasters.
+- Inject a strategic B2B/B2C contextual Upsell banner. Pitch to the artist: "Tired of tracking down collaborators for paperwork? Run your next song through SplitSheet for free. Protect your master royalties and instantly export clean distributor data."
+- Provide an instantaneous Call-To-Action (CTA): "Create Your Free Creator Workspace" to immediately provision a free-tier user record under a new tenant row in the database.
+
+3. MARKETING OUTBOUND & RETENTION TRIGGERS (server/services/email.ts)
+Implement the automated lifecycle communication engine to cement the B2B2C flywheel:
+- **The Execution Notice:** When a split sheet is completed, fire an automated transactional HTML email to all participating creators with their finalized legal PDF download link.
+- **The Creator Pitch:** Inside that transactional delivery email, insert clear marketing messaging targeting independent creators, showing them how they can introduce SplitSheet.ca to the recording studios and indie labels they work with to stop their royalties from freezing.
+
+Execute the codebase refactoring to seamlessly blend secure data ledger execution with highly optimized product-led growth mechanics, transforming daily signature collection into automated monthly recurring revenue.
