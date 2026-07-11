@@ -74,7 +74,6 @@ function Router() {
             <Route path="/clients/:id" component={ClientDetail} />
             <Route path="/projects" component={Projects} />
             <Route path="/projects/:id" component={ProjectDetail} />
-            {/* /contract/new redirects to split-sheet — fixes the 404 */}
             <Route path="/contract/new" component={() => {
               window.location.replace("/contract/split-sheet");
               return null;
@@ -84,7 +83,6 @@ function Router() {
         )}
         <Route component={NotFound} />
       </Switch>
-      {/* Floating widget — outside Switch so it renders on every authenticated page */}
       {showCopilot && <SoundLedgerCopilot />}
       {showCopilot && <OnboardingWalkthrough />}
     </>
