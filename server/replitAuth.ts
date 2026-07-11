@@ -10,12 +10,12 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { users } from "@shared/schema";
 
-const allowedDomains =
-  process.env.ALLOWED_DOMAINS?.split(",") ??
-  process.env.REPLIT_DOMAINS?.split(",") ??
-  ["http://localhost:5173"];
+const isLocalDev =
+  process.env.NODE_ENV === "development" &&
+  process.env.LOCAL_DEV === "true";
 
-
+const databaseUrl =
+  process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
 
 const getOidcConfig = memoize(
   async () => {
@@ -27,11 +27,19 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
+function callbackUrlForDomain(domain: string): string {
+  const protocol =
+    domain.startsWith("localhost") || domain.startsWith("127.0.0.1")
+      ? "http"
+      : "https";
+  return `${protocol}://${domain}/api/callback`;
+}
+
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
+    conString: databaseUrl,
     createTableIfMissing: false,
     ttl: sessionTtl,
     tableName: "sessions",
@@ -43,7 +51,7 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       maxAge: sessionTtl,
     },
   });
@@ -59,14 +67,10 @@ function updateUserSession(
   user.expires_at = user.claims?.exp;
 }
 
-async function upsertUser(
-  claims: any,
-) {
-  // First try to find existing user by id
+async function upsertUser(claims: any) {
   const existingUser = await storage.getUser(claims["sub"]);
 
   if (existingUser) {
-    // Update existing user
     await storage.updateUser(claims["sub"], {
       email: claims["email"],
       firstName: claims["first_name"],
@@ -74,7 +78,6 @@ async function upsertUser(
       profileImageUrl: claims["profile_image_url"],
     });
   } else {
-    // Create new user with ID from claims
     await db.insert(users).values({
       id: claims["sub"],
       email: claims["email"],
@@ -85,7 +88,50 @@ async function upsertUser(
   }
 }
 
+async function setupLocalDevAuth(app: Express) {
+  app.set("trust proxy", 1);
+  app.use(getSession());
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  passport.serializeUser((user: Express.User, cb) => cb(null, user));
+  passport.deserializeUser((user: Express.User, cb) => cb(null, user));
+
+  const devClaims = {
+    sub: "local-dev-operator",
+    email: "dev@localhost",
+    first_name: "Local",
+    last_name: "Operator",
+    profile_image_url: null,
+    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365,
+  };
+
+  app.get("/api/login", async (req, res) => {
+    await upsertUser(devClaims);
+    const user = {
+      claims: devClaims,
+      expires_at: devClaims.exp,
+    };
+    req.login(user, (err) => {
+      if (err) {
+        res.status(500).json({ message: "Login failed" });
+        return;
+      }
+      res.redirect("/");
+    });
+  });
+
+  app.get("/api/logout", (req, res) => {
+    req.logout(() => res.redirect("/"));
+  });
+}
+
 export async function setupAuth(app: Express) {
+  if (isLocalDev) {
+    await setupLocalDevAuth(app);
+    return;
+  }
+
   app.set("trust proxy", 1);
   app.use(getSession());
   app.use(passport.initialize());
@@ -103,14 +149,23 @@ export async function setupAuth(app: Express) {
     verified(null, user);
   };
 
-  for (const domain of process.env
-    .REPLIT_DOMAINS!.split(",")) {
+  const domains =
+    process.env.REPLIT_DOMAINS?.split(",").map((d) => d.trim()).filter(Boolean) ??
+    [];
+
+  if (domains.length === 0) {
+    throw new Error(
+      "REPLIT_DOMAINS must be set for Replit OIDC auth (comma-separated hostnames).",
+    );
+  }
+
+  for (const domain of domains) {
     const strategy = new Strategy(
       {
         name: `replitauth:${domain}`,
         config,
         scope: "openid email profile offline_access",
-        callbackURL: `https://${domain}/api/callback`,
+        callbackURL: callbackUrlForDomain(domain),
       },
       verify,
     );
@@ -156,6 +211,10 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const now = Math.floor(Date.now() / 1000);
   if (now <= user.expires_at) {
     return next();
+  }
+
+  if (isLocalDev) {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   const refreshToken = user.refresh_token;

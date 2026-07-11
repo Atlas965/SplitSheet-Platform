@@ -1,13 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-
-interface User {
-  id: string;
-  email: string;
-  subscriptionTier?: string;
-}
+import type { AuthUser } from "@/lib/userUtils";
 
 export function useAuth() {
-  const { data: user, isLoading, error } = useQuery<User>({
+  const { data: user, isLoading, error } = useQuery<AuthUser>({
     queryKey: ["/api/auth/user"],
     retry: false,
   });

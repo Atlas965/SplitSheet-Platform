@@ -8,22 +8,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import Footer from "@/components/Footer";
+import UserAvatar from "@/components/UserAvatar";
 
-interface Contract {
+interface Project {
   id: string;
   title: string;
   type: string;
   status: string;
-  data?: any;
+  collaboratorCount?: number;
+  collaborators?: { name: string; role: string; ownershipPercentage: number }[];
   createdAt: string;
   updatedAt: string;
 }
 
 const STATUS_CONFIG: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
-  signed:  { label: "Signed",   className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
-  pending: { label: "Pending",  className: "bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800", icon: <Clock className="h-3 w-3" /> },
-  draft:   { label: "Draft",    className: "bg-muted text-muted-foreground border-border", icon: <FileEdit className="h-3 w-3" /> },
-  active:  { label: "Active",   className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
+  confirmed:            { label: "Confirmed",  className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
+  pending_confirmation: { label: "Pending",    className: "bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800", icon: <Clock className="h-3 w-3" /> },
+  draft:                { label: "Draft",      className: "bg-muted text-muted-foreground border-border", icon: <FileEdit className="h-3 w-3" /> },
+  archived:             { label: "Archived",   className: "bg-muted text-muted-foreground border-border", icon: <FileEdit className="h-3 w-3" /> },
+  signed:               { label: "Signed",     className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800", icon: <CheckCircle2 className="h-3 w-3" /> },
+  pending:              { label: "Pending",    className: "bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800", icon: <Clock className="h-3 w-3" /> },
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -34,21 +38,21 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 export default function Projects() {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
   }, [isAuthenticated, isLoading]);
 
-  const { data: contracts = [], isLoading: contractsLoading } = useQuery<Contract[]>({
-    queryKey: ["/api/contracts"],
+  const { data: projects = [], isLoading: projectsLoading } = useQuery<Project[]>({
+    queryKey: ["/api/projects"],
     enabled: isAuthenticated,
   });
 
-  const filtered = contracts.filter((c) =>
+  const filtered = projects.filter((c) =>
     c.title.toLowerCase().includes(search.toLowerCase()) ||
-    c.type.toLowerCase().includes(search.toLowerCase())
+    (c.type ?? "").toLowerCase().includes(search.toLowerCase())
   );
 
   if (isLoading || !isAuthenticated) {
@@ -59,13 +63,11 @@ export default function Projects() {
     );
   }
 
-  const userInitial = (user as any)?.firstName?.[0] ?? (user as any)?.email?.[0]?.toUpperCase() ?? "U";
-
   // Summary stats
-  const total   = contracts.length;
-  const signed  = contracts.filter((c) => c.status === "signed" || c.status === "active").length;
-  const pending = contracts.filter((c) => c.status === "pending").length;
-  const draft   = contracts.filter((c) => c.status === "draft").length;
+  const total   = projects.length;
+  const signed  = projects.filter((c) => c.status === "confirmed" || c.status === "signed" || c.status === "active").length;
+  const pending = projects.filter((c) => c.status === "pending_confirmation" || c.status === "pending").length;
+  const draft   = projects.filter((c) => c.status === "draft").length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -77,7 +79,7 @@ export default function Projects() {
           </div>
           <div className="flex items-center gap-3">
             <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Dashboard</Link>
-            <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm">{userInitial}</div>
+            <UserAvatar />
           </div>
         </div>
       </nav>
@@ -129,7 +131,7 @@ export default function Projects() {
         </div>
 
         {/* List */}
-        {contractsLoading ? (
+        {projectsLoading ? (
           <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
             <div className="animate-spin w-5 h-5 border-2 border-accent border-t-transparent rounded-full" />
             Loading projects…
@@ -151,12 +153,12 @@ export default function Projects() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map((contract) => {
-              const statusCfg = STATUS_CONFIG[contract.status] ?? STATUS_CONFIG.draft;
-              const collaborators = contract.data?.collaborators ?? [];
+            {filtered.map((project) => {
+              const statusCfg = STATUS_CONFIG[project.status] ?? STATUS_CONFIG.draft;
+              const collaborators = project.collaborators ?? [];
 
               return (
-                <Link key={contract.id} href={`/contracts/${contract.id}`}>
+                <Link key={project.id} href={`/projects/${project.id}`}>
                   <div className="bg-card border border-border rounded-xl p-5 hover:border-accent/40 hover:shadow-sm transition-all cursor-pointer group">
                     {/* Header */}
                     <div className="flex items-start justify-between gap-2 mb-3">
@@ -169,10 +171,10 @@ export default function Projects() {
                     </div>
 
                     <h3 className="font-semibold text-foreground mb-1 line-clamp-1 group-hover:text-accent transition-colors">
-                      {contract.title}
+                      {project.title}
                     </h3>
                     <p className="text-xs text-muted-foreground mb-3">
-                      {TYPE_LABELS[contract.type] ?? contract.type}
+                      {TYPE_LABELS[project.type] ?? project.type}
                     </p>
 
                     {/* Split bars */}
@@ -196,7 +198,7 @@ export default function Projects() {
                     )}
 
                     <p className="text-xs text-muted-foreground">
-                      Updated {new Date(contract.updatedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+                      Updated {new Date(project.updatedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
                     </p>
                   </div>
                 </Link>

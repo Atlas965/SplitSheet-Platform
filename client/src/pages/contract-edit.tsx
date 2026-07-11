@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import Logo from "@/components/Logo";
+import UserAvatar from "@/components/UserAvatar";
 import { Button } from "@/components/ui/button";
 import ContractForm from "@/components/ContractForm";
 
@@ -178,9 +179,7 @@ export default function ContractEdit() {
               <button className="text-muted-foreground hover:text-foreground">
                 <i className="fas fa-bell"></i>
               </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
+              <UserAvatar />
             </div>
           </div>
         </div>

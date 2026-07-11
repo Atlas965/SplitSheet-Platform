@@ -1,6 +1,10 @@
 node_modules
+.pnpm-store
+.env
 dist
+build
 .DS_Store
+.cursor
 server/public
 vite.config.ts.*
 *.tar.gz

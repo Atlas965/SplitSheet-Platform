@@ -7,6 +7,7 @@ import { Users, Search, FileText, Mail, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Footer from "@/components/Footer";
+import UserAvatar from "@/components/UserAvatar";
 
 interface Client {
   id: string;
@@ -18,45 +19,18 @@ interface Client {
 }
 
 export default function Clients() {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
   }, [isAuthenticated, isLoading]);
 
-  // Pull clients from contract collaborators
-  const { data: contracts = [], isLoading: contractsLoading } = useQuery<any[]>({
-    queryKey: ["/api/contracts"],
+  // Pull clients from operator API
+  const { data: clients = [], isLoading: clientsLoading } = useQuery<Client[]>({
+    queryKey: ["/api/clients"],
     enabled: isAuthenticated,
   });
-
-  // Build unique client list from collaborators across all contracts
-  const [clients, setClients] = useState<Client[]>([]);
-  useEffect(() => {
-    if (!contracts.length) return;
-    const map = new Map<string, Client>();
-    contracts.forEach((c: any) => {
-      (c.collaborators ?? []).forEach((collab: any) => {
-        const key = collab.email ?? collab.name;
-        if (!key) return;
-        if (map.has(key)) {
-          const existing = map.get(key)!;
-          map.set(key, { ...existing, contractCount: (existing.contractCount ?? 0) + 1 });
-        } else {
-          map.set(key, {
-            id:            collab.id ?? key,
-            name:          collab.name ?? "Unknown",
-            email:         collab.email,
-            role:          collab.role ?? "Collaborator",
-            contractCount: 1,
-            lastActivity:  c.updatedAt ?? c.createdAt,
-          });
-        }
-      });
-    });
-    setClients(Array.from(map.values()));
-  }, [contracts]);
 
   const filtered = clients.filter(
     (c) =>
@@ -72,7 +46,6 @@ export default function Clients() {
     );
   }
 
-  const userInitial = (user as any)?.firstName?.[0] ?? (user as any)?.email?.[0]?.toUpperCase() ?? "U";
 
   return (
     <div className="min-h-screen bg-background">
@@ -84,7 +57,7 @@ export default function Clients() {
           </div>
           <div className="flex items-center gap-3">
             <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Dashboard</Link>
-            <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm">{userInitial}</div>
+            <UserAvatar />
           </div>
         </div>
       </nav>
@@ -117,7 +90,7 @@ export default function Clients() {
           />
         </div>
 
-        {contractsLoading ? (
+        {clientsLoading ? (
           <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
             <div className="animate-spin w-5 h-5 border-2 border-accent border-t-transparent rounded-full" />
             Loading clients…
@@ -146,7 +119,8 @@ export default function Clients() {
             </div>
             <div className="divide-y divide-border">
               {filtered.map((client) => (
-                <div key={client.id} className="flex items-center gap-4 px-5 py-4 hover:bg-muted/30 transition-colors">
+                <Link key={client.id} href={`/clients/${client.id}`}>
+                  <div className="flex items-center gap-4 px-5 py-4 hover:bg-muted/30 transition-colors cursor-pointer">
                   <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center font-bold text-accent shrink-0">
                     {client.name[0]?.toUpperCase()}
                   </div>
@@ -172,7 +146,8 @@ export default function Clients() {
                       </p>
                     )}
                   </div>
-                </div>
+                  </div>
+                </Link>
               ))}
             </div>
           </div>

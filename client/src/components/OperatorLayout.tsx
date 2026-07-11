@@ -141,7 +141,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
     </div>
 
     {/* SoundLedger Co-Pilot — floating AI assistant */}
-    <CoPilot />
+    <SoundLedgerCopilot />
 
     {/* First-run onboarding walkthrough */}
     <OnboardingWalkthrough />

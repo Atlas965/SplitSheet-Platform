@@ -70,6 +70,8 @@ export interface IStorage {
   getContractCollaborators(contractId: string): Promise<ContractCollaborator[]>;
   addContractCollaborator(collaborator: InsertContractCollaborator): Promise<ContractCollaborator>;
   updateCollaboratorStatus(id: string, status: string): Promise<ContractCollaborator>;
+  updateContractCollaborator(id: string, updates: Partial<InsertContractCollaborator>): Promise<ContractCollaborator>;
+  deleteContractCollaborator(id: string): Promise<void>;
 
   // Contract signature operations
   createContractSignature(signature: InsertContractSignature): Promise<ContractSignature>;
@@ -289,6 +291,22 @@ export class DatabaseStorage implements IStorage {
       .where(eq(contractCollaborators.id, id))
       .returning();
     return updatedCollaborator;
+  }
+
+  async updateContractCollaborator(
+    id: string,
+    updates: Partial<InsertContractCollaborator>,
+  ): Promise<ContractCollaborator> {
+    const [updated] = await db
+      .update(contractCollaborators)
+      .set(updates)
+      .where(eq(contractCollaborators.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteContractCollaborator(id: string): Promise<void> {
+    await db.delete(contractCollaborators).where(eq(contractCollaborators.id, id));
   }
 
   // Contract signature operations

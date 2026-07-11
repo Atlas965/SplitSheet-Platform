@@ -29,6 +29,7 @@ import {
 } from "@shared/schema";
 import { registerConfirmationRoutes } from "./confirmation-routes";
 import { registerCopilotRoutes } from "./copilot-routes";
+import { registerServiceRoutes } from "./service-routes";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -2010,66 +2011,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Confirmation link system (send via WhatsApp/SMS/Instagram, track in dashboard)
   registerConfirmationRoutes(app);
 
-  // ── Clients — derived from contract collaborators ──────────────────────────
-  app.get("/api/clients", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const userContracts = await storage.getUserContracts(userId);
-      // Collect unique collaborators across all user contracts
-      const clientMap = new Map<string, any>();
-      for (const contract of userContracts) {
-        const collabs = await storage.getContractCollaborators(contract.id);
-        for (const collab of collabs) {
-          const key = collab.email ?? collab.name;
-          if (!key) continue;
-          if (clientMap.has(key)) {
-            clientMap.get(key).contractCount += 1;
-          } else {
-            clientMap.set(key, {
-              id: collab.id,
-              name: collab.name,
-              email: collab.email ?? null,
-              role: collab.role,
-              status: collab.status,
-              contractCount: 1,
-              lastActivity: contract.updatedAt ?? contract.createdAt,
-            });
-          }
-        }
-      }
-      res.json(Array.from(clientMap.values()));
-    } catch (error) {
-      console.error("Error fetching clients:", error);
-      res.status(500).json({ message: "Failed to fetch clients" });
-    }
-  });
-
-  // ── Projects — alias for contracts with enriched data ─────────────────────
-  app.get("/api/projects", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const userContracts = await storage.getUserContracts(userId);
-      // Enrich each contract with collaborator count
-      const projects = await Promise.all(
-        userContracts.map(async (contract) => {
-          const collabs = await storage.getContractCollaborators(contract.id);
-          return {
-            ...contract,
-            collaboratorCount: collabs.length,
-            collaborators: collabs.map((c) => ({
-              name: c.name,
-              role: c.role,
-              ownershipPercentage: c.ownershipPercentage ?? 0,
-            })),
-          };
-        }),
-      );
-      res.json(projects);
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-      res.status(500).json({ message: "Failed to fetch projects" });
-    }
-  });
+  // B2B2C operator workflow — clients, projects, contributors, health
+  registerServiceRoutes(app);
 
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);

@@ -9,6 +9,7 @@ interface Message {
   content:   string;
   timestamp: Date;
   isStreaming?: boolean;
+  isGreeting?: boolean;
 }
 
 interface QuickPrompt {
@@ -90,47 +91,6 @@ const DEFAULT_PROMPTS = {
   ],
 };
 
-// ── System prompt ─────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are SoundLedger CoPilot, the expert AI assistant embedded inside SplitSheet — a Canadian music agreement and rights management platform built by SoundLedger Technologies Inc.
-
-Your role is to guide music industry operators (producers, studios, publishers) through the platform's features and answer music industry questions. You are professional, concise, warm, and deeply knowledgeable about:
-
-PLATFORM KNOWLEDGE:
-- The 4-stage operator workflow: Client Intake → Split Setup → Contributor Confirmation → Confirmed Record
-- Music agreement types: Split Sheet, Producer Agreement, Performance Agreement, Management Agreement
-- The Rights Ledger: song asset tracking, ISWC codes, ownership versioning, archival lifecycle
-- Contributor confirmation: token-based public links, no account required, timestamped + IP-logged
-- Pricing tiers: Free (1 project, 2 contributors), Pay-Per-Session ($25 CAD, 5 contributors), Multi-Creator ($50-75 CAD, 10 contributors), Express Add-On (+$25), Creator Pro ($15/month), Studio Pro ($49/month), Enterprise (custom)
-- PRO affiliations: SOCAN (Canada), ASCAP, BMI, PRS, SESAC — and that SOCAN is the default for Canadian operators
-- Canadian-specific context: SOCAN for performance/mechanical royalties, MROC/ARTISTI/ACTRA RACS for neighbouring rights
-- IPI/CAE numbers: 9-digit identifiers assigned by PROs to identify rights holders
-- ISWC codes: International Standard Musical Work Codes for registered compositions
-- Composition vs. Master rights distinction — these are tracked separately in SplitSheet
-- The 100% rule: all contributor ownership percentages must sum to exactly 100%
-- PDF export via jsPDF: available at any stage of agreement lifecycle
-- E-signatures: draw or type modes, with optional identity verification (KYC)
-- CWR export: Common Works Registration format accepted by SOCAN, ASCAP, BMI, and 80+ PROs
-
-MUSIC INDUSTRY KNOWLEDGE:
-- PA copyright (composition) vs SR copyright (sound recording/master)
-- Mechanical royalties, performance royalties, synchronization fees, artist royalties
-- How PROs collect and distribute performance royalties (writer share + publisher share)
-- What split sheets protect against: royalty freezes, disputed ownership claims
-- The $2.5B global unmatched royalties problem caused by missing split documentation
-- Standard industry roles: songwriter, producer, co-writer, featured artist, mixer, engineer
-- The 50/50 writer/publisher split convention in PRO distributions
-
-TONE AND BEHAVIOR:
-- Answer in 2-5 sentences for simple questions; use numbered steps for processes
-- Never give legal advice — always recommend consulting an entertainment lawyer for legal questions
-- Always emphasize that SplitSheet is a workflow and documentation platform, not a law firm
-- When explaining pricing, always quote in CAD
-- If a user asks something outside your knowledge, say so clearly rather than guessing
-- Be encouraging — many users are independent artists managing this for the first time
-- Use plain language over industry jargon, but explain jargon when it appears
-
-When the user shares which page they're on, tailor your guidance to that specific context.`;
-
 // ── Utility ───────────────────────────────────────────────────────────────────
 function generateId(): string {
   return Math.random().toString(36).slice(2, 11);
@@ -138,6 +98,22 @@ function generateId(): string {
 
 function formatTime(d: Date): string {
   return d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Match nested routes like /projects/abc → /projects for page-aware prompts. */
+function resolvePageKey(path: string): string {
+  if (PAGE_PROMPTS[path]) return path;
+  for (const key of Object.keys(PAGE_PROMPTS)) {
+    if (key !== "/" && path.startsWith(`${key}/`)) return key;
+  }
+  return path;
+}
+
+interface CopilotHealth {
+  configured: boolean;
+  model: string;
+  status: string;
+  fallback: string;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -150,13 +126,15 @@ export default function SoundLedgerCopilot() {
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState("");
   const [hasGreeted, setHasGreeted] = useState(false);
+  const [health,     setHealth]     = useState<CopilotHealth | null>(null);
 
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
   const abortRef   = useRef<AbortController | null>(null);
 
-  // Page-specific prompts
-  const pageCtx = PAGE_PROMPTS[location] ?? DEFAULT_PROMPTS;
+  // Page-specific prompts (supports nested routes like /projects/:id)
+  const pageKey = resolvePageKey(location);
+  const pageCtx = PAGE_PROMPTS[pageKey] ?? DEFAULT_PROMPTS;
 
   // Auto-scroll on new content
   useEffect(() => {
@@ -177,10 +155,20 @@ export default function SoundLedgerCopilot() {
         role:      "assistant",
         content:   `👋 Hey! I'm **SoundLedger CoPilot** — your AI guide for SplitSheet.\n\nI can walk you through the platform, explain music rights concepts, and help you get the most out of every feature. What would you like to know?`,
         timestamp: new Date(),
+        isGreeting: true,
       };
       setMessages([greeting]);
     }
   }, [open, hasGreeted]);
+
+  // Check AI backend status when panel opens
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/copilot/health", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setHealth(data); })
+      .catch(() => setHealth(null));
+  }, [open]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -212,9 +200,9 @@ export default function SoundLedgerCopilot() {
       id: assistantId, role: "assistant", content: "", timestamp: new Date(), isStreaming: true,
     }]);
 
-    // Build conversation history for API
+    // Build conversation history for API (exclude UI-only greeting)
     const history = messages
-      .filter(m => !m.isStreaming)
+      .filter(m => !m.isStreaming && !m.isGreeting)
       .map(m => ({ role: m.role, content: m.content }));
     history.push({ role: "user", content: trimmed });
 
@@ -224,6 +212,7 @@ export default function SoundLedgerCopilot() {
       const res = await fetch("/api/copilot", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body:    JSON.stringify({
           messages:    history,
           currentPage: location,
@@ -237,19 +226,21 @@ export default function SoundLedgerCopilot() {
         throw new Error(errData?.error ?? `Server error ${res.status}`);
       }
 
-      // Stream the response
+      // Stream the response with buffered SSE line parsing
       const reader  = res.body?.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
+      let sseBuffer = "";
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          // Parse SSE: data: {...}
-          const lines = chunk.split("\n");
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split("\n");
+          sseBuffer = lines.pop() ?? "";
+
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const data = line.slice(6).trim();
@@ -257,13 +248,33 @@ export default function SoundLedgerCopilot() {
             try {
               const parsed = JSON.parse(data);
               const delta  = parsed?.choices?.[0]?.delta?.content ?? "";
+              if (!delta) continue;
               accumulated += delta;
               setMessages(prev => prev.map(m =>
                 m.id === assistantId
                   ? { ...m, content: accumulated, isStreaming: true }
                   : m
               ));
-            } catch { /* skip malformed SSE line */ }
+            } catch { /* wait for complete SSE line */ }
+          }
+        }
+
+        // Flush any remaining complete line in the buffer
+        if (sseBuffer.startsWith("data: ")) {
+          const data = sseBuffer.slice(6).trim();
+          if (data && data !== "[DONE]") {
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed?.choices?.[0]?.delta?.content ?? "";
+              if (delta) {
+                accumulated += delta;
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, content: accumulated, isStreaming: true }
+                    : m
+                ));
+              }
+            } catch { /* ignore trailing partial line */ }
           }
         }
       }
@@ -283,6 +294,12 @@ export default function SoundLedgerCopilot() {
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [loading, messages, location, pageCtx.headline]);
+
+  const statusLabel = health?.configured
+    ? `Online · ${health.model}`
+    : health
+      ? "Offline guidance"
+      : "Checking…";
 
   // Handle quick prompt click
   const handleQuickPrompt = (prompt: string) => {
@@ -348,7 +365,7 @@ export default function SoundLedgerCopilot() {
               </div>
               <div>
                 <p className="font-bold text-sm leading-none">SoundLedger CoPilot</p>
-                <p className="text-[10px] opacity-75 mt-0.5">Powered by Claude · Always learning</p>
+                <p className="text-[10px] opacity-75 mt-0.5">{statusLabel}</p>
               </div>
             </div>
             <div className="flex items-center gap-1">

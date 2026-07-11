@@ -9,8 +9,10 @@ import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Upload, Download, Menu, Trash2, BookOpen } from "lucide-react";
-import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
+import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen } from "lucide-react";
+import WorkflowBanner from "@/components/WorkflowBanner";
+import { resetOnboarding } from "@/components/OnboardingWalkthrough";
+import UserAvatar from "@/components/UserAvatar";
 
 interface DashboardStats {
   totalContracts: number;
@@ -98,15 +100,15 @@ export default function Dashboard() {
               <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
                 <Bell className="h-4 w-4" />
               </button>
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold">
-                JD
-              </div>
+              <UserAvatar />
             </div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <WorkflowBanner />
+
         {/* Navigation Dropdown Menu */}
         <div className="mb-8">
           <div className="border-b border-border pb-4">
@@ -136,6 +138,18 @@ export default function Dashboard() {
                           <User className="mr-3 h-4 w-4" />
                           <span>Profile</span>
                           <span className="ml-auto text-xs text-muted-foreground">Essential</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-clients">
+                        <Link href="/clients" className="flex items-center w-full">
+                          <Users className="mr-3 h-4 w-4" />
+                          <span>Clients</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-projects">
+                        <Link href="/projects" className="flex items-center w-full">
+                          <FolderOpen className="mr-3 h-4 w-4" />
+                          <span>Projects</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-contracts">
@@ -203,6 +217,15 @@ export default function Dashboard() {
                           <span>Billing</span>
                           <span className="ml-auto text-xs text-muted-foreground">Lowest</span>
                         </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        onClick={() => resetOnboarding()}
+                        data-testid="dropdown-restart-tour"
+                      >
+                        <HelpCircle className="mr-3 h-4 w-4" />
+                        <span>Restart Walkthrough</span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -319,60 +342,36 @@ export default function Dashboard() {
           </div>
 
           {/* Quick Actions */}
-          <div className="bg-card p-6 rounded-xl border border-border">
+          <div className="bg-card p-6 rounded-xl border border-border" data-tour="quick-actions">
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-            <div className="mt-8">
-              <SoundLedgerCopilot />
-            </div>
             <div className="space-y-3">
-              <Button asChild className="w-full justify-start space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90" data-testid="button-create-contract">
-                <Link href="/templates">
+              <Button asChild className="w-full justify-start space-x-3 p-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90" data-testid="button-new-project">
+                <Link href="/contract/split-sheet">
                   <Plus className="h-4 w-4" />
-                  <span>Create New Contract</span>
+                  <span>New Split Sheet Project</span>
                 </Link>
               </Button>
 
-              <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
-                data-testid="button-upload-contract"
-                onClick={() => {
-                  toast({
-                    title: "Upload Feature",
-                    description: "Select a contract file to upload (PDF or Docx).",
-                  });
-                }}
-              >
-                <Upload className="h-4 w-4" />
-                <span>Upload Existing Contract</span>
-              </button>
+              <Button asChild variant="outline" className="w-full justify-start space-x-3 p-3" data-testid="button-manage-clients">
+                <Link href="/clients">
+                  <Users className="h-4 w-4" />
+                  <span>Manage Clients</span>
+                </Link>
+              </Button>
 
-              <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
-                data-testid="button-invite-collaborator"
-                onClick={() => {
-                  toast({
-                    title: "Invite Collaborator",
-                    description: "Enter email address to send invitation link.",
-                  });
-                }}
-              >
-                <Users className="h-4 w-4" />
-                <span>Invite Collaborator</span>
-              </button>
+              <Button asChild variant="outline" className="w-full justify-start space-x-3 p-3" data-testid="button-view-projects">
+                <Link href="/projects">
+                  <FolderOpen className="h-4 w-4" />
+                  <span>View All Projects</span>
+                </Link>
+              </Button>
 
-              <button 
-                className="w-full flex items-center space-x-3 p-3 bg-muted text-muted-foreground rounded-lg hover:opacity-80 transition-opacity" 
-                data-testid="button-export-contracts"
-                onClick={() => {
-                  toast({
-                    title: "Export All Contracts",
-                    description: "Your contract archive is being generated for download.",
-                  });
-                }}
-              >
-                <Download className="h-4 w-4" />
-                <span>Export All Contracts</span>
-              </button>
+              <Button asChild variant="outline" className="w-full justify-start space-x-3 p-3" data-testid="button-create-contract">
+                <Link href="/templates">
+                  <FileText className="h-4 w-4" />
+                  <span>Browse Agreement Templates</span>
+                </Link>
+              </Button>
             </div>
           </div>
         </div>
