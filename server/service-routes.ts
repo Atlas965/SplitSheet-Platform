@@ -61,11 +61,15 @@ function contractToProject(contract: Contract) {
   };
 }
 
-async function assertContractOwner(contractId: string, userId: string) {
+type ContractOwnerResult =
+  | { ok: false; error: string; status: number }
+  | { ok: true; contract: Contract };
+
+async function assertContractOwner(contractId: string, userId: string): Promise<ContractOwnerResult> {
   const contract = await storage.getContract(contractId);
-  if (!contract) return { error: "Project not found", status: 404 as const };
-  if (contract.createdBy !== userId) return { error: "Not authorized", status: 403 as const };
-  return { contract };
+  if (!contract) return { ok: false, error: "Project not found", status: 404 };
+  if (contract.createdBy !== userId) return { ok: false, error: "Not authorized", status: 403 };
+  return { ok: true, contract };
 }
 
 async function buildClientList(userId: string) {

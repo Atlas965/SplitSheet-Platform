@@ -560,18 +560,25 @@ export async function assessLoginRisk(userId: string, req: Request): Promise<num
   return Math.min(score, 100);
 }
 
-// ── 8. IN-MEMORY RATE LIMITER ─────────────────────────────────────────────────
+// ── 8. RATE LIMITERS ──────────────────────────────────────────────────────────
 
-const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+/**
+ * In-memory rate limiter — fine-grained, per-route, single-instance.
+ * Fast (no DB round-trip) but resets on restart and doesn't share state
+ * across multiple app instances. Suitable for tight per-action limits
+ * (e.g. 5 sign attempts/min) layered on top of the global Postgres-backed
+ * limiter below.
+ */
+const inMemoryBuckets = new Map<string, { count: number; resetAt: number }>();
 
 export function createRateLimiter(maxReqs: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const key   = `${(req as any).ip}:${req.path}`;
     const now   = Date.now();
-    const entry = rateLimitBuckets.get(key);
+    const entry = inMemoryBuckets.get(key);
 
     if (!entry || now > entry.resetAt) {
-      rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      inMemoryBuckets.set(key, { count: 1, resetAt: now + windowMs });
       next();
       return;
     }
@@ -583,6 +590,51 @@ export function createRateLimiter(maxReqs: number, windowMs: number) {
       return;
     }
     next();
+  };
+}
+
+/**
+ * Postgres-backed rate limiter — multi-instance / autoscale safe.
+ * Uses the `rate_limit_buckets` table (defined in shared/schema.ts) so the
+ * limit is shared correctly across however many server processes are
+ * running behind the load balancer, and survives restarts/deploys.
+ *
+ * Implemented as a single atomic UPSERT so concurrent requests can't race
+ * past the limit (INSERT ... ON CONFLICT DO UPDATE with a guarded WHERE).
+ */
+export function createPgRateLimiter(maxReqs: number, windowMs: number, scope = "global") {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const ip  = (req as any).ip ?? req.socket.remoteAddress ?? "unknown";
+    const key = `${scope}:${ip}`;
+    const now = new Date();
+
+    try {
+      const rows = await db.execute(sql`
+        INSERT INTO rate_limit_buckets (bucket_key, count, reset_at)
+        VALUES (${key}, 1, ${new Date(now.getTime() + windowMs)})
+        ON CONFLICT (bucket_key) DO UPDATE SET
+          count    = CASE WHEN rate_limit_buckets.reset_at < ${now}
+                          THEN 1
+                          ELSE rate_limit_buckets.count + 1 END,
+          reset_at = CASE WHEN rate_limit_buckets.reset_at < ${now}
+                          THEN ${new Date(now.getTime() + windowMs)}
+                          ELSE rate_limit_buckets.reset_at END
+        RETURNING count, reset_at
+      `);
+      const bucket = rows.rows[0] as { count: number; reset_at: string };
+
+      if (Number(bucket.count) > maxReqs) {
+        const retryAfterSec = Math.max(1, Math.ceil((new Date(bucket.reset_at).getTime() - now.getTime()) / 1000));
+        res.setHeader("Retry-After", retryAfterSec);
+        res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+        return;
+      }
+      next();
+    } catch (err) {
+      // Never let a rate-limiter outage take down the whole API.
+      console.error("[PG RATE LIMIT ERROR]", err);
+      next();
+    }
   };
 }
 
@@ -787,7 +839,18 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
   res.setHeader("Permissions-Policy",        "camera=(), microphone=(), geolocation=()");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;"
+    [
+      "default-src 'self'",
+      // Stripe.js must be loaded from js.stripe.com to tokenize card data
+      "script-src 'self' 'unsafe-inline' https://js.stripe.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      // Stripe Elements renders card fields inside an iframe
+      "frame-src https://js.stripe.com https://hooks.stripe.com",
+      // Stripe.js calls out to api.stripe.com to confirm payments
+      "connect-src 'self' https://api.stripe.com",
+      "img-src 'self' data: https:",
+    ].join("; ") + ";"
   );
   next();
 }

@@ -17,6 +17,9 @@ import {
   revenueEvents,
   payoutRecords,
   userBalances,
+  organizations,
+  organizationMembers,
+  organizationApiKeys,
   type User,
   type UpsertUser,
   type Contract,
@@ -42,9 +45,16 @@ import {
   type InsertRevenueEvent,
   type PayoutRecord,
   type UserBalance,
+  type Organization,
+  type InsertOrganization,
+  type OrganizationMember,
+  type InsertOrganizationMember,
+  type OrganizationApiKey,
+  type InsertOrganizationApiKey,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
+import { encryptMessageContent, decryptMessageContent } from "./message-crypto";
 
 export interface IStorage {
   // User operations
@@ -93,6 +103,7 @@ export interface IStorage {
   getConversation(userId1: string, userId2: string, limit?: number): Promise<any[]>;
   getUserConversations(userId: string): Promise<any[]>;
   markMessagesAsRead(userId: string, senderId: string): Promise<void>;
+  getUnreadMessageCount(userId: string): Promise<number>;
 
   // Notification methods
   createNotification(userId: string, title: string, content: string, type: string, actionUrl?: string): Promise<any>;
@@ -117,17 +128,20 @@ export interface IStorage {
   createSongAsset(asset: InsertSongAsset): Promise<SongAsset>;
   getSongAssets(userId: string): Promise<SongAsset[]>;
   getSongAsset(id: string): Promise<SongAsset | undefined>;
+  getSongAssetsByContract(contractId: string): Promise<SongAsset[]>;
   updateSongAsset(id: string, updates: Partial<SongAsset>): Promise<SongAsset>;
 
   // Ownership ledger — append-only records
   createOwnershipRecord(record: InsertOwnershipRecord): Promise<OwnershipRecord>;
   getCurrentOwnership(assetId: string): Promise<OwnershipRecord[]>;
   getOwnershipHistory(assetId: string): Promise<OwnershipRecord[]>;
+  getCurrentOwnershipWithNames(assetId: string): Promise<Array<OwnershipRecord & { name: string; email: string | null }>>;
   updateOwnershipSplit(assetId: string, splits: Array<{ userId: string; ownershipPercentage: string; role: string }>, changedBy: string, changeReason?: string): Promise<OwnershipRecord[]>;
 
   // Revenue events
   recordRevenueEvent(event: InsertRevenueEvent): Promise<RevenueEvent>;
   getRevenueEvents(assetId: string): Promise<RevenueEvent[]>;
+  getPayoutRecordsByRevenueEvent(revenueEventId: string): Promise<PayoutRecord[]>;
   calculatePayouts(revenueEventId: string): Promise<PayoutRecord[]>;
   executePayouts(revenueEventId: string): Promise<PayoutRecord[]>;
 
@@ -140,6 +154,27 @@ export interface IStorage {
   getConfirmationsByContract(contractId: string): Promise<Confirmation[]>;
   createConfirmation(confirmation: InsertConfirmation): Promise<Confirmation>;
   updateConfirmation(id: string, updates: Partial<Confirmation>): Promise<Confirmation>;
+
+  // Organizations — enterprise multi-tenant workspaces
+  getOrganizationsForUser(userId: string): Promise<Organization[]>;
+  getOrganization(id: string): Promise<Organization | undefined>;
+  getOrganizationBySlOrgId(slOrgId: string): Promise<Organization | undefined>;
+  createOrganization(org: InsertOrganization & { slOrgId: string }): Promise<Organization>;
+  updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization>;
+
+  // Organization membership (RBAC: owner, admin, member, viewer)
+  getOrganizationMembers(organizationId: string): Promise<OrganizationMember[]>;
+  getOrganizationMember(organizationId: string, userId: string): Promise<OrganizationMember | undefined>;
+  addOrganizationMember(member: InsertOrganizationMember): Promise<OrganizationMember>;
+  updateOrganizationMemberRole(id: string, role: string): Promise<OrganizationMember>;
+  removeOrganizationMember(id: string): Promise<void>;
+
+  // Organization-scoped API keys
+  getOrganizationApiKeys(organizationId: string): Promise<OrganizationApiKey[]>;
+  createOrganizationApiKey(
+    key: InsertOrganizationApiKey & { keyHash: string; keyPrefix: string }
+  ): Promise<OrganizationApiKey>;
+  revokeOrganizationApiKey(id: string, organizationId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -680,21 +715,25 @@ export class DatabaseStorage implements IStorage {
 
   // Messaging methods
   async sendMessage(senderId: string, receiverId: string, content: string, messageType: string = 'text'): Promise<Message> {
+    const encryptedContent = encryptMessageContent(content);
     const [message] = await db.insert(messages).values({
       senderId,
       receiverId,
-      content,
+      content: encryptedContent,
       messageType
     }).returning();
 
-    // Track activity
     await this.trackUserActivity(senderId, 'message_sent', { receiverId });
 
-    return message;
+    return { ...message, content };
+  }
+
+  private decryptMessageRow(row: Message): Message {
+    return { ...row, content: decryptMessageContent(row.content) };
   }
 
   async getConversation(userId1: string, userId2: string, limit: number = 50): Promise<Message[]> {
-    return await db.select()
+    const rows = await db.select()
       .from(messages)
       .where(
         or(
@@ -704,10 +743,11 @@ export class DatabaseStorage implements IStorage {
       )
       .orderBy(desc(messages.createdAt))
       .limit(limit);
+
+    return rows.map((row) => this.decryptMessageRow(row));
   }
 
   async getUserConversations(userId: string): Promise<any[]> {
-    // Get unique conversation partners with latest message
     const conversations = await db.select({
       message: messages,
       sender: {
@@ -734,7 +774,20 @@ export class DatabaseStorage implements IStorage {
     )
     .orderBy(desc(messages.createdAt));
 
-    // Group by conversation partner and return latest message per conversation
+    const unreadRows = await db
+      .select({
+        senderId: messages.senderId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(messages)
+      .where(and(
+        eq(messages.receiverId, userId),
+        eq(messages.isRead, false),
+      ))
+      .groupBy(messages.senderId);
+
+    const unreadMap = new Map(unreadRows.map((r) => [r.senderId, r.count]));
+
     const conversationMap = new Map();
     conversations.forEach(conv => {
       const partnerId = conv.message.senderId === userId ? conv.message.receiverId : conv.message.senderId;
@@ -743,13 +796,24 @@ export class DatabaseStorage implements IStorage {
       if (!conversationMap.has(partnerId)) {
         conversationMap.set(partnerId, {
           partner,
-          latestMessage: conv.message,
-          unreadCount: 0
+          latestMessage: this.decryptMessageRow(conv.message),
+          unreadCount: unreadMap.get(partnerId) ?? 0,
         });
       }
     });
 
     return Array.from(conversationMap.values());
+  }
+
+  async getUnreadMessageCount(userId: string): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(messages)
+      .where(and(
+        eq(messages.receiverId, userId),
+        eq(messages.isRead, false),
+      ));
+    return row?.count ?? 0;
   }
 
   async markMessagesAsRead(userId: string, senderId: string): Promise<void> {
@@ -874,6 +938,14 @@ export class DatabaseStorage implements IStorage {
     return asset;
   }
 
+  async getSongAssetsByContract(contractId: string): Promise<SongAsset[]> {
+    return await db
+      .select()
+      .from(songAssets)
+      .where(eq(songAssets.contractId, contractId))
+      .orderBy(desc(songAssets.createdAt));
+  }
+
   async updateSongAsset(id: string, updates: Partial<SongAsset>): Promise<SongAsset> {
     const [asset] = await db
       .update(songAssets)
@@ -901,6 +973,23 @@ export class DatabaseStorage implements IStorage {
       .from(ownershipRecords)
       .where(and(eq(ownershipRecords.assetId, assetId), eq(ownershipRecords.version, maxV)))
       .orderBy(desc(ownershipRecords.ownershipPercentage));
+  }
+
+  // Current ownership joined with stakeholder display names/emails (for exports, CWR, UI)
+  async getCurrentOwnershipWithNames(
+    assetId: string
+  ): Promise<Array<OwnershipRecord & { name: string; email: string | null }>> {
+    const ownership = await this.getCurrentOwnership(assetId);
+    const rows = await Promise.all(
+      ownership.map(async (o) => {
+        const user = await this.getUser(o.userId).catch(() => undefined);
+        const name = user
+          ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || user.email || o.userId.slice(0, 8)
+          : o.userId.slice(0, 8);
+        return { ...o, name, email: user?.email ?? null };
+      })
+    );
+    return rows;
   }
 
   // Full immutable audit trail — every version of every ownership change
@@ -958,6 +1047,14 @@ export class DatabaseStorage implements IStorage {
       .from(revenueEvents)
       .where(eq(revenueEvents.assetId, assetId))
       .orderBy(desc(revenueEvents.createdAt));
+  }
+
+  async getPayoutRecordsByRevenueEvent(revenueEventId: string): Promise<PayoutRecord[]> {
+    return await db
+      .select()
+      .from(payoutRecords)
+      .where(eq(payoutRecords.revenueEventId, revenueEventId))
+      .orderBy(desc(payoutRecords.createdAt));
   }
 
   // Calculate (but do not execute) payout splits based on current ownership
@@ -1077,6 +1174,110 @@ export class DatabaseStorage implements IStorage {
       .where(eq(confirmations.id, id))
       .returning();
     return updatedConfirmation;
+  }
+
+  // ─── ORGANIZATIONS — enterprise multi-tenant workspaces ───────────────────
+
+  async getOrganizationsForUser(userId: string): Promise<Organization[]> {
+    const rows = await db
+      .select({ organization: organizations })
+      .from(organizationMembers)
+      .innerJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
+      .where(eq(organizationMembers.userId, userId))
+      .orderBy(desc(organizations.createdAt));
+    return rows.map((r) => r.organization);
+  }
+
+  async getOrganization(id: string): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
+    return org;
+  }
+
+  async getOrganizationBySlOrgId(slOrgId: string): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).where(eq(organizations.slOrgId, slOrgId));
+    return org;
+  }
+
+  async createOrganization(org: InsertOrganization & { slOrgId: string }): Promise<Organization> {
+    const [newOrg] = await db.insert(organizations).values(org).returning();
+    return newOrg;
+  }
+
+  async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization> {
+    const [updated] = await db
+      .update(organizations)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(organizations.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Organization membership (RBAC)
+  async getOrganizationMembers(organizationId: string): Promise<OrganizationMember[]> {
+    return await db
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, organizationId))
+      .orderBy(organizationMembers.createdAt);
+  }
+
+  async getOrganizationMember(organizationId: string, userId: string): Promise<OrganizationMember | undefined> {
+    const [member] = await db
+      .select()
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.organizationId, organizationId),
+          eq(organizationMembers.userId, userId)
+        )
+      );
+    return member;
+  }
+
+  async addOrganizationMember(member: InsertOrganizationMember): Promise<OrganizationMember> {
+    const [newMember] = await db.insert(organizationMembers).values(member).returning();
+    return newMember;
+  }
+
+  async updateOrganizationMemberRole(id: string, role: string): Promise<OrganizationMember> {
+    const [updated] = await db
+      .update(organizationMembers)
+      .set({ role })
+      .where(eq(organizationMembers.id, id))
+      .returning();
+    return updated;
+  }
+
+  async removeOrganizationMember(id: string): Promise<void> {
+    await db.delete(organizationMembers).where(eq(organizationMembers.id, id));
+  }
+
+  // Organization-scoped API keys
+  async getOrganizationApiKeys(organizationId: string): Promise<OrganizationApiKey[]> {
+    return await db
+      .select()
+      .from(organizationApiKeys)
+      .where(eq(organizationApiKeys.organizationId, organizationId))
+      .orderBy(desc(organizationApiKeys.createdAt));
+  }
+
+  async createOrganizationApiKey(
+    key: InsertOrganizationApiKey & { keyHash: string; keyPrefix: string }
+  ): Promise<OrganizationApiKey> {
+    const [newKey] = await db.insert(organizationApiKeys).values(key).returning();
+    return newKey;
+  }
+
+  async revokeOrganizationApiKey(id: string, organizationId: string): Promise<void> {
+    await db
+      .update(organizationApiKeys)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(organizationApiKeys.id, id),
+          eq(organizationApiKeys.organizationId, organizationId)
+        )
+      );
   }
 
   // Admin methods

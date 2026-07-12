@@ -125,7 +125,7 @@ function Li({ children }: { children: React.ReactNode }) {
 
 // ─── Legal content components ─────────────────────────────────────────────────
 
-function TermsContent() {
+export function TermsContent() {
   return (
     <>
       <p
@@ -250,7 +250,7 @@ function TermsContent() {
   );
 }
 
-function PrivacyContent() {
+export function PrivacyContent() {
   return (
     <>
       <p

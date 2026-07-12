@@ -7,6 +7,7 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
 import SignatureCanvas, { type SignaturePayload } from "@/components/SignatureCanvas";
+import IdentityVerification from "@/components/IdentityVerification";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,8 +17,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users, Share2, MessageSquare, Smartphone, Copy, Check, Music, DollarSign, Banknote } from "lucide-react";
-import { type Release, type RevenueEntry, type Payout } from "@shared/schema";
+import { CheckCircle2, RotateCcw, Shield, Gavel, Clock, User, Mail, PenLine, Users, Share2, MessageSquare, Smartphone, Copy, Check, Music, DollarSign, Banknote, Loader2 } from "lucide-react";
 
 interface Contract {
   id: string;
@@ -25,26 +25,47 @@ interface Contract {
   type: string;
   status: string;
   data: any;
+  metadata?: any;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
 }
 
-interface ReleaseDisplay extends Release {
+// Distribution-release tracking is not yet implemented (no `releases` table) —
+// this UI section stays empty (honestly) until that feature exists.
+interface ReleaseDisplay {
   id: string;
+  distributorName?: string;
+  status?: string;
+  releaseDate?: string;
+  platformDistributionTargets?: string[];
 }
 
-interface RevenueEntryDisplay extends RevenueEntry {
+// Backed by GET /api/revenue-entries?projectId=:contractId (server/routes.ts),
+// which reads from the real `revenue_events` table via song_assets.contractId.
+interface RevenueEntryDisplay {
   id: string;
+  source: string;
+  amount: string;
+  currency: string;
+  reportingPeriodStart?: string;
+  reportingPeriodEnd?: string;
+  releaseId?: string | null;
 }
 
-interface PayoutDisplay extends Payout {
+// Backed by GET /api/payouts?projectId=:contractId, reading `payout_records`.
+interface PayoutDisplay {
   id: string;
+  contributorId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  revenueEntryId: string;
 }
 
 export default function ContractDetails() {
   const { toast } = useToast();
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const [showShareDialog, setShowShareDialog] = useState(false);
@@ -52,6 +73,14 @@ export default function ContractDetails() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [savedSignature, setSavedSignature] = useState<SignaturePayload | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [identityVerified, setIdentityVerified] = useState(false);
+  const [skippedIdentityCheck, setSkippedIdentityCheck] = useState(false);
+
+  const { data: verifyStatus } = useQuery<{ verified: boolean; verifiedAt: string | null }>({
+    queryKey: ["/api/verify/status"],
+    enabled: isAuthenticated,
+    retry: false,
+  });
 
   const { data: confirmations, isLoading: confirmationsLoading } = useQuery<any[]>({
     queryKey: [`/api/contracts/${id}/confirmations`],
@@ -907,11 +936,18 @@ export default function ContractDetails() {
                       </Button>
                     </div>
                   );
-                })() : (
+                })() : (verifyStatus?.verified || identityVerified || skippedIdentityCheck) ? (
                   /* ── SIGNING CANVAS ── */
                   <SignatureCanvas
                     onSave={(payload) => eSignMutation.mutate(payload)}
                     isSaving={eSignMutation.isPending}
+                  />
+                ) : (
+                  /* ── IDENTITY VERIFICATION (KYC) GATE — before signing ── */
+                  <IdentityVerification
+                    prefillName={`${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim()}
+                    onVerified={() => setIdentityVerified(true)}
+                    onSkip={() => setSkippedIdentityCheck(true)}
                   />
                 )}
 

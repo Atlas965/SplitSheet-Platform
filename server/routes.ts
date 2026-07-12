@@ -30,6 +30,12 @@ import {
 import { registerConfirmationRoutes } from "./confirmation-routes";
 import { registerCopilotRoutes } from "./copilot-routes";
 import { registerServiceRoutes } from "./service-routes";
+import { registerOrganizationRoutes } from "./organization-routes";
+import { registerMessageRoutes } from "./message-routes";
+import { registerPaymentRoutes } from "./payment-routes";
+import { registerSecurityRoutes } from "./security-routes";
+import { registerComplianceRoutes, requireTermsAccepted } from "./compliance-routes";
+import { registerVerificationRoutes } from "./verification-routes";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -137,7 +143,7 @@ if (stripeKey) {
   // Validate that we have a secret key, not a public key
   if (stripeKey.startsWith("sk_")) {
     stripe = new Stripe(stripeKey, {
-      apiVersion: "2023-10-16",
+      apiVersion: "2025-08-27.basil",
     });
     console.log("Stripe initialized with secret key");
   } else {
@@ -230,6 +236,12 @@ Please provide your analysis and strategic recommendation.`,
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
+  registerMessageRoutes(app);
+
+  // Terms of Service acceptance + PIPEDA/GDPR export & deletion — registered
+  // before the enforcement gate so they're always reachable.
+  registerComplianceRoutes(app);
+  app.use(requireTermsAccepted);
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -1841,6 +1853,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // GET current ownership with stakeholder display names (for CWR export / UI)
+  app.get(
+    "/api/assets/:id/ownership/named",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const ownership = await storage.getCurrentOwnershipWithNames(req.params.id);
+        res.json(ownership);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch ownership" });
+      }
+    },
+  );
+
   // GET full ownership history (immutable audit trail)
   app.get(
     "/api/assets/:id/ownership/history",
@@ -1993,6 +2019,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // ─── PROJECT-SCOPED REVENUE VIEWS (contract-details.tsx "Releases" tab) ────
+  // Reads the real revenue_events/payout_records ledger for any song_assets
+  // linked to this contract (contracts.id === song_assets.contractId).
+
+  app.get("/api/releases", isAuthenticated, async (_req: any, res) => {
+    // No distributor-release tracking table exists yet — return an honest
+    // empty list rather than fabricating data. Wire up once a `releases`
+    // table is added to shared/schema.ts.
+    res.json([]);
+  });
+
+  app.get("/api/revenue-entries", isAuthenticated, async (req: any, res) => {
+    try {
+      const projectId = String(req.query.projectId ?? "");
+      if (!projectId) return res.json([]);
+      const assets = await storage.getSongAssetsByContract(projectId);
+      const entriesByAsset = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
+      const entries = entriesByAsset.flat().map((e) => ({
+        id: e.id,
+        source: e.source,
+        amount: e.amount,
+        currency: e.currency,
+        reportingPeriodStart: e.periodStart,
+        reportingPeriodEnd: e.periodEnd,
+        releaseId: null,
+      }));
+      res.json(entries);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch revenue entries" });
+    }
+  });
+
+  app.get("/api/payouts", isAuthenticated, async (req: any, res) => {
+    try {
+      const projectId = String(req.query.projectId ?? "");
+      if (!projectId) return res.json([]);
+      const assets = await storage.getSongAssetsByContract(projectId);
+      const revenueEventLists = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
+      const payoutLists = await Promise.all(
+        revenueEventLists.flat().map((e) => storage.getPayoutRecordsByRevenueEvent(e.id))
+      );
+      const payouts = payoutLists.flat().map((p) => ({
+        id: p.id,
+        contributorId: p.userId,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        revenueEntryId: p.revenueEventId,
+      }));
+      res.json(payouts);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to fetch payouts" });
+    }
+  });
+
   // ─── CONFIRMATIONS ────────────────────────────────────────────────────────
 
   // Generate confirmation links for a contract
@@ -2141,8 +2222,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // B2B2C operator workflow — clients, projects, contributors, health
   registerServiceRoutes(app);
 
+  // Enterprise multi-tenant workspaces — organizations, RBAC members, org API keys
+  registerOrganizationRoutes(app);
+
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);
+
+  // Stripe Connect payouts — per-contributor royalty transfers
+  registerPaymentRoutes(app);
+
+  // Hash-chained split versioning, fraud detection, disputes, API keys, RaaS verification
+  await registerSecurityRoutes(app);
+
+  // Identity verification (OTP) backend
+  registerVerificationRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

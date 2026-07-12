@@ -42,6 +42,14 @@ export const users = pgTable("users", {
   subscriptionStatus: varchar("subscription_status").default("free"),
   subscriptionTier: varchar("subscription_tier").default("free"), // free, pro, label
   role: varchar("role").default("user"), // user, admin
+  // Stripe Connect Express — per-contributor payout account
+  stripeConnectAccountId: varchar("stripe_connect_account_id"),
+  stripeConnectOnboarded: boolean("stripe_connect_onboarded").default(false),
+  stripeConnectChargesEnabled: boolean("stripe_connect_charges_enabled").default(false),
+  stripeConnectPayoutsEnabled: boolean("stripe_connect_payouts_enabled").default(false),
+  // Terms of Service / Privacy Policy acceptance
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  termsVersion: varchar("terms_version"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -263,6 +271,119 @@ export const userBalances = pgTable("user_balances", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ─── B2B2C SPLIT CONFIRMATIONS (public token-based contributor links) ───────
+export const splitConfirmations = pgTable("split_confirmations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id).notNull(),
+  collaboratorId: varchar("collaborator_id").references(() => contractCollaborators.id).notNull(),
+  token: varchar("token").notNull().unique(),
+  status: varchar("status").default("not_sent"), // not_sent, sent, confirmed, change_requested
+  sentAt: timestamp("sent_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  expiresAt: timestamp("expires_at"),
+  confirmedName: varchar("confirmed_name"),
+  confirmedEmail: varchar("confirmed_email"),
+  confirmationNote: text("confirmation_note"),
+  ipAddress: varchar("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ─── ORGANIZATIONS — enterprise multi-tenant identity layer ────────────────
+// Labels, studios, publishers, distributors, and PROs get a permanent
+// SL-ORG-XXXXXXXX id (see .agents/memory/sl-ids.md) plus RBAC membership so
+// an enterprise client can share one workspace, API keys, and roster of
+// contributors across multiple logged-in users instead of a single account.
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slOrgId: varchar("sl_org_id").notNull().unique(), // permanent external ID: SL-ORG-XXXXXXXX
+  name: varchar("name").notNull(),
+  type: varchar("type").notNull().default("label"), // label, studio, publisher, distributor, pro
+  email: varchar("email"),
+  website: varchar("website"),
+  country: varchar("country"),
+  createdBy: varchar("created_by").references(() => users.id).notNull(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Organization membership — RBAC join table between users and organizations.
+// The user who creates an organization is automatically added here as "owner".
+export const organizationMembers = pgTable("organization_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").references(() => organizations.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  role: varchar("role").notNull().default("member"), // owner, admin, member, viewer
+  invitedBy: varchar("invited_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Organization-scoped API keys — separate from the personal keys in
+// server/security.ts (`api_keys`, owner_id = a single user). Only the
+// SHA-256 hash is ever stored; the raw key is returned once on creation.
+export const organizationApiKeys = pgTable("organization_api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").references(() => organizations.id).notNull(),
+  name: varchar("name").notNull(),
+  keyHash: varchar("key_hash").notNull().unique(),
+  keyPrefix: varchar("key_prefix").notNull(),
+  scopes: text("scopes").array().notNull().default(sql`'{}'::text[]`),
+  createdBy: varchar("created_by").references(() => users.id).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const ORGANIZATION_TYPES = ["label", "studio", "publisher", "distributor", "pro"] as const;
+export const ORGANIZATION_ROLES = ["owner", "admin", "member", "viewer"] as const;
+
+// ─── PAYMENT WEBHOOK IDEMPOTENCY ─────────────────────────────────────────────
+export const paymentEvents = pgTable("payment_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  stripeEventId: varchar("stripe_event_id").notNull().unique(),
+  eventType: varchar("event_type").notNull(),
+  payload: jsonb("payload"),
+  processed: boolean("processed").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ─── ERROR MONITORING / OBSERVABILITY ────────────────────────────────────────
+export const errorLogs = pgTable("error_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  level: varchar("level").notNull().default("error"), // error, warn, fatal
+  message: text("message").notNull(),
+  stack: text("stack"),
+  route: varchar("route"),
+  userId: varchar("user_id"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ─── DB-BACKED RATE LIMITING (multi-instance / autoscale safe) ──────────────
+export const rateLimitBuckets = pgTable("rate_limit_buckets", {
+  bucketKey: varchar("bucket_key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  resetAt: timestamp("reset_at").notNull(),
+});
+
+// ─── IDENTITY VERIFICATION (KYC) CODES ───────────────────────────────────────
+export const verificationCodes = pgTable("verification_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id),
+  channel: varchar("channel").notNull().default("email"), // email, sms
+  destination: varchar("destination").notNull(), // email address or phone number
+  codeHash: varchar("code_hash").notNull(),
+  purpose: varchar("purpose").notNull().default("identity_verification"),
+  legalName: varchar("legal_name"),
+  idType: varchar("id_type"),
+  attempts: integer("attempts").notNull().default(0),
+  consumedAt: timestamp("consumed_at"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
 
 // Relations
@@ -303,6 +424,33 @@ export const contractSignaturesRelations = relations(contractSignatures, ({ one 
   collaborator: one(contractCollaborators, {
     fields: [contractSignatures.collaboratorId],
     references: [contractCollaborators.id],
+  }),
+}));
+
+export const organizationsRelations = relations(organizations, ({ one, many }) => ({
+  creator: one(users, {
+    fields: [organizations.createdBy],
+    references: [users.id],
+  }),
+  members: many(organizationMembers),
+  apiKeys: many(organizationApiKeys),
+}));
+
+export const organizationMembersRelations = relations(organizationMembers, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [organizationMembers.organizationId],
+    references: [organizations.id],
+  }),
+  user: one(users, {
+    fields: [organizationMembers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const organizationApiKeysRelations = relations(organizationApiKeys, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [organizationApiKeys.organizationId],
+    references: [organizations.id],
   }),
 }));
 
@@ -443,6 +591,62 @@ export type InsertRevenueEvent = z.infer<typeof insertRevenueEventSchema>;
 export type PayoutRecord = typeof payoutRecords.$inferSelect;
 export type InsertPayoutRecord = z.infer<typeof insertPayoutRecordSchema>;
 export type UserBalance = typeof userBalances.$inferSelect;
+
+export const insertSplitConfirmationSchema = createInsertSchema(splitConfirmations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type SplitConfirmation = typeof splitConfirmations.$inferSelect;
+export type InsertSplitConfirmation = z.infer<typeof insertSplitConfirmationSchema>;
+
+export const insertPaymentEventSchema = createInsertSchema(paymentEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type PaymentEvent = typeof paymentEvents.$inferSelect;
+export type InsertPaymentEvent = z.infer<typeof insertPaymentEventSchema>;
+
+export const insertErrorLogSchema = createInsertSchema(errorLogs).omit({
+  id: true,
+  createdAt: true,
+});
+export type ErrorLog = typeof errorLogs.$inferSelect;
+export type InsertErrorLog = z.infer<typeof insertErrorLogSchema>;
+
+export const insertVerificationCodeSchema = createInsertSchema(verificationCodes).omit({
+  id: true,
+  createdAt: true,
+});
+export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type InsertVerificationCode = z.infer<typeof insertVerificationCodeSchema>;
+
+// Organizations — enterprise multi-tenant workspaces
+export const insertOrganizationSchema = createInsertSchema(organizations).omit({
+  id: true,
+  slOrgId: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertOrganizationMemberSchema = createInsertSchema(organizationMembers).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertOrganizationApiKeySchema = createInsertSchema(organizationApiKeys).omit({
+  id: true,
+  keyHash: true,
+  keyPrefix: true,
+  lastUsedAt: true,
+  revokedAt: true,
+  createdAt: true,
+});
+
+export type Organization = typeof organizations.$inferSelect;
+export type InsertOrganization = z.infer<typeof insertOrganizationSchema>;
+export type OrganizationMember = typeof organizationMembers.$inferSelect;
+export type InsertOrganizationMember = z.infer<typeof insertOrganizationMemberSchema>;
+export type OrganizationApiKey = typeof organizationApiKeys.$inferSelect;
+export type InsertOrganizationApiKey = z.infer<typeof insertOrganizationApiKeySchema>;
 
 // Activity tracking schemas
 export const activityEventSchema = z.object({

@@ -25,10 +25,13 @@ import Ownership from "@/pages/ownership";
 import Notifications from "@/pages/notifications";
 import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
+import Organizations from "@/pages/organizations";
+import OrganizationDetail from "@/pages/organization-detail";
 import ConfirmSplit from "@/pages/confirm-split";
 import NotFound from "@/pages/not-found";
 import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
 import OnboardingWalkthrough from "@/components/OnboardingWalkthrough";
+import TermsGate from "@/components/TermsGate";
 import ClientDetail from "@/pages/client-detail";
 import ProjectDetail from "@/pages/project-detail";
 
@@ -37,7 +40,7 @@ function Router() {
   const showCopilot = !isLoading && isAuthenticated;
 
   return (
-    <>
+    <TermsGate>
       <Switch>
         {/* PUBLIC — no auth required */}
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
@@ -74,6 +77,8 @@ function Router() {
             <Route path="/clients/:id" component={ClientDetail} />
             <Route path="/projects" component={Projects} />
             <Route path="/projects/:id" component={ProjectDetail} />
+            <Route path="/organizations" component={Organizations} />
+            <Route path="/organizations/:id" component={OrganizationDetail} />
             <Route path="/contract/new" component={() => {
               window.location.replace("/contract/split-sheet");
               return null;
@@ -85,7 +90,7 @@ function Router() {
       </Switch>
       {showCopilot && <SoundLedgerCopilot />}
       {showCopilot && <OnboardingWalkthrough />}
-    </>
+    </TermsGate>
   );
 }
 

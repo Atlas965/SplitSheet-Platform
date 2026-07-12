@@ -14,10 +14,14 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { User, insertUserSchema } from "@shared/schema";
-import { Camera, User as UserIcon, Mail, Phone, MapPin, Globe, Plus, X } from "lucide-react";
+import { Camera, User as UserIcon, Mail, Phone, MapPin, Globe, Plus, X, Download, ShieldAlert, Trash2 } from "lucide-react";
 import { activityTracker } from "@/lib/activityTracker";
 
 const profileSchema = insertUserSchema.omit({
@@ -41,6 +45,8 @@ type ProfileFormData = z.infer<typeof profileSchema>;
 export default function ProfilePage() {
   const { toast } = useToast();
   const [newSkill, setNewSkill] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Track page view
   React.useEffect(() => {
@@ -147,6 +153,37 @@ export default function ProfilePage() {
   const onSubmit = (data: ProfileFormData) => {
     updateProfileMutation.mutate(data);
   };
+
+  const handleExportData = async () => {
+    setIsExporting(true);
+    try {
+      const res = await apiRequest("GET", "/api/user/export");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `splitsheet-data-export-${user?.id ?? "me"}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export Ready", description: "Your data export has been downloaded." });
+    } catch {
+      toast({ title: "Export Failed", description: "Could not generate your data export. Please try again.", variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/account/delete", { confirm: true }),
+    onSuccess: () => {
+      toast({ title: "Account Deleted", description: "Your account has been deactivated. You will now be signed out." });
+      setShowDeleteDialog(false);
+      setTimeout(() => { window.location.href = "/api/logout"; }, 1200);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete account. Please try again.", variant: "destructive" });
+    },
+  });
 
   const addSkill = () => {
     if (newSkill.trim()) {
@@ -404,7 +441,69 @@ export default function ProfilePage() {
             </Form>
           </CardContent>
         </Card>
+
+        {/* Privacy & Data — PIPEDA / GDPR-equivalent controls */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5" />
+              Privacy & Data
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-lg border">
+              <div>
+                <p className="font-medium">Download my data</p>
+                <p className="text-sm text-muted-foreground">
+                  Get a copy of every record we hold about you — profile, contracts, ownership, payouts, and activity — as a JSON file.
+                </p>
+              </div>
+              <Button variant="outline" onClick={handleExportData} disabled={isExporting} data-testid="button-export-data">
+                <Download className="h-4 w-4 mr-2" />
+                {isExporting ? "Preparing..." : "Export My Data"}
+              </Button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-lg border border-destructive/30 bg-destructive/5">
+              <div>
+                <p className="font-medium text-destructive">Delete my account</p>
+                <p className="text-sm text-muted-foreground">
+                  Anonymizes your personal information and deactivates your account. Financial/legal records required for royalty
+                  accounting are retained in anonymized form, as required by law.
+                </p>
+              </div>
+              <Button variant="destructive" onClick={() => setShowDeleteDialog(true)} data-testid="button-delete-account">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Account
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete your account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will anonymize your profile (name, email, bio, photo) and deactivate your account immediately.
+              Signed contracts and payout ledgers tied to you are retained in anonymized form for legal/financial
+              record-keeping. This action cannot be undone from within the app.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-account">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteAccountMutation.mutate()}
+              disabled={deleteAccountMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-account"
+            >
+              {deleteAccountMutation.isPending ? "Deleting..." : "Yes, Delete My Account"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

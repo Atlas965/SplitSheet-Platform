@@ -19,6 +19,8 @@ import crypto from "crypto";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
+import { sendEmail, confirmationLinkEmail } from "./email-service";
+import { storage } from "./storage";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -115,16 +117,48 @@ export function registerConfirmationRoutes(app: Express): void {
         }
 
         const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
-        const confirmations = results.map((r) => ({
-          ...r,
-          link: `${baseUrl}/confirm/${contractId}/${r.token}`,
-          whatsapp: `https://wa.me/?text=${encodeURIComponent(
-            `Hey ${r.name} — please review and confirm your split for "${contract.title}" here: ${baseUrl}/confirm/${contractId}/${r.token}`
-          )}`,
-          sms: `sms:?body=${encodeURIComponent(
-            `Hey ${r.name} — confirm your split for "${contract.title}": ${baseUrl}/confirm/${contractId}/${r.token}`
-          )}`,
-        }));
+        const operator = await storage.getUser(userId).catch(() => undefined);
+        const operatorName = operator ? `${operator.firstName ?? ""} ${operator.lastName ?? ""}`.trim() : undefined;
+
+        const confirmations = await Promise.all(
+          results.map(async (r) => {
+            const link = `${baseUrl}/confirm/${contractId}/${r.token}`;
+            const collab = collaborators.find((c: any) => c.id === r.collaboratorId);
+            let emailSent = false;
+
+            if (collab?.email) {
+              const template = confirmationLinkEmail({
+                contributorName: r.name,
+                songTitle: contract.title,
+                operatorName,
+                confirmUrl: link,
+              });
+              const delivery = await sendEmail({ to: collab.email, ...template });
+              emailSent = delivery.delivered;
+              if (delivery.delivered) {
+                await db.execute(sql`
+                  UPDATE split_confirmations
+                  SET status = 'sent', sent_at = NOW(), updated_at = NOW()
+                  WHERE contract_id = ${contractId} AND collaborator_id = ${r.collaboratorId}
+                    AND status IN ('not_sent', 'sent')
+                `).catch(() => {});
+              }
+            }
+
+            return {
+              ...r,
+              status: emailSent ? "sent" : r.status,
+              emailSent,
+              link,
+              whatsapp: `https://wa.me/?text=${encodeURIComponent(
+                `Hey ${r.name} — please review and confirm your split for "${contract.title}" here: ${link}`
+              )}`,
+              sms: `sms:?body=${encodeURIComponent(
+                `Hey ${r.name} — confirm your split for "${contract.title}": ${link}`
+              )}`,
+            };
+          })
+        );
 
         res.json({ contractId, contractTitle: contract.title, confirmations });
       } catch (err: any) {

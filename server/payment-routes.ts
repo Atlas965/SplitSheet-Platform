@@ -41,7 +41,7 @@ import {
 } from "./payment-service";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2023-10-16",
+  apiVersion: "2025-08-27.basil",
 });
 
 // ── Input validators ──────────────────────────────────────────────────────────
@@ -474,7 +474,10 @@ export function registerPaymentRoutes(app: Express): void {
       }
 
       try {
-        switch (event.type) {
+        // Cast to string: a couple of legacy Connect event types below
+        // (e.g. "transfer.failed") predate the currently pinned Stripe API
+        // version's TS union and are handled defensively for older accounts.
+        switch (event.type as string) {
 
           // ── Payment succeeded → auto-trigger splits ──────────────────────
           case "payment_intent.succeeded": {

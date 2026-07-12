@@ -3,8 +3,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Lightweight identity verification flow added before contract signing.
  * Addresses the KYC gap identified in the platform assessment report.
- * Collects: legal name, phone (SMS-verified), and ID type declaration.
- * All data is stored server-side with the signature record.
+ * Collects: legal name, phone, and ID type declaration; verifies via a
+ * real server-generated one-time code (server/verification-routes.ts +
+ * `verification_codes` table) rather than a client-simulated demo code.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -67,8 +68,7 @@ export default function IdentityVerification({
   const [step, setStep] = useState<"details" | "code" | "done">("details");
   const [sending, setSending]     = useState(false);
   const [verifying, setVerifying] = useState(false);
-  // Simulated server-generated token (in production, backend generates & SMS's this)
-  const [_sessionToken] = useState(() => Math.random().toString(36).slice(2, 12));
+  const [devCode, setDevCode]     = useState<string | null>(null);
 
   const form = useForm<VerifyValues>({
     resolver: zodResolver(verifySchema),
@@ -80,31 +80,34 @@ export default function IdentityVerification({
     },
   });
 
-  // ── Step 1: send SMS code ─────────────────────────────────────────────────
+  // ── Step 1: send verification code ────────────────────────────────────────
   async function handleSendCode() {
     const valid = await form.trigger(["legalName", "phone", "idType"]);
     if (!valid) return;
     setSending(true);
     try {
-      // In production: POST /api/verify/send-sms { phone }
-      // Returns a session token; the actual SMS is sent server-side.
-      await apiRequest("POST", "/api/activity", {
-        activityType: "identity_verify_sms_sent",
-        activityData: {
-          phone:    form.getValues("phone"),
-          idType:   form.getValues("idType"),
-          sentAt:   new Date().toISOString(),
-        },
+      const res = await apiRequest("POST", "/api/verify/send-code", {
+        destination: form.getValues("phone"),
+        channel:     "sms",
+        purpose:     "identity_verification",
+        legalName:   form.getValues("legalName"),
+        idType:      form.getValues("idType"),
       });
+      const body = await res.json();
+      setDevCode(body.devCode ?? null);
+
       toast({
         title: "Verification code sent",
-        description: `A 6-digit code was sent to ${form.getValues("phone")}. (Demo: use 123456)`,
+        description:
+          body.delivery === "smtp"
+            ? `A 6-digit code was sent to your account email (no SMS provider configured — carrier SMS requires a vendor like Twilio).`
+            : `No SMTP/SMS provider is configured in this environment — the code was written to the server log${body.devCode ? " and is shown below for testing." : "."}`,
       });
       setStep("code");
-    } catch {
+    } catch (err: any) {
       toast({
         title: "Could not send code",
-        description: "Please check your phone number and try again.",
+        description: err?.message ?? "Please check your phone number and try again.",
         variant: "destructive",
       });
     } finally {
@@ -117,38 +120,29 @@ export default function IdentityVerification({
     const valid = await form.trigger("smsCode");
     if (!valid) return;
 
-    const code = form.getValues("smsCode");
-    // Demo accepts "123456"; production checks against server session
-    if (code !== "123456" && code.length === 6) {
-      // In real implementation: POST /api/verify/confirm { sessionToken, code }
-      // For demo, we accept any 6-digit code so judges can try it
-    }
-
     setVerifying(true);
     try {
-      const result: VerificationResult = {
-        legalName:    form.getValues("legalName"),
-        phone:        form.getValues("phone"),
-        idType:       form.getValues("idType"),
-        verifiedAt:   new Date().toISOString(),
-        sessionToken: _sessionToken,
-      };
-
-      await apiRequest("POST", "/api/activity", {
-        activityType: "identity_verified",
-        activityData: {
-          legalName:  result.legalName,
-          idType:     result.idType,
-          verifiedAt: result.verifiedAt,
-        },
+      const res = await apiRequest("POST", "/api/verify/confirm-code", {
+        destination: form.getValues("phone"),
+        code:        form.getValues("smsCode"),
+        purpose:     "identity_verification",
       });
+      const body = await res.json();
+
+      const result: VerificationResult = {
+        legalName:    body.legalName ?? form.getValues("legalName"),
+        phone:        form.getValues("phone"),
+        idType:       body.idType ?? form.getValues("idType"),
+        verifiedAt:   body.verifiedAt ?? new Date().toISOString(),
+        sessionToken: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      };
 
       setStep("done");
       setTimeout(() => onVerified(result), 900);
-    } catch {
+    } catch (err: any) {
       toast({
         title: "Verification failed",
-        description: "Please try again.",
+        description: err?.message ?? "Incorrect or expired code. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -286,9 +280,11 @@ export default function IdentityVerification({
                   Enter the 6-digit code sent to
                 </p>
                 <p className="font-semibold text-foreground">{form.getValues("phone")}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Demo mode: use <span className="font-mono font-bold">123456</span>
-                </p>
+                {devCode && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    No SMTP/SMS provider configured — dev code: <span className="font-mono font-bold">{devCode}</span>
+                  </p>
+                )}
               </div>
 
               <FormField

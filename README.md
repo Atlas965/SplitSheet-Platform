@@ -50,6 +50,7 @@ SplitSheet operates as an **internal operations tool** for a music service busin
 | **SoundLedger CoPilot** | AI assistant (OpenAI) embedded in-app — platform guidance, PRO/split help |
 | **Onboarding Walkthrough** | First-run 8-step guided tour of the B2B2C operator workflow |
 | **Workflow Banner** | Dashboard checklist: Client Intake → Split Setup → Confirmation → Ledger |
+| **Organizations (Enterprise)** | Multi-tenant workspaces with permanent `SL-ORG-XXXXXXXX` IDs, RBAC membership, and org-scoped API keys for labels, studios, publishers, distributors, and PROs |
 
 ---
 
@@ -226,6 +227,36 @@ Running balance per user across all payout events.
 
 ---
 
+### Organizations Tables (Enterprise Multi-Tenancy)
+
+#### `organizations`
+Labels, studios, publishers, distributors, and PROs/CMOs. Each org gets a permanent, unique, server-generated external ID.
+
+| Key Columns | Notes |
+|---|---|
+| `slOrgId` | Permanent external ID — `SL-ORG-XXXXXXXX`, unique, never reused |
+| `type` | label / studio / publisher / distributor / pro |
+| `createdBy` | The user who created the workspace |
+
+#### `organization_members`
+RBAC join table between `users` and `organizations`. The creator is automatically added as `owner`.
+
+| Key Columns | Notes |
+|---|---|
+| `role` | owner / admin / member / viewer — see [§8 API Reference](#8-api-reference) for permission rules |
+| `invitedBy` | User who added this member (null for the founding owner) |
+
+#### `organization_api_keys`
+Org-scoped API keys, separate from the personal keys in `api_keys`. Only the SHA-256 hash is stored; the raw key is shown once on creation.
+
+| Key Columns | Notes |
+|---|---|
+| `keyHash` / `keyPrefix` | Raw key never persisted — prefix shown in the UI for identification |
+| `scopes` | Array of granted scopes (e.g. `read:songs`, `write:ownership`) |
+| `revokedAt` | Soft revocation — keys are never deleted, only revoked |
+
+---
+
 ## 4. Operator Service Workflow
 
 The service business follows a linear four-stage pipeline:
@@ -362,6 +393,11 @@ SplitSheet uses a **hybrid three-layer pricing model**:
 
 Custom pricing for labels, publishers, rights organizations, distributors, and PROs/CMOs. Includes API access, white-label deployment, bulk ingestion, compliance reporting, and dedicated account management.
 
+Enterprise clients are onboarded as an **Organization** (`/organizations`) — a shared, multi-user workspace with:
+- A permanent `SL-ORG-XXXXXXXX` identifier for the institution
+- Role-based membership (owner / admin / member / viewer) so multiple staff can collaborate under one account
+- Org-scoped API keys (independent of any single user's personal keys) for system-to-system integration
+
 **Contact:** enterprise@splitsheet.ca
 
 ---
@@ -461,6 +497,24 @@ Implemented in `server/confirmation-routes.ts`.
 | GET | `/api/subscription` | ✅ | Current subscription status |
 | POST | `/api/create-subscription` | ✅ | Initiate Stripe subscription |
 
+### Organizations (Enterprise Multi-Tenancy)
+
+Implemented in `server/organization-routes.ts`. Permission column shows the **minimum** role required within that organization (`owner` > `admin` > `member` > `viewer`); every route also requires the caller to already be a member.
+
+| Method | Route | Min. Role | Description |
+|---|---|---|---|
+| GET | `/api/organizations` | member | List organizations the current user belongs to |
+| POST | `/api/organizations` | — (any user) | Create an organization; caller is auto-added as `owner` with a new `SL-ORG-XXXXXXXX` id |
+| GET | `/api/organizations/:id` | member | Get organization details |
+| PATCH | `/api/organizations/:id` | admin | Update name/email/website/country |
+| GET | `/api/organizations/:id/members` | member | List members and roles |
+| POST | `/api/organizations/:id/members` | admin | Add an existing user as a member |
+| PATCH | `/api/organizations/:id/members/:memberId` | owner | Change a member's role |
+| DELETE | `/api/organizations/:id/members/:memberId` | admin (or self) | Remove a member / leave the organization |
+| GET | `/api/organizations/:id/api-keys` | admin | List org API keys (hash never returned) |
+| POST | `/api/organizations/:id/api-keys` | admin | Create an org API key — raw key returned once |
+| DELETE | `/api/organizations/:id/api-keys/:keyId` | admin | Revoke an org API key |
+
 ---
 
 ## 9. Pages & Routes
@@ -494,6 +548,8 @@ Implemented in `server/confirmation-routes.ts`.
 | `/profile` | `profile.tsx` | Operator profile settings |
 | `/notifications` | `notifications.tsx` | System notifications |
 | `/admin` | `admin.tsx` | Admin panel (restricted) |
+| `/organizations` | `organizations.tsx` | Enterprise workspace list + create (accessed via Dashboard → Navigation → Core Functions → Organizations) |
+| `/organizations/:id` | `organization-detail.tsx` | Organization workspace — members (RBAC) and org-scoped API keys |
 
 ---
 
@@ -627,15 +683,18 @@ The Vite dev server and Express backend both run on **port 5000**. API calls fro
 
 ### Database Setup
 
-Tables are created automatically on first run via the storage layer, or can be set up with:
+All tables (core schema + security engine) are created automatically on server startup via idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migrations in `server/db-migrations.ts` — no manual step required, and it's safe to restart repeatedly.
+
+### Tests & CI
 
 ```bash
-node -e "
-const { Pool } = require('pg');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-// Run CREATE TABLE IF NOT EXISTS statements
-"
+npm run test        # one-shot vitest run (split math, hash chain, fraud scoring)
+npm run test:watch  # watch mode
+npm run check        # tsc --noEmit
+npm run build        # client (vite) + server (esbuild) production bundles
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the test suite and production build on every push/PR to `main`; type-checking runs as a non-blocking informational step.
 
 Or push schema with Drizzle Kit:
 
@@ -691,12 +750,15 @@ client/src/
 │   ├── profile.tsx               # User profile settings
 │   ├── notifications.tsx         # Notification centre
 │   ├── admin.tsx                 # Admin panel
+│   ├── organizations.tsx         # Enterprise workspace list + create
+│   ├── organization-detail.tsx   # Org workspace: members (RBAC) + API keys
 │   └── not-found.tsx             # 404 page
 │
 server/
 ├── index.ts                      # Express app entry point
 ├── routes.ts                     # Core API route handlers
 ├── service-routes.ts             # B2B2C clients, projects, workflow
+├── organization-routes.ts        # Enterprise organizations, RBAC members, org API keys
 ├── copilot-routes.ts             # CoPilot AI endpoints
 ├── confirmation-routes.ts        # Public confirmation links
 ├── replitAuth.ts                 # OIDC + local dev auth
@@ -740,23 +802,35 @@ SplitSheet is positioned as a **workflow and documentation platform**, not a law
 | B2B2C operator → contributor workflow | ✅ Implemented |
 | Split ownership validation (100%) | ✅ Implemented |
 | Public confirmation links + IP/timestamp | ✅ Implemented |
+| Confirmation link delivery via email (SMTP or logged in dev) | ✅ Implemented |
 | PRO / IPI metadata capture | ✅ Implemented |
 | PDF export with disclaimer | ✅ Implemented |
+| CWR export wired into Rights Ledger UI | ✅ Implemented |
 | Terms & Privacy modals in Footer | ✅ In-app copy |
+| Mandatory ToS acceptance at login (blocking gate + versioned tracking) | ✅ Implemented |
+| PIPEDA/GDPR data export & account deletion | ✅ Implemented (Profile → Privacy & Data) |
+| Identity verification (KYC) before signing | ✅ Implemented — real server-issued OTP, no client simulation |
+| Stripe Connect payouts (Express accounts, PaymentIntents, transfers) | ✅ Implemented |
+| Hash-chained split versioning + tamper detection | ✅ Implemented |
+| Fraud/risk scoring (allow / delay / freeze) | ✅ Implemented |
+| Audit log, API keys, device/login anomaly tracking | ✅ Implemented |
+| Zero-knowledge ownership verification (RaaS) | ✅ Implemented |
+| Dispute management workflow | ✅ Implemented |
+| Postgres-backed rate limiting (multi-instance safe) | ✅ Implemented |
+| Structured logging + error persistence (optional Sentry) | ✅ Implemented |
+| Unit tests (split math, hash chain, fraud scoring) + CI | ✅ Implemented |
 | CoPilot + onboarding | ✅ Implemented |
+| Enterprise organizations (RBAC workspaces, permanent SL-ORG IDs, org API keys) | ✅ Implemented |
 
-### Not yet ready (requires legal review or engineering)
+### Not yet ready (requires legal review, not engineering)
 
 | Area | Status |
 |---|---|
 | Lawyer-reviewed published Terms & Privacy | ⚠️ Draft only — finalize with counsel |
-| Mandatory ToS acceptance at signup | ❌ Not enforced |
-| PIPEDA/GDPR data export & deletion flows | ❌ Not implemented |
-| CWR export wired into UI | ⚠️ Component exists, not mounted |
-| Identity verification (KYC) for signing | ⚠️ Component exists, simulated SMS |
 | “Legally binding under ESIGN” marketing | ⚠️ Requires jurisdiction-specific legal review |
+| Carrier SMS delivery for OTP/verification codes | ⚠️ Delivered via email today; add a vendor (e.g. Twilio) for true SMS |
 
-**Recommended before public launch:** Ontario entertainment/IP counsel + privacy counsel review; publish final Terms/Privacy; require acceptance at login; wire CWR export on confirmed projects.
+**Recommended before public launch:** Ontario entertainment/IP counsel + privacy counsel review of the published Terms/Privacy text. All other items called out in prior assessments are now technically implemented and wired end-to-end.
 
 ---
 

@@ -8,3 +8,6 @@ build
 server/public
 vite.config.ts.*
 *.tar.gz
+.config
+.local
+_check_tables.cjs

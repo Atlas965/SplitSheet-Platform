@@ -4,9 +4,24 @@ import { registerRoutes } from "./routes";
 import { registerChatbotRoutes } from "./chatbotRoutes";
 import { setupVite, serveStatic, log } from "./vite";
 import { seedContractTemplates } from "./seedData";
+import { applyTransportSecurity } from "./transport-security";
+import { sanitizeMiddleware, createPgRateLimiter } from "./security";
+import { runCoreSchemaMigrations, runSecurityEngineMigrations } from "./db-migrations";
+import { logger } from "./logger";
 
+process.on("unhandledRejection", (reason) => {
+  logger.error("process.unhandled_rejection", { reason: reason instanceof Error ? reason.message : String(reason), stack: (reason as Error)?.stack });
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal("process.uncaught_exception", { message: err.message, stack: err.stack });
+  // Per Node.js docs, the process is in an undefined state after an
+  // uncaught exception — leaving it running (e.g. after a failed port
+  // bind) silently zombies the server instead of failing loudly.
+  process.exit(1);
+});
 
 const app = express();
+applyTransportSecurity(app);
 console.log(
   "Environment loaded"
   );
@@ -17,17 +32,28 @@ console.log(
   ? "Configured"
   : "Missing — offline fallback only"
   );
-app.use(express.json());
+console.log(
+  "Message encryption:",
+  process.env.FIELD_ENCRYPTION_SECRET || process.env.SESSION_SECRET
+    ? "AES-256-GCM at rest"
+    : "Dev key — set FIELD_ENCRYPTION_SECRET for production"
+);
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(sanitizeMiddleware);
+// Global, Postgres-backed baseline rate limit (multi-instance safe) — an
+// extra layer beneath the finer-grained per-route limiters in security-routes.ts.
+app.use("/api", createPgRateLimiter(300, 60_000, "global-api"));
 
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  const sensitive = path.startsWith("/api/messages") || path.startsWith("/api/conversations");
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
+    if (!sensitive) capturedJsonResponse = bodyJson;
     return originalResJson.apply(res, [bodyJson, ...args]);
   };
 
@@ -37,6 +63,8 @@ app.use((req, res, next) => {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      } else if (sensitive) {
+        logLine += " :: [redacted]";
       }
 
       if (logLine.length > 80) {
@@ -51,18 +79,39 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Bootstrap any tables/columns from shared/schema.ts (and the raw-SQL
+  // security engine tables) that don't exist yet in this database.
+  try {
+    await runCoreSchemaMigrations();
+    await runSecurityEngineMigrations();
+    log("Database schema up to date");
+  } catch (err: any) {
+    logger.fatal("startup.migration_failed", { message: err?.message, stack: err?.stack });
+    console.error("FATAL: database migrations failed:", err);
+    process.exit(1);
+  }
+
   // Seed contract templates
   await seedContractTemplates();
 
   const server = await registerRoutes(app);
   registerChatbotRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
+    logger.error("request.unhandled_error", {
+      route: req.path,
+      method: req.method,
+      status,
+      message,
+      stack: err.stack,
+    });
+
+    if (!res.headersSent) {
+      res.status(status).json({ message });
+    }
   });
 
   // importantly only setup vite in development and after

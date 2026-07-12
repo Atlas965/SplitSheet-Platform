@@ -15,10 +15,11 @@
 import Stripe from "stripe";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
-import type { Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import { isAuthenticated } from "./replitAuth";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2023-10-16",
+  apiVersion: "2025-08-27.basil",
 });
 
 const APP_URL = process.env.APP_URL ?? "https://splitsheet.ca";

@@ -23,7 +23,7 @@ import { sql } from "drizzle-orm";
 import crypto from "crypto";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2023-10-16",
+  apiVersion: "2025-08-27.basil",
 });
 
 // Platform fee: 2.5% default, configurable per env

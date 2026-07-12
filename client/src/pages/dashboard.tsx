@@ -9,7 +9,7 @@ import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen } from "lucide-react";
+import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen, Building2 } from "lucide-react";
 import WorkflowBanner from "@/components/WorkflowBanner";
 import { resetOnboarding } from "@/components/OnboardingWalkthrough";
 import UserAvatar from "@/components/UserAvatar";
@@ -150,6 +150,13 @@ export default function Dashboard() {
                         <Link href="/projects" className="flex items-center w-full">
                           <FolderOpen className="mr-3 h-4 w-4" />
                           <span>Projects</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-organizations">
+                        <Link href="/organizations" className="flex items-center w-full">
+                          <Building2 className="mr-3 h-4 w-4" />
+                          <span>Organizations</span>
+                          <span className="ml-auto text-xs text-muted-foreground">Enterprise</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-contracts">

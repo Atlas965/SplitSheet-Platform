@@ -31,6 +31,7 @@ import {
   BarChart3, Clock, CheckCircle2, AlertCircle, MoreVertical,
   Archive, ArchiveRestore, PowerOff, Trash2, Activity, Eye, Shield,
 } from "lucide-react";
+import CWRExport from "@/components/CWRExport";
 
 interface SongAsset {
   id: string;
@@ -56,6 +57,11 @@ interface OwnershipRecord {
   changeReason: string | null;
   effectiveAt: string;
   createdAt: string;
+}
+
+interface OwnershipRecordNamed extends OwnershipRecord {
+  name: string;
+  email: string | null;
 }
 
 interface RevenueEvent {
@@ -155,6 +161,13 @@ export default function Ownership() {
   const { data: ownership = [], isLoading: ownershipLoading } = useQuery<OwnershipRecord[]>({
     queryKey: ["/api/assets", selectedAsset?.id, "ownership"],
     queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/ownership`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedAsset,
+    retry: false,
+  });
+
+  const { data: ownershipNamed = [] } = useQuery<OwnershipRecordNamed[]>({
+    queryKey: ["/api/assets", selectedAsset?.id, "ownership", "named"],
+    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/ownership/named`, { credentials: "include" }).then(r => r.json()),
     enabled: !!selectedAsset,
     retry: false,
   });
@@ -562,18 +575,21 @@ export default function Ownership() {
                         No ownership records yet. Use your contracts to auto-generate splits.
                       </div>
                     ) : (
-                      ownership.map(record => (
-                        <div key={record.id} className="space-y-1" data-testid={`ownership-row-${record.id}`}>
-                          <div className="flex items-center justify-between text-sm">
-                            <div>
-                              <span className="font-medium font-mono text-xs">{record.userId.slice(0, 8)}…</span>
-                              <Badge variant="outline" className="ml-2 text-[10px]">{record.role}</Badge>
+                      ownership.map(record => {
+                        const named = ownershipNamed.find(n => n.id === record.id);
+                        return (
+                          <div key={record.id} className="space-y-1" data-testid={`ownership-row-${record.id}`}>
+                            <div className="flex items-center justify-between text-sm">
+                              <div>
+                                <span className="font-medium">{named?.name ?? `${record.userId.slice(0, 8)}…`}</span>
+                                <Badge variant="outline" className="ml-2 text-[10px]">{record.role}</Badge>
+                              </div>
+                              <span className="font-bold">{parseFloat(record.ownershipPercentage).toFixed(2)}%</span>
                             </div>
-                            <span className="font-bold">{parseFloat(record.ownershipPercentage).toFixed(2)}%</span>
+                            <Progress value={parseFloat(record.ownershipPercentage)} className="h-2" />
                           </div>
-                          <Progress value={parseFloat(record.ownershipPercentage)} className="h-2" />
-                        </div>
-                      ))
+                        );
+                      })
                     )}
 
                     {/* Ownership Validation */}
@@ -604,6 +620,20 @@ export default function Ownership() {
                     )}
                   </CardContent>
                 </Card>
+
+                {/* CWR Export — PRO registration file (SOCAN/ASCAP/BMI/PRS) */}
+                {ownershipNamed.length > 0 && (
+                  <CWRExport
+                    contractId={selectedAsset.id}
+                    songTitle={selectedAsset.title}
+                    isrc={selectedAsset.isrc ?? undefined}
+                    collaborators={ownershipNamed.map(o => ({
+                      name: o.name,
+                      role: o.role,
+                      ownershipPercentage: parseFloat(o.ownershipPercentage),
+                    }))}
+                  />
+                )}
 
                 {/* Revenue Events */}
                 <Card>
