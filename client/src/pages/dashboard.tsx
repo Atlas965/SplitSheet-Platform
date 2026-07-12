@@ -137,7 +137,6 @@ export default function Dashboard() {
                         <Link href="/profile" className="flex items-center w-full">
                           <User className="mr-3 h-4 w-4" />
                           <span>Profile</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Essential</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-clients">
@@ -156,14 +155,12 @@ export default function Dashboard() {
                         <Link href="/organizations" className="flex items-center w-full">
                           <Building2 className="mr-3 h-4 w-4" />
                           <span>Organizations</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Enterprise</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-contracts">
                         <Link href="/contracts" className="flex items-center w-full">
                           <FileText className="mr-3 h-4 w-4" />
                           <span>Contracts</span>
-                          <span className="ml-auto text-xs text-muted-foreground">High</span>
                         </Link>
                       </DropdownMenuItem>
 
@@ -175,21 +172,18 @@ export default function Dashboard() {
                         <Link href="/messages" className="flex items-center w-full">
                           <Mail className="mr-3 h-4 w-4" />
                           <span>Messages</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-matches">
                         <Link href="/matches" className="flex items-center w-full">
                           <Users className="mr-3 h-4 w-4" />
                           <span>Connections</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-search">
                         <Link href="/search" className="flex items-center w-full">
                           <Search className="mr-3 h-4 w-4" />
                           <span>Search</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Medium</span>
                         </Link>
                       </DropdownMenuItem>
 
@@ -201,28 +195,24 @@ export default function Dashboard() {
                         <Link href="/ownership" className="flex items-center w-full">
                           <BookOpen className="mr-3 h-4 w-4" />
                           <span>Rights Ledger</span>
-                          <span className="ml-auto text-xs text-muted-foreground">New</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-analytics">
                         <Link href="/analytics" className="flex items-center w-full">
                           <BarChart className="mr-3 h-4 w-4" />
                           <span>Analytics</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-templates">
                         <Link href="/templates" className="flex items-center w-full">
                           <Layers className="mr-3 h-4 w-4" />
                           <span>Templates</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Low</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-billing">
                         <Link href="/billing" className="flex items-center w-full">
                           <CreditCard className="mr-3 h-4 w-4" />
                           <span>Billing</span>
-                          <span className="ml-auto text-xs text-muted-foreground">Lowest</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
