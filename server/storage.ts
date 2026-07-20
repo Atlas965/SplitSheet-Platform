@@ -28,6 +28,7 @@ import {
   licenseReadiness,
   legalDocuments,
   legalAcceptances,
+  subprocessors,
   type User,
   type UpsertUser,
   type Contract,
@@ -75,6 +76,7 @@ import {
   type LegalAcceptance,
   type InsertLegalAcceptance,
   type LegalDocType,
+  type Subprocessor,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
@@ -248,6 +250,7 @@ export interface IStorage {
   createLegalDocument(doc: InsertLegalDocument & { publishedBy: string }): Promise<LegalDocument>;
   getLegalAcceptance(userId: string, docType: LegalDocType): Promise<LegalAcceptance | undefined>;
   createLegalAcceptance(acceptance: InsertLegalAcceptance): Promise<LegalAcceptance>;
+  getSubprocessors(): Promise<Subprocessor[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1562,6 +1565,10 @@ export class DatabaseStorage implements IStorage {
   async createLegalAcceptance(acceptance: InsertLegalAcceptance): Promise<LegalAcceptance> {
     const [created] = await db.insert(legalAcceptances).values(acceptance).returning();
     return created;
+  }
+
+  async getSubprocessors(): Promise<Subprocessor[]> {
+    return await db.select().from(subprocessors).orderBy(subprocessors.name);
   }
 
   // Admin methods

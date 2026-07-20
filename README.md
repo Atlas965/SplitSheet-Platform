@@ -398,6 +398,22 @@ The pre-existing `template.legalClauses` array (generic boilerplate seeded per t
 
 ---
 
+### Sub-processor / DPA Registry (Priority 1.3)
+
+#### `subprocessors`
+Public diligence registry of vendors that process personal data on behalf of SoundLedger.
+
+| Column | Notes |
+|---|---|
+| `name` | Unique vendor name (e.g. Stripe, OpenAI, Neon) |
+| `purpose` | Why personal data is shared |
+| `region` | Processing region |
+| `dpaUrl` | Link to the vendor's DPA / data-processing terms |
+
+Seeded at boot with Stripe, OpenAI, Neon, Replit/GCS, and Twilio (pending until SMS OTP ships). Exposed publicly via `GET /api/legal/subprocessors` and rendered at `/legal/subprocessors`.
+
+---
+
 ### Payments & Payouts Tables
 
 #### `payment_events`
@@ -753,6 +769,7 @@ Implemented in `server/legal-routes.ts`. GET routes are intentionally public (no
 | POST | `/api/legal/documents` | ✅ Admin only | Publish a new version (409 if the exact `docType`+`version` already exists) |
 | GET | `/api/user/terms-status` | ✅ | Per-doc-type (`tos`, `privacy`) acceptance status vs. latest published version |
 | POST | `/api/user/accept-terms` | ✅ | Records acceptance; omit `docType` in body to accept all gated types at once |
+| GET | `/api/legal/subprocessors` | ❌ Public | Sub-processor / DPA registry (Priority 1.3) |
 
 ### Organizations (Enterprise Multi-Tenancy)
 
@@ -963,20 +980,51 @@ Open **http://localhost:5000** and log in at **http://localhost:5000/api/login**
 
 The Vite dev server and Express backend both run on **port 5000**. API calls from the frontend proxy automatically — do not change the Vite config.
 
+### Off-Replit quickstart (Priority 2)
+
+```bash
+# Docker Compose: local Postgres + app image
+docker compose up --build
+
+# Or deploy the included Dockerfile / fly.toml
+fly launch --no-deploy
+fly secrets set DATABASE_URL=... SESSION_SECRET=... AUTH_PROVIDER=oidc \
+  OIDC_ISSUER=... OIDC_CLIENT_ID=... OIDC_CLIENT_SECRET=... \
+  OBJECT_STORAGE_PROVIDER=s3 S3_BUCKET=... AWS_REGION=...
+fly deploy
+```
+
+| Env | Values | Notes |
+| --- | --- | --- |
+| `AUTH_PROVIDER` | `replit` \| `oidc` \| `local` | Default: `local` when `LOCAL_DEV=true`, else `replit` |
+| `OBJECT_STORAGE_PROVIDER` | `replit` \| `s3` \| `gcs` | Default `replit` (existing sidecar behavior) |
+| `ENABLE_SERVER_PDF` | `true` | Priority 3.1 — seal SHA-256 on sign |
+| `ENABLE_PAYOUT_RECONCILE` | `true` | Priority 3.4 — hourly reconcile job |
+| `AUTO_MIGRATE` | `true` | Priority 4.1 — also run drizzle-kit migrate |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | URL | Priority 5.1 — enable tracing |
+| `COPILOT_DAILY_TOKEN_CAP` | number | Priority 6.1 — override daily token cap |
+| `TWILIO_*` | SID / token / from | Priority 3.2 — real SMS OTP |
+
 ### Database Setup
 
 All tables (core schema, global rights framework, security engine) are created automatically on server startup via idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migrations in `server/db-migrations.ts` — no manual step required, and it's safe to restart repeatedly. Reference data (rights organizations/PROs) is seeded via `INSERT ... ON CONFLICT DO NOTHING` on the same boot pass.
+
+Numbered drizzle migrations live in `drizzle/migrations/` (`npm run db:generate` / `db:migrate`). Boot still runs the idempotent path; set `AUTO_MIGRATE=true` to also apply drizzle-kit migrations. `npm run db:check` is a CI drift guard.
 
 ### Tests & CI
 
 ```bash
 npm run test        # one-shot vitest run (split math, hash chain, fraud scoring)
 npm run test:watch  # watch mode
+npm run test:e2e    # Playwright (set E2E_BASE_URL)
 npm run check        # tsc --noEmit
 npm run build        # client (vite) + server (esbuild) production bundles
+npm run lint:marketing-claims
+npm run db:check
+npm run stripe:preflight
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the test suite and production build on every push/PR to `main`; type-checking runs as a non-blocking informational step.
+GitHub Actions (`.github/workflows/ci.yml`) runs the test suite, marketing-claim lint, schema drift check, and production build on every push/PR to `main`; type-checking runs as a non-blocking informational step.
 
 Or push schema with Drizzle Kit:
 
@@ -1110,6 +1158,19 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Mandatory ToS acceptance at login (blocking gate + versioned tracking) | ✅ Implemented |
 | Counsel-editable legal document versioning (`legal_documents` + `legal_acceptances`, admin publish API, per-user/per-doc-type acceptance ledger with IP/UA capture, auto re-prompt on new version) | ✅ Implemented (Priority 1.1) |
 | Contract template legal body slots (`legalBodyMarkdown`/`legalBodyVersion` on `contract_templates`, admin publish API, rendered in `ContractForm.tsx` + PDF export, snapshotted per-contract at creation/signing) | ✅ Implemented (Priority 1.2) |
+| Sub-processor / DPA registry (`subprocessors` table, public `GET /api/legal/subprocessors`, `/legal/subprocessors` page) | ✅ Implemented (Priority 1.3) |
+| Marketing-claim CI lint (`npm run lint:marketing-claims` — blocks banned legal-adjacent claims without `data-legal-approved`) | ✅ Implemented (Priority 1.4) |
+| Auth provider abstraction (`AUTH_PROVIDER=replit\|oidc\|local`) | ✅ Implemented (Priority 2.1) |
+| Object storage abstraction (`OBJECT_STORAGE_PROVIDER=replit\|s3\|gcs`) | ✅ Implemented (Priority 2.2) |
+| Dockerfile + docker-compose + fly.toml | ✅ Implemented (Priority 2.3) |
+| Server-side PDF seal + SHA-256 (`ENABLE_SERVER_PDF`) | ✅ Implemented (Priority 3.1) |
+| Twilio SMS OTP adapter (email fallback) | ✅ Implemented (Priority 3.2) |
+| Stripe live-mode preflight (fails prod boot) | ✅ Implemented (Priority 3.3) |
+| Payout reconciliation job (`ENABLE_PAYOUT_RECONCILE`) | ✅ Implemented (Priority 3.4) |
+| Numbered drizzle migrations + `db:check` | ✅ Implemented (Priority 4) |
+| OpenTelemetry + metrics stubs + `docs/SLOs.md` | ✅ Implemented (Priority 5.1–5.2) |
+| Playwright E2E smoke (opt-in via `E2E_BASE_URL`) | ✅ Implemented (Priority 5.3) |
+| CoPilot quotas + legal-advice classifier + log redaction | ✅ Implemented (Priority 6) |
 | PIPEDA/GDPR data export & account deletion | ✅ Implemented (Profile → Privacy & Data) |
 | Identity verification (KYC) before signing | ✅ Implemented — real server-issued OTP, no client simulation |
 | Global Rights Framework (territories, PRO/CMO reference data, Rights & PRO Profile) | ✅ Implemented |
@@ -1139,7 +1200,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Lawyer-reviewed published Terms & Privacy text | ⚠️ Publishing mechanism is engineering-complete (Priority 1.1); the seeded text itself is still draft — counsel publishes the final version via `POST /api/legal/documents`, no deploy needed |
 | Lawyer-reviewed contract template legal bodies (Split Sheet, Producer, Performance, Management) | ⚠️ Publishing mechanism is engineering-complete (Priority 1.2); all four templates currently have `legalBodyMarkdown = NULL` — counsel publishes via `PATCH /api/contract-templates/:id`, no deploy needed |
 | "Legally binding under ESIGN" marketing | ⚠️ Requires jurisdiction-specific legal review |
-| Carrier SMS delivery for OTP/verification codes | ⚠️ Delivered via email today; add a vendor (e.g. Twilio) for true SMS |
+| Carrier SMS delivery for OTP/verification codes | ⚠️ Engineering adapter ready (Priority 3.2); configure `TWILIO_*` env vars to enable — email fallback used until then |
 | Live Stripe account (verified business, real Price IDs, bank payout accounts linked) | ⚠️ Currently test-mode-ready; needs a verified Stripe account and linked bank account(s) before real payments |
 
 ### Pending roadmap (not yet built)
@@ -1150,13 +1211,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Global Metadata Support (`song_metadata` with ISRC/ISWC/UPC/etc., CSV/CWR/DDEX import-export) | ⏳ Planned |
 | Label/Publisher/Management specialized dashboards (roster, catalog, commission tracking) | ⏳ Planned |
 | SoundLedger CoPilot licensing/royalty reasoning upgrade | ⏳ Planned (base "no legal advice" safety already implemented) |
-| Sub-processor/DPA registry, marketing-claim CI lint (Priorities 1.3–1.4) | ⏳ Planned |
-| Hosting portability — auth provider abstraction, object storage abstraction, Docker/Fly deployment (Priority 2) | ⏳ Planned |
-| Evidentiary & payout hardening — server-side PDF hashing, SMS OTP, Stripe live-mode preflight, payout reconciliation job (Priority 3) | ⏳ Planned |
-| Numbered/checksummed schema migrations + CI drift check (Priority 4) | ⏳ Planned |
-| OpenTelemetry, SLOs, Playwright E2E suite, coverage floors (Priority 5) | ⏳ Planned |
-| CoPilot quotas, legal-advice classifier, prompt/response redaction (Priority 6) | ⏳ Planned |
-| Org-scoped audit export, SCIM stub, white-label branding (Priority 7) | ⏳ Planned |
+| Enterprise polish — org audit export, SCIM stub, white-label branding (Priority 7) | ⏳ Planned |
 
 **Recommended before public launch:** Ontario entertainment/IP counsel + privacy counsel review of the published Terms/Privacy text, plus a verified live Stripe account with real bank payout details linked. All engineering items above are technically implemented and wired end-to-end.
 

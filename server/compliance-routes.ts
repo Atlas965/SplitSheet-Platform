@@ -64,12 +64,11 @@ const TERMS_ALLOWLIST = new Set<string>([
  */
 export function requireTermsAccepted(req: Request, res: Response, next: NextFunction): void {
   const path = req.path;
-  // GET /api/legal/documents/:docType/latest|history must always be reachable
-  // — TermsGate itself has to fetch the ToS/Privacy body to show the user
-  // before they can accept it, and the same routes are also public marketing
-  // pages (see server/legal-routes.ts).
-  const isPublicLegalDocRoute = req.method === "GET" && path.startsWith("/api/legal/documents/");
-  if (!path.startsWith("/api/") || TERMS_ALLOWLIST.has(path) || isPublicLegalDocRoute) {
+  // GET /api/legal/* must always be reachable — TermsGate itself has to fetch
+  // the ToS/Privacy body before acceptance, and the public sub-processor
+  // registry (Priority 1.3) is a marketing/diligence page with no auth.
+  const isPublicLegalRoute = req.method === "GET" && path.startsWith("/api/legal/");
+  if (!path.startsWith("/api/") || TERMS_ALLOWLIST.has(path) || isPublicLegalRoute) {
     next();
     return;
   }

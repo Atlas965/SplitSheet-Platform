@@ -30,6 +30,7 @@ import OrganizationDetail from "@/pages/organization-detail";
 import Creators from "@/pages/creators";
 import CreatorDetail from "@/pages/creator-detail";
 import ConfirmSplit from "@/pages/confirm-split";
+import LegalSubprocessors from "@/pages/legal-subprocessors";
 import NotFound from "@/pages/not-found";
 import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
 import OnboardingWalkthrough from "@/components/OnboardingWalkthrough";
@@ -46,6 +47,7 @@ function Router() {
       <Switch>
         {/* PUBLIC — no auth required */}
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
+        <Route path="/legal/subprocessors" component={LegalSubprocessors} />
 
         {/* Auth-gated routes */}
         {isLoading || !isAuthenticated ? (

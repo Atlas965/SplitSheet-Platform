@@ -605,6 +605,23 @@ export default function Footer() {
                   {label}
                 </button>
               ))}
+              <a
+                href="/legal/subprocessors"
+                style={{
+                  fontSize: "13px",
+                  color: "var(--muted-foreground)",
+                  textDecoration: "none",
+                  transition: "color 0.15s",
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.color = "var(--foreground)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color = "var(--muted-foreground)")
+                }
+              >
+                Sub-processors
+              </a>
             </div>
           </div>
 

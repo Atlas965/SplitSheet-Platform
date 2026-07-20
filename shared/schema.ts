@@ -533,6 +533,35 @@ export const legalAcceptances = pgTable("legal_acceptances", {
   index("idx_legal_acceptances_user").on(table.userId),
 ]);
 
+/**
+ * Sub-processor / DPA registry (Priority 1.3).
+ * Public list of vendors that process personal data on behalf of SoundLedger.
+ * Seeded at boot; new vendors must be added here (and via migration seed)
+ * whenever an external dependency is introduced.
+ */
+export const subprocessors = pgTable("subprocessors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  purpose: text("purpose").notNull(),
+  region: varchar("region").notNull(),
+  dpaUrl: varchar("dpa_url"),
+  addedAt: timestamp("added_at").defaultNow(),
+});
+
+/** Priority 6.1 — daily CoPilot token usage for quota enforcement. */
+export const copilotUsage = pgTable("copilot_usage", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  orgId: varchar("org_id"),
+  tokensIn: integer("tokens_in").notNull().default(0),
+  tokensOut: integer("tokens_out").notNull().default(0),
+  model: varchar("model"),
+  day: varchar("day").notNull(), // YYYY-MM-DD UTC
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_copilot_usage_user_day").on(table.userId, table.day),
+]);
+
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
 
 // Relations
@@ -902,6 +931,13 @@ export const insertLegalAcceptanceSchema = createInsertSchema(legalAcceptances).
 });
 export type LegalAcceptance = typeof legalAcceptances.$inferSelect;
 export type InsertLegalAcceptance = z.infer<typeof insertLegalAcceptanceSchema>;
+
+export const insertSubprocessorSchema = createInsertSchema(subprocessors).omit({
+  id: true,
+  addedAt: true,
+});
+export type Subprocessor = typeof subprocessors.$inferSelect;
+export type InsertSubprocessor = z.infer<typeof insertSubprocessorSchema>;
 
 // Activity tracking schemas
 export const activityEventSchema = z.object({

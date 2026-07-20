@@ -106,6 +106,13 @@ export default function TermsGate({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
+  // Public legal pages (Priority 1.3+) must remain reachable even while the
+  // acceptance gate is open — e.g. an operator reviewing the sub-processor
+  // list before accepting updated Terms.
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/legal/")) {
+    return <>{children}</>;
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">

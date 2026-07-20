@@ -1,0 +1,42 @@
+# Local Postgres + app stack (Priority 2.3)
+# Usage: docker compose up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: splitsheet
+      POSTGRES_PASSWORD: splitsheet
+      POSTGRES_DB: splitsheet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U splitsheet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      DATABASE_URL: postgres://splitsheet:splitsheet@db:5432/splitsheet
+      SESSION_SECRET: local-dev-session-secret-change-me
+      AUTH_PROVIDER: local
+      LOCAL_DEV: "true"
+      OBJECT_STORAGE_PROVIDER: gcs
+      # Set real keys via .env or compose override for Stripe/OpenAI
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

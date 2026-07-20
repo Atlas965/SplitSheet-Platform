@@ -13,6 +13,15 @@ import {
   isCopilotConfigured,
   streamCopilotCompletion,
 } from "./claude.service";
+import {
+  classifyCopilotQuestion,
+  LEGAL_ADVICE_SYSTEM_SUFFIX,
+  logCopilotClassification,
+  redactCopilotText,
+} from "./copilot-safety";
+import { assertCopilotQuota, recordCopilotUsage } from "./copilot-quota";
+import { metrics } from "./metrics";
+import { storage } from "./storage";
 
 const copilotSchema = z.object({
   messages: z
@@ -84,12 +93,46 @@ export function registerCopilotRoutes(app: Express): void {
       });
     }
 
+    // Priority 6.1 — daily token quota
+    try {
+      const user = await storage.getUser(userId).catch(() => undefined);
+      const quota = await assertCopilotQuota(userId, (user as any)?.subscriptionTier);
+      if (!quota.allowed) {
+        return res.status(429).json({
+          error: `Daily CoPilot token limit reached (${quota.used}/${quota.cap}). Upgrade or try again tomorrow.`,
+          code: "copilot_quota_exceeded",
+          billingUrl: "/billing",
+          used: quota.used,
+          cap: quota.cap,
+        });
+      }
+    } catch (qErr) {
+      console.warn("[copilot] quota check skipped:", qErr);
+    }
+
     const userMessage = getLastUserMessage(body.messages);
     const pageKey = resolveCopilotPageKey(body.currentPage);
     const pageNote = pageKey
       ? `\n\n[User is on: ${pageKey}${body.pageContext ? ` — "${body.pageContext}"` : ""}]`
       : "";
-    const systemContent = COPILOT_SYSTEM_PROMPT + pageNote;
+
+    // Priority 6.2 — legal-advice classifier
+    const classification = classifyCopilotQuestion(userMessage);
+    await logCopilotClassification(userId, classification);
+    let systemContent = COPILOT_SYSTEM_PROMPT + pageNote;
+    if (classification === "seeking_legal_advice") {
+      systemContent += LEGAL_ADVICE_SYSTEM_SUFFIX;
+    }
+
+    // Priority 6.3 — redact before any log persistence
+    console.log(
+      "[copilot] request",
+      JSON.stringify({
+        userId,
+        classification,
+        preview: redactCopilotText(userMessage).slice(0, 200),
+      }),
+    );
 
     if (!isCopilotConfigured()) {
       if (
@@ -122,9 +165,11 @@ export function registerCopilotRoutes(app: Express): void {
       res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders();
 
+      let tokensOutApprox = 0;
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta?.content;
         if (delta) {
+          tokensOutApprox += Math.ceil(delta.length / 4);
           res.write(
             `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`,
           );
@@ -133,6 +178,15 @@ export function registerCopilotRoutes(app: Express): void {
           res.write("data: [DONE]\n\n");
         }
       }
+
+      const tokensInApprox = Math.ceil(userMessage.length / 4) + 200;
+      metrics.copilotTokens(tokensInApprox + tokensOutApprox);
+      await recordCopilotUsage({
+        userId,
+        tokensIn: tokensInApprox,
+        tokensOut: tokensOutApprox,
+        model: getCopilotModel(),
+      }).catch(() => undefined);
 
       res.end();
     } catch (err: unknown) {

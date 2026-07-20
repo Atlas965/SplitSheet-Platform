@@ -654,6 +654,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
         });
 
+        // Priority 3.1 — seal server-side PDF hash when ENABLE_SERVER_PDF=true
+        try {
+          const { sealSignedContractPdf } = await import("./pdf-service");
+          const sealed = await sealSignedContractPdf({
+            contract: {
+              id: updatedContract.id,
+              title: updatedContract.title,
+              type: updatedContract.type,
+              data: (updatedContract.data as any) ?? {},
+              metadata: updatedContract.metadata as any,
+              createdAt: updatedContract.createdAt,
+            },
+            userId,
+            ipAddress: req.ip,
+          });
+          if (sealed) {
+            await storage.updateContract(req.params.id, {
+              metadata: {
+                ...((updatedContract.metadata as any) || {}),
+                serverPdfSha256: sealed.hash,
+                serverPdfObjectKey: sealed.objectKey,
+              },
+            });
+          }
+        } catch (pdfErr) {
+          console.warn("[sign] server PDF seal skipped:", pdfErr);
+        }
+
         // Notify contract collaborators that the owner has signed
         try {
           const collaborators = await storage.getContractCollaborators(

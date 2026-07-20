@@ -450,6 +450,28 @@ export function registerConfirmationRoutes(app: Express): void {
               UPDATE contracts SET status = 'signed', updated_at = NOW()
               WHERE id = ${contractId}
             `);
+            try {
+              const { sealSignedContractPdf } = await import("./pdf-service");
+              const [c] = (await db.execute(sql`
+                SELECT id, title, type, data, metadata, created_at
+                FROM contracts WHERE id = ${contractId} LIMIT 1
+              `) as any).rows ?? [];
+              if (c) {
+                await sealSignedContractPdf({
+                  contract: {
+                    id: c.id,
+                    title: c.title,
+                    type: c.type,
+                    data: c.data ?? {},
+                    metadata: c.metadata,
+                    createdAt: c.created_at,
+                  },
+                  ipAddress: ip,
+                });
+              }
+            } catch (pdfErr) {
+              console.warn("[public-confirm] server PDF seal skipped:", pdfErr);
+            }
           }
         }
 

@@ -130,4 +130,27 @@ export function registerLegalRoutes(app: Express): void {
       }
     }
   });
+
+  /**
+   * GET /api/legal/subprocessors
+   * Public (Priority 1.3). Returns the current sub-processor / DPA registry
+   * for transparency pages and enterprise diligence questionnaires.
+   */
+  app.get("/api/legal/subprocessors", async (_req: Request, res: Response) => {
+    try {
+      const rows = await storage.getSubprocessors();
+      res.json({
+        subprocessors: rows.map((s) => ({
+          name: s.name,
+          purpose: s.purpose,
+          region: s.region,
+          dpaUrl: s.dpaUrl,
+          addedAt: s.addedAt,
+        })),
+      });
+    } catch (error) {
+      console.error("[SUBPROCESSORS LIST ERROR]", error);
+      res.status(500).json({ error: "Failed to fetch subprocessors" });
+    }
+  });
 }
