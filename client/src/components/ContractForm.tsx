@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { PROSelectorFields } from "@/components/PROSelector";
+import { LegalMarkdown } from "@/lib/legalMarkdown";
 
 const splitSheetSchema = z.object({
   title: z.string().min(1, "Song title is required"),
@@ -82,10 +83,16 @@ interface ContractFormProps {
   isLoading?: boolean;
   initialData?: any;
   isEdit?: boolean;
+  /** Counsel-supplied legal body markdown for this template type (Priority 1.2),
+   *  published via the admin-only PATCH /api/contract-templates/:id route.
+   *  Rendered above the dynamic fields when present; omitted entirely when
+   *  counsel hasn't published text for this template yet. */
+  legalBodyMarkdown?: string;
+  legalBodyVersion?: string;
   "data-testid"?: string;
 }
 
-export default function ContractForm({ contractType, onSubmit, onCancel, isLoading = false, initialData, isEdit = false, "data-testid": testId }: ContractFormProps) {
+export default function ContractForm({ contractType, onSubmit, onCancel, isLoading = false, initialData, isEdit = false, legalBodyMarkdown, legalBodyVersion, "data-testid": testId }: ContractFormProps) {
   const [collaborators, setCollaborators] = useState(() => {
     if (isEdit && initialData?.collaborators && Array.isArray(initialData.collaborators) && initialData.collaborators.length > 0) {
       return initialData.collaborators;
@@ -197,6 +204,17 @@ export default function ContractForm({ contractType, onSubmit, onCancel, isLoadi
     <div data-testid={testId}>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+          {legalBodyMarkdown && (
+            <div className="bg-muted/50 border border-border rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-2 text-foreground">
+                Legal Terms {legalBodyVersion ? `(version ${legalBodyVersion})` : ""}
+              </h3>
+              <div className="text-sm text-muted-foreground max-h-64 overflow-y-auto">
+                <LegalMarkdown markdown={legalBodyMarkdown} />
+              </div>
+            </div>
+          )}
+
           {contractType === "split-sheet" && (
             <>
               {/* Basic Information */}

@@ -1,12 +1,19 @@
 import { useEffect } from "react";
 import { useParams, useLocation, Link } from "wouter";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import Logo from "@/components/Logo";
 import ContractForm from "@/components/ContractForm";
+
+interface ContractTemplateRecord {
+  id: string;
+  type: string;
+  legalBodyMarkdown: string | null;
+  legalBodyVersion: string | null;
+}
 
 // All valid contract types the form supports
 const VALID_TYPES = ["split-sheet", "performance", "producer", "management"] as const;
@@ -28,6 +35,14 @@ export default function ContractFormPage() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const { type } = useParams<{ type: string }>();
   const [, setLocation] = useLocation();
+
+  // Counsel-editable legal body for this template type (Priority 1.2) —
+  // published via the admin-only PATCH /api/contract-templates/:id route.
+  const { data: templates } = useQuery<ContractTemplateRecord[]>({
+    queryKey: ["/api/contract-templates"],
+    enabled: !!isAuthenticated,
+  });
+  const activeTemplate = templates?.find((t) => t.type === type);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -94,7 +109,19 @@ export default function ContractFormPage() {
       type,
       status: data.saveAsDraft ? "draft" : "pending",
       data,
-      metadata: { contractType: type, createdFrom: "template" },
+      metadata: {
+        contractType: type,
+        createdFrom: "template",
+        // Snapshot of the counsel-supplied legal text at creation time, so
+        // this contract's PDF/record always reflects what the signer
+        // actually saw — even if the template is edited by counsel later.
+        ...(activeTemplate?.legalBodyMarkdown
+          ? {
+              legalBodyVersion: activeTemplate.legalBodyVersion,
+              legalBodyMarkdownSnapshot: activeTemplate.legalBodyMarkdown,
+            }
+          : {}),
+      },
     });
   };
 
@@ -227,6 +254,8 @@ export default function ContractFormPage() {
               onSubmit={handleSubmit}
               onCancel={handleCancel}
               isLoading={createContractMutation.isPending}
+              legalBodyMarkdown={activeTemplate?.legalBodyMarkdown ?? undefined}
+              legalBodyVersion={activeTemplate?.legalBodyVersion ?? undefined}
               data-testid="contract-form"
             />
           </div>

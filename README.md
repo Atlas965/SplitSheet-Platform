@@ -236,7 +236,7 @@ PostgreSQL-backed Express sessions via `connect-pg-simple`.
 `clients` and `service_projects` are **derived views**, not separate tables — "Projects" map to `contracts` and "Contributors" map to `contract_collaborators` (see [§8 API Reference](#8-api-reference)).
 
 #### `contract_templates`
-Reusable legal document blueprints with JSON-defined fields.
+Reusable legal document blueprints with JSON-defined fields. `legalBodyMarkdown` / `legalBodyVersion` hold the counsel-editable legal body rendered above those fields — see [Contract Template Legal Body Slots](#contract-template-legal-body-slots-priority-12) below.
 
 #### `contracts`
 Filled-in agreement instances. Status: `draft` → `pending` → `signed`.
@@ -374,6 +374,27 @@ Authoritative, per-user, per-doc-type acceptance ledger (supersedes the old sing
 | `ipAddress` / `userAgent` | Captured at acceptance time for evidentiary purposes |
 
 Publishing a new version of `tos` or `privacy` automatically re-opens the blocking `TermsGate` for every user on their next request — no code change required.
+
+---
+
+### Contract Template Legal Body Slots (Priority 1.2)
+
+Unlike `legal_documents` above, this is **not** an append-only version history — it's a single counsel-editable slot per contract template (`split-sheet` / `performance` / `producer` / `management`), left `NULL` until entertainment counsel publishes real text.
+
+| Column | Notes |
+|---|---|
+| `legalBodyMarkdown` | Counsel-supplied markdown, rendered above the dynamic form fields in `ContractForm.tsx` using the same `legalMarkdown.tsx` renderer as Priority 1.1. `NULL` until published — the section simply doesn't render. |
+| `legalBodyVersion` | Free-form version string (e.g. `2026-08-01`), shown next to the rendered text, in the contract PDF footer, and snapshotted onto each contract created from that template. |
+
+Publishing/updating a template's legal body is admin-only:
+
+```
+PATCH /api/contract-templates/:id   { legalBodyMarkdown, legalBodyVersion }
+```
+
+At creation (or edit, for still-unsigned contracts), the *exact* markdown text a signer saw — not just the version string — is snapshotted onto `contracts.metadata.legalBodyMarkdownSnapshot` / `contracts.metadata.legalBodyVersion`. This means editing a template's text later never rewrites history for contracts already created: the PDF export (`client/src/lib/pdfGenerator.ts`) always renders the snapshot, with the version stamped into the footer. (Full server-side PDF hashing for evidentiary purposes lands in Priority 3.1.)
+
+The pre-existing `template.legalClauses` array (generic boilerplate seeded per template type) is left untouched and unused — it predates this feature and was never wired to the client.
 
 ---
 
@@ -642,7 +663,9 @@ Implemented in `server/confirmation-routes.ts`.
 | GET | `/api/contracts/:id` | ✅ | Get agreement |
 | PATCH | `/api/contracts/:id` | ✅ | Update agreement |
 | DELETE | `/api/contracts/:id` | ✅ | Delete agreement |
-| GET | `/api/templates` | ✅ | List contract templates |
+| GET | `/api/contract-templates` | ✅ | List contract templates (incl. `legalBodyMarkdown`/`legalBodyVersion`) |
+| GET | `/api/contract-templates/:id` | ✅ | Get one contract template |
+| PATCH | `/api/contract-templates/:id` | ✅ Admin only | Publish/update a template's counsel legal body (Priority 1.2) |
 | GET | `/api/contracts/:id/collaborators` | ✅ | List collaborators |
 | POST | `/api/contracts/:id/collaborators` | ✅ | Add collaborator |
 | POST | `/api/contracts/:id/signatures` | ✅ | Submit signature |
@@ -1086,6 +1109,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Terms & Privacy modals in Footer | ✅ In-app copy |
 | Mandatory ToS acceptance at login (blocking gate + versioned tracking) | ✅ Implemented |
 | Counsel-editable legal document versioning (`legal_documents` + `legal_acceptances`, admin publish API, per-user/per-doc-type acceptance ledger with IP/UA capture, auto re-prompt on new version) | ✅ Implemented (Priority 1.1) |
+| Contract template legal body slots (`legalBodyMarkdown`/`legalBodyVersion` on `contract_templates`, admin publish API, rendered in `ContractForm.tsx` + PDF export, snapshotted per-contract at creation/signing) | ✅ Implemented (Priority 1.2) |
 | PIPEDA/GDPR data export & account deletion | ✅ Implemented (Profile → Privacy & Data) |
 | Identity verification (KYC) before signing | ✅ Implemented — real server-issued OTP, no client simulation |
 | Global Rights Framework (territories, PRO/CMO reference data, Rights & PRO Profile) | ✅ Implemented |
@@ -1113,6 +1137,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Area | Status |
 |---|---|
 | Lawyer-reviewed published Terms & Privacy text | ⚠️ Publishing mechanism is engineering-complete (Priority 1.1); the seeded text itself is still draft — counsel publishes the final version via `POST /api/legal/documents`, no deploy needed |
+| Lawyer-reviewed contract template legal bodies (Split Sheet, Producer, Performance, Management) | ⚠️ Publishing mechanism is engineering-complete (Priority 1.2); all four templates currently have `legalBodyMarkdown = NULL` — counsel publishes via `PATCH /api/contract-templates/:id`, no deploy needed |
 | "Legally binding under ESIGN" marketing | ⚠️ Requires jurisdiction-specific legal review |
 | Carrier SMS delivery for OTP/verification codes | ⚠️ Delivered via email today; add a vendor (e.g. Twilio) for true SMS |
 | Live Stripe account (verified business, real Price IDs, bank payout accounts linked) | ⚠️ Currently test-mode-ready; needs a verified Stripe account and linked bank account(s) before real payments |
@@ -1125,7 +1150,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Global Metadata Support (`song_metadata` with ISRC/ISWC/UPC/etc., CSV/CWR/DDEX import-export) | ⏳ Planned |
 | Label/Publisher/Management specialized dashboards (roster, catalog, commission tracking) | ⏳ Planned |
 | SoundLedger CoPilot licensing/royalty reasoning upgrade | ⏳ Planned (base "no legal advice" safety already implemented) |
-| Contract template legal-language slots, sub-processor/DPA registry, marketing-claim CI lint (Priorities 1.2–1.4) | ⏳ Planned |
+| Sub-processor/DPA registry, marketing-claim CI lint (Priorities 1.3–1.4) | ⏳ Planned |
 | Hosting portability — auth provider abstraction, object storage abstraction, Docker/Fly deployment (Priority 2) | ⏳ Planned |
 | Evidentiary & payout hardening — server-side PDF hashing, SMS OTP, Stripe live-mode preflight, payout reconciliation job (Priority 3) | ⏳ Planned |
 | Numbered/checksummed schema migrations + CI drift check (Priority 4) | ⏳ Planned |

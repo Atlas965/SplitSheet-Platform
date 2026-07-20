@@ -40,6 +40,14 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS terms_version varchar;
   `);
 
+  // ── contract_templates: counsel-editable legal body (Priority 1.2) ────────
+  // Left NULL — populated later by counsel via PATCH /api/contract-templates/:id.
+  await db.execute(sql`
+    ALTER TABLE contract_templates
+      ADD COLUMN IF NOT EXISTS legal_body_markdown text,
+      ADD COLUMN IF NOT EXISTS legal_body_version varchar;
+  `);
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),

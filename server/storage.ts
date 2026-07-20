@@ -92,6 +92,11 @@ export interface IStorage {
   getContractTemplates(): Promise<ContractTemplate[]>;
   getContractTemplate(id: string): Promise<ContractTemplate | undefined>;
   createContractTemplate(template: InsertContractTemplate): Promise<ContractTemplate>;
+  updateContractTemplateLegalBody(
+    id: string,
+    legalBodyMarkdown: string,
+    legalBodyVersion: string
+  ): Promise<ContractTemplate>;
 
   // Contract operations
   getContracts(userId: string): Promise<Contract[]>;
@@ -320,6 +325,19 @@ export class DatabaseStorage implements IStorage {
       .values(template)
       .returning();
     return newTemplate;
+  }
+
+  async updateContractTemplateLegalBody(
+    id: string,
+    legalBodyMarkdown: string,
+    legalBodyVersion: string
+  ): Promise<ContractTemplate> {
+    const [updated] = await db
+      .update(contractTemplates)
+      .set({ legalBodyMarkdown, legalBodyVersion, updatedAt: new Date() })
+      .where(eq(contractTemplates.id, id))
+      .returning();
+    return updated;
   }
 
   // Contract operations

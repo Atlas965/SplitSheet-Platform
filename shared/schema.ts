@@ -63,6 +63,16 @@ export const contractTemplates = pgTable("contract_templates", {
   description: text("description"),
   template: jsonb("template").notNull(), // JSON structure of the template
   isActive: boolean("is_active").default(true),
+  // Counsel-editable legal body (Priority 1.2) — left NULL until entertainment
+  // counsel publishes real text via the admin-only PATCH /api/contract-templates/:id
+  // route (server/contract-template-routes.ts). Deliberately NOT seeded with the
+  // generic template.legalClauses boilerplate below — that field stays as unused
+  // legacy data. Rendered above the dynamic form fields in ContractForm.tsx and
+  // snapshotted onto the resulting contract's `metadata` at creation/signing time
+  // so historical contracts keep the exact text a signer saw even if this row is
+  // edited later.
+  legalBodyMarkdown: text("legal_body_markdown"),
+  legalBodyVersion: varchar("legal_body_version"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
