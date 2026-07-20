@@ -1,4 +1,4 @@
-# SoundLedger Technologies Inc. — SplitSheet Platform
+﻿# SoundLedger Technologies Inc. — SplitSheet Platform
 
 > **The Operational Infrastructure for Modern Music Rights.**
 > *SoundLedger provides the authoritative system of record for music rights management. We eliminate royalty leakage and administrative friction by bridging the gap between creative collaboration and institutional rights accounting.*
