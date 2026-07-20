@@ -20,6 +20,14 @@ import {
   organizations,
   organizationMembers,
   organizationApiKeys,
+  rightsOrganizations,
+  creators,
+  creatorRightsProfiles,
+  compositionAssets,
+  masterAssets,
+  licenseReadiness,
+  legalDocuments,
+  legalAcceptances,
   type User,
   type UpsertUser,
   type Contract,
@@ -51,6 +59,22 @@ import {
   type InsertOrganizationMember,
   type OrganizationApiKey,
   type InsertOrganizationApiKey,
+  type RightsOrganization,
+  type Creator,
+  type InsertCreator,
+  type CreatorRightsProfile,
+  type InsertCreatorRightsProfile,
+  type CompositionAsset,
+  type InsertCompositionAsset,
+  type MasterAsset,
+  type InsertMasterAsset,
+  type LicenseReadiness,
+  type InsertLicenseReadiness,
+  type LegalDocument,
+  type InsertLegalDocument,
+  type LegalAcceptance,
+  type InsertLegalAcceptance,
+  type LegalDocType,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
@@ -128,6 +152,7 @@ export interface IStorage {
   createSongAsset(asset: InsertSongAsset): Promise<SongAsset>;
   getSongAssets(userId: string): Promise<SongAsset[]>;
   getSongAsset(id: string): Promise<SongAsset | undefined>;
+  getSongAssetBySlSongId(slSongId: string): Promise<SongAsset | undefined>;
   getSongAssetsByContract(contractId: string): Promise<SongAsset[]>;
   updateSongAsset(id: string, updates: Partial<SongAsset>): Promise<SongAsset>;
 
@@ -175,6 +200,49 @@ export interface IStorage {
     key: InsertOrganizationApiKey & { keyHash: string; keyPrefix: string }
   ): Promise<OrganizationApiKey>;
   revokeOrganizationApiKey(id: string, organizationId: string): Promise<void>;
+
+  // ─── GLOBAL RIGHTS FRAMEWORK ─────────────────────────────────────────────
+  getRightsOrganizations(territory?: string): Promise<RightsOrganization[]>;
+
+  getCreators(createdBy: string): Promise<Creator[]>;
+  getCreator(id: string): Promise<Creator | undefined>;
+  getCreatorBySlCreatorId(slCreatorId: string): Promise<Creator | undefined>;
+  createCreator(creator: InsertCreator & { slCreatorId: string; createdBy: string }): Promise<Creator>;
+  updateCreator(id: string, updates: Partial<Creator>): Promise<Creator>;
+  deleteCreator(id: string): Promise<void>;
+
+  getCreatorRightsProfile(userId: string): Promise<CreatorRightsProfile | undefined>;
+  upsertCreatorRightsProfile(
+    userId: string,
+    profile: InsertCreatorRightsProfile
+  ): Promise<CreatorRightsProfile>;
+
+  // ─── MASTER VS COMPOSITION RIGHTS ────────────────────────────────────────
+  getCompositionAsset(songAssetId: string): Promise<CompositionAsset | undefined>;
+  upsertCompositionAsset(
+    songAssetId: string,
+    data: InsertCompositionAsset
+  ): Promise<CompositionAsset>;
+
+  getMasterAsset(songAssetId: string): Promise<MasterAsset | undefined>;
+  upsertMasterAsset(songAssetId: string, data: InsertMasterAsset): Promise<MasterAsset>;
+
+  // ─── LICENSING READINESS SYSTEM ──────────────────────────────────────────
+  getLicenseReadiness(songAssetId: string): Promise<LicenseReadiness | undefined>;
+  upsertLicenseReadiness(
+    songAssetId: string,
+    data: Omit<InsertLicenseReadiness, "songAssetId">
+  ): Promise<LicenseReadiness>;
+
+  // ─── RIGHTS CHANGE HISTORY (backed by the existing audit_log table) ─────
+  getRightsChangeHistory(songAssetId: string, relatedIds?: string[]): Promise<any[]>;
+
+  // ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE (Priority 1.1) ──────────────
+  getLatestLegalDocument(docType: LegalDocType): Promise<LegalDocument | undefined>;
+  getLegalDocumentHistory(docType: LegalDocType): Promise<LegalDocument[]>;
+  createLegalDocument(doc: InsertLegalDocument & { publishedBy: string }): Promise<LegalDocument>;
+  getLegalAcceptance(userId: string, docType: LegalDocType): Promise<LegalAcceptance | undefined>;
+  createLegalAcceptance(acceptance: InsertLegalAcceptance): Promise<LegalAcceptance>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -938,6 +1006,11 @@ export class DatabaseStorage implements IStorage {
     return asset;
   }
 
+  async getSongAssetBySlSongId(slSongId: string): Promise<SongAsset | undefined> {
+    const [asset] = await db.select().from(songAssets).where(eq(songAssets.slSongId, slSongId));
+    return asset;
+  }
+
   async getSongAssetsByContract(contractId: string): Promise<SongAsset[]> {
     return await db
       .select()
@@ -1278,6 +1351,199 @@ export class DatabaseStorage implements IStorage {
           eq(organizationApiKeys.organizationId, organizationId)
         )
       );
+  }
+
+  // ─── GLOBAL RIGHTS FRAMEWORK ───────────────────────────────────────────────
+
+  async getRightsOrganizations(territory?: string): Promise<RightsOrganization[]> {
+    const query = db.select().from(rightsOrganizations);
+    if (territory) {
+      return await query.where(eq(rightsOrganizations.territory, territory)).orderBy(rightsOrganizations.name);
+    }
+    return await query.orderBy(rightsOrganizations.territory, rightsOrganizations.name);
+  }
+
+  async getCreators(createdBy: string): Promise<Creator[]> {
+    return await db
+      .select()
+      .from(creators)
+      .where(eq(creators.createdBy, createdBy))
+      .orderBy(desc(creators.createdAt));
+  }
+
+  async getCreator(id: string): Promise<Creator | undefined> {
+    const [creator] = await db.select().from(creators).where(eq(creators.id, id));
+    return creator;
+  }
+
+  async getCreatorBySlCreatorId(slCreatorId: string): Promise<Creator | undefined> {
+    const [creator] = await db.select().from(creators).where(eq(creators.slCreatorId, slCreatorId));
+    return creator;
+  }
+
+  async createCreator(creator: InsertCreator & { slCreatorId: string; createdBy: string }): Promise<Creator> {
+    const [newCreator] = await db.insert(creators).values(creator).returning();
+    return newCreator;
+  }
+
+  async updateCreator(id: string, updates: Partial<Creator>): Promise<Creator> {
+    const [updated] = await db
+      .update(creators)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(creators.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteCreator(id: string): Promise<void> {
+    await db.delete(creators).where(eq(creators.id, id));
+  }
+
+  async getCreatorRightsProfile(userId: string): Promise<CreatorRightsProfile | undefined> {
+    const [profile] = await db
+      .select()
+      .from(creatorRightsProfiles)
+      .where(eq(creatorRightsProfiles.userId, userId));
+    return profile;
+  }
+
+  async upsertCreatorRightsProfile(
+    userId: string,
+    profile: InsertCreatorRightsProfile
+  ): Promise<CreatorRightsProfile> {
+    const [updated] = await db
+      .insert(creatorRightsProfiles)
+      .values({ ...profile, userId })
+      .onConflictDoUpdate({
+        target: creatorRightsProfiles.userId,
+        set: { ...profile, updatedAt: new Date() },
+      })
+      .returning();
+    return updated;
+  }
+
+  // ─── MASTER VS COMPOSITION RIGHTS ──────────────────────────────────────────
+
+  async getCompositionAsset(songAssetId: string): Promise<CompositionAsset | undefined> {
+    const [asset] = await db
+      .select()
+      .from(compositionAssets)
+      .where(eq(compositionAssets.songAssetId, songAssetId));
+    return asset;
+  }
+
+  async upsertCompositionAsset(songAssetId: string, data: InsertCompositionAsset): Promise<CompositionAsset> {
+    const [asset] = await db
+      .insert(compositionAssets)
+      .values({ ...data, songAssetId })
+      .onConflictDoUpdate({
+        target: compositionAssets.songAssetId,
+        set: { ...data, updatedAt: new Date() },
+      })
+      .returning();
+    return asset;
+  }
+
+  async getMasterAsset(songAssetId: string): Promise<MasterAsset | undefined> {
+    const [asset] = await db.select().from(masterAssets).where(eq(masterAssets.songAssetId, songAssetId));
+    return asset;
+  }
+
+  async upsertMasterAsset(songAssetId: string, data: InsertMasterAsset): Promise<MasterAsset> {
+    const [asset] = await db
+      .insert(masterAssets)
+      .values({ ...data, songAssetId })
+      .onConflictDoUpdate({
+        target: masterAssets.songAssetId,
+        set: { ...data, updatedAt: new Date() },
+      })
+      .returning();
+    return asset;
+  }
+
+  // ─── LICENSING READINESS SYSTEM ────────────────────────────────────────────
+
+  async getLicenseReadiness(songAssetId: string): Promise<LicenseReadiness | undefined> {
+    const [readiness] = await db
+      .select()
+      .from(licenseReadiness)
+      .where(eq(licenseReadiness.songAssetId, songAssetId));
+    return readiness;
+  }
+
+  async upsertLicenseReadiness(
+    songAssetId: string,
+    data: Omit<InsertLicenseReadiness, "songAssetId">
+  ): Promise<LicenseReadiness> {
+    const [readiness] = await db
+      .insert(licenseReadiness)
+      .values({ ...data, songAssetId })
+      .onConflictDoUpdate({
+        target: licenseReadiness.songAssetId,
+        set: { ...data, lastCheckedAt: new Date() },
+      })
+      .returning();
+    return readiness;
+  }
+
+  // ─── RIGHTS CHANGE HISTORY (reuses the existing audit_log table — see
+  // .agents/memory/identity-layer.md for why no separate table was created) ──
+
+  async getRightsChangeHistory(songAssetId: string, relatedIds: string[] = []): Promise<any[]> {
+    const ids = [songAssetId, ...relatedIds];
+    const idList = sql.join(
+      ids.map((id) => sql`${id}`),
+      sql`, `
+    );
+    const result = await db.execute(sql`
+      SELECT id, user_id, action, resource_type, resource_id, before_state, after_state, created_at
+      FROM audit_log
+      WHERE resource_id IN (${idList})
+        AND resource_type IN ('ownership_record', 'composition_asset', 'master_asset', 'song_asset')
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+    return result.rows;
+  }
+
+  // ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE (Priority 1.1) ───────────────
+
+  async getLatestLegalDocument(docType: LegalDocType): Promise<LegalDocument | undefined> {
+    const [doc] = await db
+      .select()
+      .from(legalDocuments)
+      .where(eq(legalDocuments.docType, docType))
+      .orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt))
+      .limit(1);
+    return doc;
+  }
+
+  async getLegalDocumentHistory(docType: LegalDocType): Promise<LegalDocument[]> {
+    return await db
+      .select()
+      .from(legalDocuments)
+      .where(eq(legalDocuments.docType, docType))
+      .orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt));
+  }
+
+  async createLegalDocument(doc: InsertLegalDocument & { publishedBy: string }): Promise<LegalDocument> {
+    const [created] = await db.insert(legalDocuments).values(doc).returning();
+    return created;
+  }
+
+  async getLegalAcceptance(userId: string, docType: LegalDocType): Promise<LegalAcceptance | undefined> {
+    const [acceptance] = await db
+      .select()
+      .from(legalAcceptances)
+      .where(and(eq(legalAcceptances.userId, userId), eq(legalAcceptances.docType, docType)))
+      .orderBy(desc(legalAcceptances.acceptedAt))
+      .limit(1);
+    return acceptance;
+  }
+
+  async createLegalAcceptance(acceptance: InsertLegalAcceptance): Promise<LegalAcceptance> {
+    const [created] = await db.insert(legalAcceptances).values(acceptance).returning();
+    return created;
   }
 
   // Admin methods

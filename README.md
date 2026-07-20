@@ -1,4 +1,4 @@
-# SoundLedger Technologies Inc. — SplitSheet Platform
+﻿# SoundLedger Technologies Inc. — SplitSheet Platform
 
 > **The Operational Infrastructure for Modern Music Rights.**
 > *SoundLedger provides the authoritative system of record for music rights management. We eliminate royalty leakage and administrative friction by bridging the gap between creative collaboration and institutional rights accounting.*
@@ -350,6 +350,33 @@ Org-scoped API keys, separate from the personal keys in `api_keys`. Only the SHA
 
 ---
 
+### Legal Document Versioning & Acceptance Tables (Priority 1.1)
+
+Counsel-editable legal text, published via an admin API instead of a code deploy.
+
+#### `legal_documents`
+Append-only version history — publishing = a new row, never mutate a published version.
+
+| Column | Notes |
+|---|---|
+| `docType` | `tos` / `privacy` / `dpa` / `contributor_consent` |
+| `version` | Free-form (e.g. `2026-07-12`); unique per `(docType, version)` |
+| `effectiveDate` | When this version takes effect |
+| `markdownBody` | The counsel-supplied text, rendered client-side by a dependency-free markdown-lite renderer (`client/src/lib/legalMarkdown.tsx`) |
+| `publishedBy` | Admin user who published it |
+
+#### `legal_acceptances`
+Authoritative, per-user, per-doc-type acceptance ledger (supersedes the old single-column `users.termsAcceptedAt`/`termsVersion`, which remain only as a denormalized fast-path cache of the latest `tos` acceptance for the global per-request enforcement middleware).
+
+| Column | Notes |
+|---|---|
+| `docType` / `version` | Which document + version the user accepted |
+| `ipAddress` / `userAgent` | Captured at acceptance time for evidentiary purposes |
+
+Publishing a new version of `tos` or `privacy` automatically re-opens the blocking `TermsGate` for every user on their next request — no code change required.
+
+---
+
 ### Payments & Payouts Tables
 
 #### `payment_events`
@@ -691,6 +718,18 @@ Implemented in `server/payment-routes.ts` and `server/stripe-connect.ts`. See [�
 | PATCH | `/api/user/profile` | ✅ | Update profile |
 | GET | `/api/subscription` | ✅ | Current subscription status |
 | POST | `/api/get-or-create-subscription` | ✅ | Initiate/reuse Stripe subscription |
+
+### Legal Document Versioning (Priority 1.1)
+
+Implemented in `server/legal-routes.ts`. GET routes are intentionally public (no auth) — legal text must be visible before a user has an account, and `TermsGate` fetches it before the user has accepted anything.
+
+| Method | Route | Auth | Description |
+|---|---|---|---|
+| GET | `/api/legal/documents/:docType/latest` | ❌ Public | Latest published version + full markdown body for a doc type |
+| GET | `/api/legal/documents/:docType/history` | ❌ Public | Version history (metadata only, no body) for a doc type |
+| POST | `/api/legal/documents` | ✅ Admin only | Publish a new version (409 if the exact `docType`+`version` already exists) |
+| GET | `/api/user/terms-status` | ✅ | Per-doc-type (`tos`, `privacy`) acceptance status vs. latest published version |
+| POST | `/api/user/accept-terms` | ✅ | Records acceptance; omit `docType` in body to accept all gated types at once |
 
 ### Organizations (Enterprise Multi-Tenancy)
 
@@ -1046,6 +1085,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | CWR export wired into Rights Ledger UI | ✅ Implemented |
 | Terms & Privacy modals in Footer | ✅ In-app copy |
 | Mandatory ToS acceptance at login (blocking gate + versioned tracking) | ✅ Implemented |
+| Counsel-editable legal document versioning (`legal_documents` + `legal_acceptances`, admin publish API, per-user/per-doc-type acceptance ledger with IP/UA capture, auto re-prompt on new version) | ✅ Implemented (Priority 1.1) |
 | PIPEDA/GDPR data export & account deletion | ✅ Implemented (Profile → Privacy & Data) |
 | Identity verification (KYC) before signing | ✅ Implemented — real server-issued OTP, no client simulation |
 | Global Rights Framework (territories, PRO/CMO reference data, Rights & PRO Profile) | ✅ Implemented |
@@ -1072,7 +1112,7 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 
 | Area | Status |
 |---|---|
-| Lawyer-reviewed published Terms & Privacy | ⚠️ Draft only — finalize with counsel |
+| Lawyer-reviewed published Terms & Privacy text | ⚠️ Publishing mechanism is engineering-complete (Priority 1.1); the seeded text itself is still draft — counsel publishes the final version via `POST /api/legal/documents`, no deploy needed |
 | "Legally binding under ESIGN" marketing | ⚠️ Requires jurisdiction-specific legal review |
 | Carrier SMS delivery for OTP/verification codes | ⚠️ Delivered via email today; add a vendor (e.g. Twilio) for true SMS |
 | Live Stripe account (verified business, real Price IDs, bank payout accounts linked) | ⚠️ Currently test-mode-ready; needs a verified Stripe account and linked bank account(s) before real payments |
@@ -1085,6 +1125,13 @@ SplitSheet is positioned as a **workflow, rights infrastructure, and documentati
 | Global Metadata Support (`song_metadata` with ISRC/ISWC/UPC/etc., CSV/CWR/DDEX import-export) | ⏳ Planned |
 | Label/Publisher/Management specialized dashboards (roster, catalog, commission tracking) | ⏳ Planned |
 | SoundLedger CoPilot licensing/royalty reasoning upgrade | ⏳ Planned (base "no legal advice" safety already implemented) |
+| Contract template legal-language slots, sub-processor/DPA registry, marketing-claim CI lint (Priorities 1.2–1.4) | ⏳ Planned |
+| Hosting portability — auth provider abstraction, object storage abstraction, Docker/Fly deployment (Priority 2) | ⏳ Planned |
+| Evidentiary & payout hardening — server-side PDF hashing, SMS OTP, Stripe live-mode preflight, payout reconciliation job (Priority 3) | ⏳ Planned |
+| Numbered/checksummed schema migrations + CI drift check (Priority 4) | ⏳ Planned |
+| OpenTelemetry, SLOs, Playwright E2E suite, coverage floors (Priority 5) | ⏳ Planned |
+| CoPilot quotas, legal-advice classifier, prompt/response redaction (Priority 6) | ⏳ Planned |
+| Org-scoped audit export, SCIM stub, white-label branding (Priority 7) | ⏳ Planned |
 
 **Recommended before public launch:** Ontario entertainment/IP counsel + privacy counsel review of the published Terms/Privacy text, plus a verified live Stripe account with real bank payout details linked. All engineering items above are technically implemented and wired end-to-end.
 

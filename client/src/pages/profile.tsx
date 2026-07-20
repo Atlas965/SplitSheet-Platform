@@ -12,6 +12,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import {
@@ -20,9 +22,27 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { User, insertUserSchema } from "@shared/schema";
-import { Camera, User as UserIcon, Mail, Phone, MapPin, Globe, Plus, X, Download, ShieldAlert, Trash2 } from "lucide-react";
+import { User, insertUserSchema, TERRITORIES, type RightsOrganization, type CreatorRightsProfile } from "@shared/schema";
+import { Camera, User as UserIcon, Mail, Phone, MapPin, Globe, Plus, X, Download, ShieldAlert, Trash2, Landmark } from "lucide-react";
 import { activityTracker } from "@/lib/activityTracker";
+
+const TERRITORY_LABELS: Record<string, string> = {
+  CA: "Canada",
+  US: "United States",
+  UK: "United Kingdom",
+  EU: "European Union",
+  AU: "Australia",
+  OTHER: "Other / International",
+};
+
+const rightsProfileSchema = z.object({
+  ipiNumber: z.string().optional(),
+  proAffiliation: z.string().optional(),
+  territory: z.enum(TERRITORIES).default("CA"),
+  songwriterStatus: z.boolean().default(false),
+  publisherStatus: z.boolean().default(false),
+});
+type RightsProfileFormData = z.infer<typeof rightsProfileSchema>;
 
 const profileSchema = insertUserSchema.omit({
   stripeCustomerId: true,
@@ -56,6 +76,59 @@ export default function ProfilePage() {
   const { data: user, isLoading } = useQuery<User>({
     queryKey: ["/api/auth/user"],
   });
+
+  // ─── Rights & PRO Profile (Global Rights Framework — Settings → Rights Profile) ───
+  const { data: rightsProfile, isLoading: isRightsProfileLoading } = useQuery<CreatorRightsProfile | null>({
+    queryKey: ["/api/rights-profile"],
+  });
+
+  const rightsForm = useForm<RightsProfileFormData>({
+    resolver: zodResolver(rightsProfileSchema),
+    defaultValues: {
+      ipiNumber: "",
+      proAffiliation: "",
+      territory: "CA",
+      songwriterStatus: false,
+      publisherStatus: false,
+    },
+  });
+
+  const rightsTerritory = rightsForm.watch("territory");
+
+  const { data: rightsOrganizations = [] } = useQuery<RightsOrganization[]>({
+    queryKey: ["/api/rights-organizations", { territory: rightsTerritory }],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/rights-organizations?territory=${rightsTerritory}`);
+      return res.json();
+    },
+  });
+
+  React.useEffect(() => {
+    if (rightsProfile) {
+      rightsForm.reset({
+        ipiNumber: rightsProfile.ipiNumber || "",
+        proAffiliation: rightsProfile.proAffiliation || "",
+        territory: (rightsProfile.territory as any) || "CA",
+        songwriterStatus: rightsProfile.songwriterStatus ?? false,
+        publisherStatus: rightsProfile.publisherStatus ?? false,
+      });
+    }
+  }, [rightsProfile, rightsForm]);
+
+  const updateRightsProfileMutation = useMutation({
+    mutationFn: (data: RightsProfileFormData) => apiRequest("PUT", "/api/rights-profile", data),
+    onSuccess: () => {
+      toast({ title: "Rights Profile Updated", description: "Your PRO affiliation and rights settings have been saved." });
+      queryClient.invalidateQueries({ queryKey: ["/api/rights-profile"] });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update rights profile. Please try again.", variant: "destructive" });
+    },
+  });
+
+  const onSubmitRightsProfile = (data: RightsProfileFormData) => {
+    updateRightsProfileMutation.mutate(data);
+  };
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
@@ -439,6 +512,140 @@ export default function ProfilePage() {
                 </div>
               </form>
             </Form>
+          </CardContent>
+        </Card>
+
+        {/* Rights & PRO Profile — Global Rights Framework */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Landmark className="h-5 w-5" />
+              Rights & PRO Profile
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Tell SplitSheet how you're registered so agreements, licensing checks, and royalty
+              reporting reflect your real-world rights organization and territory.
+            </p>
+          </CardHeader>
+          <CardContent>
+            {isRightsProfileLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
+              </div>
+            ) : (
+              <Form {...rightsForm}>
+                <form onSubmit={rightsForm.handleSubmit(onSubmitRightsProfile)} className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={rightsForm.control}
+                      name="territory"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Primary Territory</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-rights-territory">
+                                <SelectValue placeholder="Select territory" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {TERRITORIES.map((t) => (
+                                <SelectItem key={t} value={t}>{TERRITORY_LABELS[t] ?? t}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={rightsForm.control}
+                      name="proAffiliation"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>PRO / Rights Organization</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value || ""}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-rights-pro">
+                                <SelectValue placeholder="Select your PRO" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {rightsOrganizations.map((org) => (
+                                <SelectItem key={org.id} value={org.name}>{org.name}</SelectItem>
+                              ))}
+                              {rightsOrganizations.length === 0 && (
+                                <SelectItem value="None" disabled>No organizations for this territory</SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <FormField
+                    control={rightsForm.control}
+                    name="ipiNumber"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>IPI / CAE Number</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="00 123 456 789" data-testid="input-rights-ipi" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={rightsForm.control}
+                      name="songwriterStatus"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                          <div>
+                            <FormLabel className="text-sm font-medium">Songwriter</FormLabel>
+                            <p className="text-xs text-muted-foreground">I write or co-write compositions</p>
+                          </div>
+                          <FormControl>
+                            <Switch checked={field.value} onCheckedChange={field.onChange} data-testid="switch-songwriter-status" />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={rightsForm.control}
+                      name="publisherStatus"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                          <div>
+                            <FormLabel className="text-sm font-medium">Publisher</FormLabel>
+                            <p className="text-xs text-muted-foreground">I administer publishing rights</p>
+                          </div>
+                          <FormControl>
+                            <Switch checked={field.value} onCheckedChange={field.onChange} data-testid="switch-publisher-status" />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="flex justify-end pt-2">
+                    <Button
+                      type="submit"
+                      disabled={updateRightsProfileMutation.isPending}
+                      data-testid="button-save-rights-profile"
+                    >
+                      {updateRightsProfileMutation.isPending ? "Saving..." : "Save Rights Profile"}
+                    </Button>
+                  </div>
+                </form>
+              </Form>
+            )}
           </CardContent>
         </Card>
 

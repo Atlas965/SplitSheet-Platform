@@ -9,7 +9,7 @@ import StatCard from "@/components/StatCard";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen, Building2 } from "lucide-react";
+import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen, Building2, Mic2 } from "lucide-react";
 import WorkflowBanner from "@/components/WorkflowBanner";
 import { resetOnboarding } from "@/components/OnboardingWalkthrough";
 import UserAvatar from "@/components/UserAvatar";
@@ -89,12 +89,12 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background">
       {/* Navigation */}
-      <nav className="bg-card border-b border-border">
+      <nav className="bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-50 supports-[backdrop-filter]:bg-card/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
               <Logo />
-              <span className="text-xl font-bold text-primary">SplitSheet</span>
+              <span className="text-xl font-bold text-primary tracking-tight">SplitSheet</span>
             </div>
             <div className="flex items-center space-x-4">
               <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
@@ -155,6 +155,12 @@ export default function Dashboard() {
                         <Link href="/organizations" className="flex items-center w-full">
                           <Building2 className="mr-3 h-4 w-4" />
                           <span>Organizations</span>
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid="dropdown-creators">
+                        <Link href="/creators" className="flex items-center w-full">
+                          <Mic2 className="mr-3 h-4 w-4" />
+                          <span>Creators</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild data-testid="dropdown-contracts">

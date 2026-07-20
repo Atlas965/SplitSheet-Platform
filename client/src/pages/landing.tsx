@@ -137,19 +137,19 @@ export default function Landing() {
     <div className="min-h-screen bg-background">
 
       {/* Navigation */}
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
+      <nav className="bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-50 supports-[backdrop-filter]:bg-card/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
               <Logo />
-              <span className="text-xl font-bold text-primary">SplitSheet</span>
+              <span className="text-xl font-bold text-primary tracking-tight">SplitSheet</span>
             </div>
             <div className="hidden md:flex items-center space-x-8">
               <a href="#features"     className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
               <a href="#how-it-works" className="text-muted-foreground hover:text-foreground transition-colors">How It Works</a>
               <a href="#pricing"      className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
               <a href="/api/login"    className="text-muted-foreground hover:text-foreground transition-colors">Sign In</a>
-              <a href="/api/login"    className="bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors font-semibold">
+              <a href="/api/login"    className="bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 hover:shadow-md transition-all font-semibold">
                 Get Started Free
               </a>
             </div>
@@ -163,11 +163,18 @@ export default function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+      <section className="relative py-20 px-4 sm:px-6 lg:px-8 overflow-hidden">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -top-40 h-[32rem] bg-[radial-gradient(ellipse_60%_50%_at_50%_0%,var(--tw-gradient-stops))] from-accent/15 via-accent/5 to-transparent"
+        />
+        <div className="max-w-7xl mx-auto relative">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
             <div className="max-w-xl">
-              <h1 className="text-4xl md:text-6xl font-bold text-foreground mb-6 leading-tight">
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-3 py-1 mb-5">
+                <i className="fas fa-sparkles text-[11px]" /> Built for the modern music business
+              </span>
+              <h1 className="text-4xl md:text-6xl font-bold text-foreground mb-6 leading-tight tracking-tight">
                 Professional Music Agreements Made{" "}
                 <span className="text-accent">Simple</span>
               </h1>
@@ -180,7 +187,7 @@ export default function Landing() {
               <div className="flex flex-col sm:flex-row gap-4 items-center mb-6">
                 <a
                   href="/api/login"
-                  className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary/90 transition-colors w-full sm:w-auto text-center"
+                  className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold shadow-lg shadow-primary/20 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/25 hover:-translate-y-0.5 transition-all w-full sm:w-auto text-center"
                 >
                   Start Creating Agreements
                 </a>
@@ -221,7 +228,7 @@ export default function Landing() {
             </p>
           </div>
 
-          <div className="max-w-2xl mx-auto bg-card rounded-xl border border-border p-6">
+          <div className="max-w-2xl mx-auto bg-card rounded-xl border border-border p-6 shadow-xl shadow-black/[0.04]">
             <div className="flex items-center justify-between mb-5 pb-4 border-b border-border">
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">
@@ -337,8 +344,11 @@ export default function Landing() {
                 desc:  "Access, review, and sign agreements from any phone, tablet, or desktop. No app download required — everything runs in the browser.",
               },
             ].map((f) => (
-              <div key={f.title} className="bg-card p-6 rounded-xl border border-border hover:border-accent/40 transition-colors">
-                <div className="w-12 h-12 bg-accent rounded-lg flex items-center justify-center mb-4">
+              <div
+                key={f.title}
+                className="group bg-card p-6 rounded-xl border border-border hover:border-accent/40 hover:shadow-lg hover:-translate-y-0.5 transition-all"
+              >
+                <div className="w-12 h-12 bg-gradient-to-br from-accent to-accent/80 rounded-lg flex items-center justify-center mb-4 shadow-sm shadow-accent/30 group-hover:scale-105 transition-transform">
                   <i className={`${f.icon} text-white text-xl`} />
                 </div>
                 <h3 className="text-xl font-semibold mb-2 text-foreground">{f.title}</h3>
@@ -382,7 +392,7 @@ export default function Landing() {
                 desc:  "Once all parties have signed, download a PDF copy. An activity log records every step — created, viewed, and signed — with timestamps.",
               },
             ].map((s) => (
-              <div key={s.step} className="bg-card border border-border rounded-xl p-6">
+              <div key={s.step} className="bg-card border border-border rounded-xl p-6 hover:shadow-lg hover:-translate-y-0.5 transition-all">
                 <div className="flex items-center gap-3 mb-4">
                   <span className="text-2xl">{s.icon}</span>
                   <span className="text-xs font-bold text-accent bg-accent/10 border border-accent/20 rounded-full px-2.5 py-0.5">
@@ -445,7 +455,7 @@ export default function Landing() {
             </div>
 
             {/* Pay Per Project $29 */}
-            <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col">
+            <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col shadow-xl shadow-accent/10">
               <div className="absolute -top-4 left-1/2 -translate-x-1/2">
                 <span className="bg-accent text-accent-foreground px-4 py-1 rounded-full text-sm font-semibold whitespace-nowrap">Most Popular</span>
               </div>
@@ -517,7 +527,7 @@ export default function Landing() {
             <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🏢 Enterprise Layer — Institutional Licensing</p>
           </div>
           <div className="max-w-5xl mx-auto">
-            <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl shadow-slate-900/30">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">Enterprise Licensing</p>
                 <h3 className="text-2xl font-bold mb-2">Custom Pricing</h3>
