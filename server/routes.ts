@@ -36,6 +36,13 @@ import { registerPaymentRoutes } from "./payment-routes";
 import { registerSecurityRoutes } from "./security-routes";
 import { registerComplianceRoutes, requireTermsAccepted } from "./compliance-routes";
 import { registerVerificationRoutes } from "./verification-routes";
+import { registerCreatorRoutes } from "./creator-routes";
+import { registerRightsRoutes } from "./rights-routes";
+import { registerLegalRoutes } from "./legal-routes";
+import { isAdmin } from "./adminAuth";
+import { registerRightsLedgerRoutes } from "./rights-ledger-routes";
+import { auditLog } from "./security";
+import { recalculateLicenseReadiness } from "./license-readiness";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -106,33 +113,9 @@ function rateLimit(maxRequests: number, windowMs: number) {
   };
 }
 
-// Admin authorization middleware
-async function isAdmin(req: any, res: any, next: any) {
-  const user = req.user;
-  if (!user) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-
-  try {
-    // Get user from database to verify admin role
-    const dbUser = await storage.getUser(user.claims.sub);
-    if (!dbUser) {
-      return res.status(401).json({ message: "User not found" });
-    }
-
-    // Check if user has admin privileges (only from database role field)
-    const isAdminUser = (dbUser as any).role === "admin";
-
-    if (!isAdminUser) {
-      return res.status(403).json({ message: "Admin access required" });
-    }
-
-    next();
-  } catch (error) {
-    console.error("Error checking admin status:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-}
+// Admin authorization middleware — moved to server/adminAuth.ts so other
+// route modules (e.g. legal-routes.ts) can import it without a circular
+// dependency on this file. Re-imported below via the top-of-file import.
 
 // Initialize Stripe only if secret key is available
 let stripe: Stripe | null = null;
@@ -1900,6 +1883,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           version: 1,
           effectiveAt: new Date(),
         });
+
+        await auditLog({
+          userId,
+          action: "ownership_record.create",
+          resourceType: "ownership_record",
+          resourceId: record.id,
+          afterState: record,
+          ipAddress: req.ip,
+        });
+        await recalculateLicenseReadiness(req.params.id).catch(() => {});
+
         res.status(201).json(record);
       } catch (error) {
         res.status(500).json({ message: "Failed to create ownership record" });
@@ -1929,6 +1923,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           userId,
           changeReason,
         );
+
+        await auditLog({
+          userId,
+          action: "ownership_record.update_split",
+          resourceType: "ownership_record",
+          resourceId: req.params.id,
+          beforeState: { changeReason },
+          afterState: records,
+          ipAddress: req.ip,
+        });
+        await recalculateLicenseReadiness(req.params.id).catch(() => {});
 
         // Notify all stakeholders via the messaging system
         for (const s of splits) {
@@ -2224,6 +2229,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Enterprise multi-tenant workspaces — organizations, RBAC members, org API keys
   registerOrganizationRoutes(app);
+
+  // Global Music Rights Infrastructure — creator registry, rights profile/orgs, rights ledger
+  registerCreatorRoutes(app);
+  registerRightsRoutes(app);
+  registerRightsLedgerRoutes(app);
+
+  // Legal document versioning + acceptance (counsel-editable ToS/Privacy/DPA text)
+  registerLegalRoutes(app);
 
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);

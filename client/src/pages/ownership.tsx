@@ -30,6 +30,7 @@ import {
   Music, Plus, TrendingUp, DollarSign, History, Users, ChevronRight,
   BarChart3, Clock, CheckCircle2, AlertCircle, MoreVertical,
   Archive, ArchiveRestore, PowerOff, Trash2, Activity, Eye, Shield,
+  ShieldCheck, FileMusic, Disc3, Pencil,
 } from "lucide-react";
 import CWRExport from "@/components/CWRExport";
 
@@ -91,6 +92,51 @@ interface ActivityLog {
   createdAt: string;
 }
 
+interface LicenseReadiness {
+  songAssetId: string;
+  ownershipComplete: boolean;
+  contributorConfirmed: boolean;
+  agreementsComplete: boolean;
+  metadataComplete: boolean;
+  sampleClearanceStatus: "clear" | "pending" | "not_cleared" | "not_applicable";
+  licenseScore: number;
+  lastCheckedAt: string;
+  tier: "ready" | "needs_review" | "incomplete";
+  tierLabel: string;
+}
+
+interface CompositionAsset {
+  id: string;
+  songAssetId: string;
+  title: string;
+  iswc: string | null;
+  ownershipStatus: string;
+}
+
+interface MasterAsset {
+  id: string;
+  songAssetId: string;
+  recordingTitle: string;
+  isrc: string | null;
+  artistOwner: string | null;
+  labelOwner: string | null;
+  distributor: string | null;
+  releaseDate: string | null;
+}
+
+const SAMPLE_CLEARANCE_OPTIONS = [
+  { value: "clear", label: "Clear" },
+  { value: "pending", label: "Pending" },
+  { value: "not_cleared", label: "Not Cleared" },
+  { value: "not_applicable", label: "Not Applicable" },
+];
+
+const readinessTierColor: Record<string, string> = {
+  ready: "text-green-600",
+  needs_review: "text-yellow-600",
+  incomplete: "text-red-600",
+};
+
 const REVENUE_SOURCES = ["streaming", "sync", "performance", "mechanical", "other"];
 
 const sourceColor: Record<string, string> = {
@@ -137,6 +183,11 @@ export default function Ownership() {
 
   const [newAsset, setNewAsset] = useState({ title: "", artistName: "", isrc: "", iswc: "", type: "master" });
   const [newRevenue, setNewRevenue] = useState({ source: "streaming", amount: "", description: "" });
+
+  const [showEditComposition, setShowEditComposition] = useState(false);
+  const [showEditMaster, setShowEditMaster] = useState(false);
+  const [compositionForm, setCompositionForm] = useState({ title: "", iswc: "", ownershipStatus: "pending" });
+  const [masterForm, setMasterForm] = useState({ recordingTitle: "", isrc: "", artistOwner: "", labelOwner: "", distributor: "" });
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
@@ -196,6 +247,29 @@ export default function Ownership() {
   const { data: earnings } = useQuery<{ balance: UserBalance | null; payouts: any[] }>({
     queryKey: ["/api/earnings"],
     enabled: isAuthenticated,
+    retry: false,
+  });
+
+  // ── Global Rights Framework: License Readiness + Composition/Master Rights ──
+
+  const { data: licenseReadiness, isLoading: readinessLoading } = useQuery<LicenseReadiness>({
+    queryKey: ["/api/assets", selectedAsset?.id, "license-readiness"],
+    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/license-readiness`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedAsset,
+    retry: false,
+  });
+
+  const { data: composition } = useQuery<CompositionAsset | null>({
+    queryKey: ["/api/assets", selectedAsset?.id, "composition"],
+    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/composition`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedAsset,
+    retry: false,
+  });
+
+  const { data: master } = useQuery<MasterAsset | null>({
+    queryKey: ["/api/assets", selectedAsset?.id, "master"],
+    queryFn: () => fetch(`/api/assets/${selectedAsset!.id}/master`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedAsset,
     retry: false,
   });
 
@@ -274,6 +348,46 @@ export default function Ownership() {
       toast({ title: "Draft Deleted", description: "Asset has been removed." });
     },
     onError: (e: any) => toast({ title: "Cannot Delete", description: e.message || "Asset has revenue or ownership records.", variant: "destructive" }),
+  });
+
+  const recalcReadinessMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/assets/${selectedAsset!.id}/license-readiness/recalculate`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "license-readiness"] });
+      toast({ title: "License Score Updated" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to recalculate license readiness.", variant: "destructive" }),
+  });
+
+  const updateSampleClearanceMutation = useMutation({
+    mutationFn: (status: string) => apiRequest("PATCH", `/api/assets/${selectedAsset!.id}/license-readiness/sample-clearance`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "license-readiness"] });
+      toast({ title: "Sample Clearance Updated" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to update sample clearance status.", variant: "destructive" }),
+  });
+
+  const saveCompositionMutation = useMutation({
+    mutationFn: (data: typeof compositionForm) => apiRequest("PUT", `/api/assets/${selectedAsset!.id}/composition`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "composition"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "license-readiness"] });
+      setShowEditComposition(false);
+      toast({ title: "Composition Rights Saved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to save composition rights.", variant: "destructive" }),
+  });
+
+  const saveMasterMutation = useMutation({
+    mutationFn: (data: typeof masterForm) => apiRequest("PUT", `/api/assets/${selectedAsset!.id}/master`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "master"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/assets", selectedAsset?.id, "license-readiness"] });
+      setShowEditMaster(false);
+      toast({ title: "Master Rights Saved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to save master rights.", variant: "destructive" }),
   });
 
   // ── Derived values ─────────────────────────────────────────────────────────
@@ -621,6 +735,158 @@ export default function Ownership() {
                   </CardContent>
                 </Card>
 
+                {/* License Readiness — Global Rights Framework */}
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4" /> License Readiness
+                    </CardTitle>
+                    <Button variant="ghost" size="sm" onClick={() => recalcReadinessMutation.mutate()}
+                      disabled={recalcReadinessMutation.isPending} data-testid="button-recalculate-readiness">
+                      {recalcReadinessMutation.isPending ? "Checking..." : "Recheck Score"}
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {readinessLoading || !licenseReadiness ? (
+                      <div className="flex justify-center py-4">
+                        <div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full" />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-3xl font-bold" data-testid="text-license-score">{licenseReadiness.licenseScore}%</p>
+                            <p className={`text-xs font-semibold mt-0.5 ${readinessTierColor[licenseReadiness.tier] ?? ""}`}>
+                              {licenseReadiness.tierLabel}
+                            </p>
+                          </div>
+                        </div>
+                        <Progress value={licenseReadiness.licenseScore} className="h-2" />
+
+                        <div className="grid grid-cols-2 gap-2.5 text-sm">
+                          {[
+                            { label: "Ownership", ok: licenseReadiness.ownershipComplete },
+                            { label: "Contributors Confirmed", ok: licenseReadiness.contributorConfirmed },
+                            { label: "Agreements", ok: licenseReadiness.agreementsComplete },
+                            { label: "Metadata", ok: licenseReadiness.metadataComplete },
+                          ].map(item => (
+                            <div key={item.label} className="flex items-center gap-2">
+                              {item.ok
+                                ? <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                                : <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />}
+                              <span className={item.ok ? "" : "text-muted-foreground"}>{item.label}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center justify-between pt-3 border-t">
+                          <div className="flex items-center gap-2 text-sm">
+                            {licenseReadiness.sampleClearanceStatus === "clear" || licenseReadiness.sampleClearanceStatus === "not_applicable"
+                              ? <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                              : <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />}
+                            <span>Sample Clearance</span>
+                          </div>
+                          <Select value={licenseReadiness.sampleClearanceStatus} onValueChange={v => updateSampleClearanceMutation.mutate(v)}>
+                            <SelectTrigger className="w-44 h-8 text-xs" data-testid="select-sample-clearance"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {SAMPLE_CLEARANCE_OPTIONS.map(o => (
+                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Master vs Composition Rights */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <FileMusic className="h-4 w-4" /> Composition Rights
+                      </CardTitle>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" data-testid="button-edit-composition"
+                        onClick={() => {
+                          setCompositionForm({
+                            title: composition?.title ?? selectedAsset.title,
+                            iswc: composition?.iswc ?? selectedAsset.iswc ?? "",
+                            ownershipStatus: composition?.ownershipStatus ?? "pending",
+                          });
+                          setShowEditComposition(true);
+                        }}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </CardHeader>
+                    <CardContent className="space-y-1.5 text-sm">
+                      {composition ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Title</span>
+                            <span className="font-medium truncate max-w-[60%]">{composition.title}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">ISWC</span>
+                            <span className="font-mono text-xs">{composition.iswc || "—"}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-muted-foreground">Status</span>
+                            <Badge variant="outline" className="text-[10px] capitalize">{composition.ownershipStatus}</Badge>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground py-2">Not yet set up — click the pencil to add composition details.</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Disc3 className="h-4 w-4" /> Master Rights
+                      </CardTitle>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" data-testid="button-edit-master"
+                        onClick={() => {
+                          setMasterForm({
+                            recordingTitle: master?.recordingTitle ?? selectedAsset.title,
+                            isrc: master?.isrc ?? selectedAsset.isrc ?? "",
+                            artistOwner: master?.artistOwner ?? "",
+                            labelOwner: master?.labelOwner ?? "",
+                            distributor: master?.distributor ?? "",
+                          });
+                          setShowEditMaster(true);
+                        }}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </CardHeader>
+                    <CardContent className="space-y-1.5 text-sm">
+                      {master ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">ISRC</span>
+                            <span className="font-mono text-xs">{master.isrc || "—"}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Artist Owner</span>
+                            <span className="font-medium truncate max-w-[60%]">{master.artistOwner || "—"}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Label Owner</span>
+                            <span className="font-medium truncate max-w-[60%]">{master.labelOwner || "—"}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Distributor</span>
+                            <span className="font-medium truncate max-w-[60%]">{master.distributor || "—"}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground py-2">Not yet set up — click the pencil to add master details.</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
                 {/* CWR Export — PRO registration file (SOCAN/ASCAP/BMI/PRS) */}
                 {ownershipNamed.length > 0 && (
                   <CWRExport
@@ -769,6 +1035,93 @@ export default function Ownership() {
           </div>
         </div>
       </div>
+
+      {/* ── Edit Composition Rights Modal ─────────────────────────────── */}
+      <Dialog open={showEditComposition} onOpenChange={setShowEditComposition}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Composition Rights</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="composition-title">Composition Title *</Label>
+              <Input id="composition-title" value={compositionForm.title}
+                onChange={e => setCompositionForm({ ...compositionForm, title: e.target.value })}
+                data-testid="input-composition-title" />
+            </div>
+            <div>
+              <Label htmlFor="composition-iswc">ISWC Code</Label>
+              <Input id="composition-iswc" placeholder="e.g. T-034.524.680-1" value={compositionForm.iswc}
+                onChange={e => setCompositionForm({ ...compositionForm, iswc: e.target.value })}
+                data-testid="input-composition-iswc" />
+            </div>
+            <div>
+              <Label>Ownership Status</Label>
+              <Select value={compositionForm.ownershipStatus} onValueChange={v => setCompositionForm({ ...compositionForm, ownershipStatus: v })}>
+                <SelectTrigger data-testid="select-composition-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="complete">Complete</SelectItem>
+                  <SelectItem value="disputed">Disputed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowEditComposition(false)}>Cancel</Button>
+              <Button onClick={() => saveCompositionMutation.mutate(compositionForm)}
+                disabled={!compositionForm.title || saveCompositionMutation.isPending} data-testid="button-save-composition">
+                {saveCompositionMutation.isPending ? "Saving..." : "Save Composition Rights"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Master Rights Modal ───────────────────────────────────── */}
+      <Dialog open={showEditMaster} onOpenChange={setShowEditMaster}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Master Rights</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="master-title">Recording Title *</Label>
+              <Input id="master-title" value={masterForm.recordingTitle}
+                onChange={e => setMasterForm({ ...masterForm, recordingTitle: e.target.value })}
+                data-testid="input-master-title" />
+            </div>
+            <div>
+              <Label htmlFor="master-isrc">ISRC Code</Label>
+              <Input id="master-isrc" placeholder="e.g. USRC11600001" value={masterForm.isrc}
+                onChange={e => setMasterForm({ ...masterForm, isrc: e.target.value })}
+                data-testid="input-master-isrc" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="master-artist-owner">Artist Owner</Label>
+                <Input id="master-artist-owner" value={masterForm.artistOwner}
+                  onChange={e => setMasterForm({ ...masterForm, artistOwner: e.target.value })}
+                  data-testid="input-master-artist-owner" />
+              </div>
+              <div>
+                <Label htmlFor="master-label-owner">Label Owner</Label>
+                <Input id="master-label-owner" value={masterForm.labelOwner}
+                  onChange={e => setMasterForm({ ...masterForm, labelOwner: e.target.value })}
+                  data-testid="input-master-label-owner" />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="master-distributor">Distributor</Label>
+              <Input id="master-distributor" value={masterForm.distributor}
+                onChange={e => setMasterForm({ ...masterForm, distributor: e.target.value })}
+                data-testid="input-master-distributor" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowEditMaster(false)}>Cancel</Button>
+              <Button onClick={() => saveMasterMutation.mutate(masterForm)}
+                disabled={!masterForm.recordingTitle || saveMasterMutation.isPending} data-testid="button-save-master">
+                {saveMasterMutation.isPending ? "Saving..." : "Save Master Rights"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Archive Confirmation Modal ────────────────────────────────── */}
       <AlertDialog open={!!archiveTarget} onOpenChange={o => { if (!o) setArchiveTarget(null); }}>

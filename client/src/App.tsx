@@ -27,6 +27,8 @@ import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
 import Organizations from "@/pages/organizations";
 import OrganizationDetail from "@/pages/organization-detail";
+import Creators from "@/pages/creators";
+import CreatorDetail from "@/pages/creator-detail";
 import ConfirmSplit from "@/pages/confirm-split";
 import NotFound from "@/pages/not-found";
 import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
@@ -79,6 +81,8 @@ function Router() {
             <Route path="/projects/:id" component={ProjectDetail} />
             <Route path="/organizations" component={Organizations} />
             <Route path="/organizations/:id" component={OrganizationDetail} />
+            <Route path="/creators" component={Creators} />
+            <Route path="/creators/:id" component={CreatorDetail} />
             <Route path="/contract/new" component={() => {
               window.location.replace("/contract/split-sheet");
               return null;

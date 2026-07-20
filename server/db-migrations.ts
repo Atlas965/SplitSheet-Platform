@@ -71,6 +71,10 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       updated_at  timestamp DEFAULT now()
     );
   `);
+  await db.execute(sql`
+    ALTER TABLE song_assets
+      ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS ownership_records (
@@ -85,6 +89,12 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       created_by           varchar NOT NULL REFERENCES users(id),
       created_at           timestamp DEFAULT now()
     );
+  `);
+  await db.execute(sql`
+    ALTER TABLE ownership_records
+      ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
+      ADD COLUMN IF NOT EXISTS territory varchar,
+      ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
 
   await db.execute(sql`
@@ -244,6 +254,285 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       expires_at   timestamp NOT NULL,
       created_at   timestamp DEFAULT now()
     );
+  `);
+
+  // ── GLOBAL RIGHTS FRAMEWORK ────────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS rights_organizations (
+      id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name              varchar NOT NULL,
+      territory         varchar NOT NULL,
+      organization_type varchar NOT NULL DEFAULT 'pro',
+      website           varchar,
+      supported_rights  text[] NOT NULL DEFAULT '{}',
+      created_at        timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS creators (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      sl_creator_id varchar NOT NULL UNIQUE,
+      name        varchar NOT NULL,
+      type        varchar NOT NULL DEFAULT 'songwriter',
+      email       varchar,
+      pro         varchar,
+      ipi         varchar,
+      isni        varchar,
+      bio         text,
+      website     varchar,
+      created_by  varchar NOT NULL REFERENCES users(id),
+      created_at  timestamp DEFAULT now(),
+      updated_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS creator_rights_profiles (
+      id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
+      ipi_number         varchar,
+      pro_affiliation    varchar,
+      territory          varchar DEFAULT 'CA',
+      songwriter_status  boolean DEFAULT false,
+      publisher_status   boolean DEFAULT false,
+      created_at         timestamp DEFAULT now(),
+      updated_at         timestamp DEFAULT now()
+    );
+  `);
+
+  // ── MASTER VS COMPOSITION RIGHTS ───────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS composition_assets (
+      id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
+      title            varchar NOT NULL,
+      iswc             varchar,
+      ownership_status varchar DEFAULT 'pending',
+      created_at       timestamp DEFAULT now(),
+      updated_at       timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS master_assets (
+      id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
+      recording_title  varchar NOT NULL,
+      isrc             varchar,
+      artist_owner     varchar,
+      label_owner      varchar,
+      distributor      varchar,
+      release_date     timestamp,
+      created_at       timestamp DEFAULT now(),
+      updated_at       timestamp DEFAULT now()
+    );
+  `);
+
+  // ── LICENSING READINESS SYSTEM ─────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS license_readiness (
+      id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
+      ownership_complete       boolean DEFAULT false,
+      contributor_confirmed    boolean DEFAULT false,
+      agreements_complete      boolean DEFAULT false,
+      metadata_complete        boolean DEFAULT false,
+      sample_clearance_status  varchar DEFAULT 'pending',
+      license_score            integer NOT NULL DEFAULT 0,
+      last_checked_at          timestamp DEFAULT now()
+    );
+  `);
+
+  // Seed the rights organizations reference table once (idempotent: skip if already populated).
+  await db.execute(sql`
+    INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
+    SELECT * FROM (VALUES
+      ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
+      ('CMRRA',        'CA',    'mro',              'https://www.cmrra.ca',       ARRAY['mechanical_rights']::text[]),
+      ('Re:Sound',     'CA',    'neighboring_rights','https://resound.ca',        ARRAY['neighboring_rights']::text[]),
+      ('ASCAP',        'US',    'pro',              'https://www.ascap.com',      ARRAY['performance_rights']::text[]),
+      ('BMI',          'US',    'pro',              'https://www.bmi.com',        ARRAY['performance_rights']::text[]),
+      ('SESAC',        'US',    'pro',              'https://www.sesac.com',      ARRAY['performance_rights']::text[]),
+      ('SoundExchange','US',    'neighboring_rights','https://www.soundexchange.com', ARRAY['neighboring_rights']::text[]),
+      ('PRS',          'UK',    'pro',              'https://www.prsformusic.com', ARRAY['performance_rights']::text[]),
+      ('MCPS',         'UK',    'mro',              'https://www.prsformusic.com/mcps', ARRAY['mechanical_rights']::text[]),
+      ('PPL',          'UK',    'neighboring_rights','https://www.ppluk.com',      ARRAY['neighboring_rights']::text[]),
+      ('CISAC Member (EU)',    'EU',    'cmo', 'https://www.cisac.org', ARRAY['performance_rights','mechanical_rights']::text[]),
+      ('CISAC Member (AU)',    'AU',    'cmo', 'https://www.cisac.org', ARRAY['performance_rights','mechanical_rights']::text[]),
+      ('CISAC Member (Other)', 'OTHER', 'cmo', 'https://www.cisac.org', ARRAY['performance_rights','mechanical_rights']::text[])
+    ) AS seed(name, territory, organization_type, website, supported_rights)
+    WHERE NOT EXISTS (SELECT 1 FROM rights_organizations LIMIT 1);
+  `);
+}
+
+// ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE (Priority 1.1) ──────────────────
+// Counsel-editable ToS/Privacy/DPA/contributor-consent text, published via
+// POST /api/legal/documents (see server/legal-routes.ts) instead of a code
+// deploy. Seeds the pre-existing hardcoded Footer.tsx copy as version
+// "2026-07-12" (matching the prior CURRENT_TERMS_VERSION constant) so no
+// user is unexpectedly re-prompted the moment this ships, then backfills
+// legal_acceptances from any pre-existing users.terms_accepted_at value.
+const SEED_TOS_MARKDOWN = `SoundLedger Technologies Inc. – SplitSheet Product · Governing Law: Ontario, Canada
+
+## 1. Acceptance of Terms
+By accessing or using SplitSheet ("Platform"), you agree to these Terms. If you do not agree, do not use the Platform.
+
+## 2. Platform Liability
+SplitSheet acts solely as a platform to facilitate agreements and is **not a party to any agreement between users**. We are not responsible for disputes, performance, or enforcement of user-created agreements.
+
+## 3. User Responsibility
+Users are solely responsible for the **accuracy, legality, and enforceability** of the agreements they create.
+
+## 4. As-Is Disclaimer
+The Platform and all documents are provided **"as-is" without guarantees or warranties**, express or implied.
+
+## 5. No Legal Advice
+SplitSheet is **not a law firm** and does not provide legal advice. All templates, documents, and tools are provided for general informational purposes only and may not be suitable for every situation.
+
+Users are strongly encouraged to seek **independent legal advice** from a qualified lawyer before entering into any agreement.
+
+## 6. Intellectual Property
+All content, logos, and trademarks on SplitSheet are the **exclusive property of SoundLedger Technologies Inc.**
+
+## 7. Dispute Resolution
+Disputes arising from use of the Platform will be resolved in the following order:
+- Mutual negotiation
+- Mediation
+- Arbitration (costs shared equally)
+
+## 8. Eligibility
+- Must be 18+ or age of majority in your jurisdiction
+- Must have authority to enter binding agreements
+
+## 9. User Accounts & Content
+- Maintain account security
+- You own all uploaded content
+- You grant SplitSheet a limited license to operate the platform
+
+## 10. Payments & Subscriptions
+- Fees may apply; payments are non-refundable unless required by law
+- Pricing may change with notice
+
+## 11. Termination
+Accounts may be suspended or terminated for violating terms, fraudulent activity, or abuse.
+
+## 12. Limitation of Liability
+SplitSheet is **not liable for indirect or consequential damages**, and total liability is limited to fees paid in the last 12 months.
+
+## 13. Changes
+We may update these Terms; continued use constitutes acceptance.`;
+
+const SEED_PRIVACY_MARKDOWN = `SoundLedger Technologies Inc. – SplitSheet Product · GDPR & Canadian Privacy Law Aligned
+
+## 1. Information We Collect
+- **Account info:** name, email, username
+- **Contract data:** royalty splits, ownership percentages, agreement terms
+- **Usage data:** device info, IP address, interaction data
+
+## 2. How We Use Information
+- Operate the platform
+- Store agreements
+- Improve user experience
+- Ensure security
+
+## 3. Data Sharing
+We **do NOT sell user data**. We may share with cloud providers, payment processors, or legal authorities if required.
+
+## 4. Data Storage & Security
+- Stored securely with encryption
+- Access controls and secure authentication
+
+## 5. Your Rights (Canada / GDPR)
+You have the right to access, correct, or request deletion of your data.
+
+## 6. Data Retention
+Retained while your account is active and as required for legal compliance.
+
+## 7. Platform Liability
+SplitSheet is **not responsible for the content or legality** of user-created agreements.
+
+## 8. Children
+Platform is not for users under 18.
+
+## 9. Dispute Resolution
+Privacy-related disputes follow: negotiation → mediation → arbitration (costs shared equally).
+
+## 10. Changes
+Policy updates may occur; continued use constitutes acceptance.`;
+
+const SEED_LEGAL_VERSION = "2026-07-12";
+const SEED_LEGAL_EFFECTIVE_DATE = "2026-07-12";
+
+export async function runLegalDocumentMigrations(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS legal_documents (
+      id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      doc_type       varchar NOT NULL,
+      version        varchar NOT NULL,
+      effective_date timestamp NOT NULL,
+      markdown_body  text NOT NULL,
+      published_by   varchar REFERENCES users(id),
+      published_at   timestamp DEFAULT now(),
+      UNIQUE (doc_type, version)
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS legal_acceptances (
+      id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id      varchar NOT NULL REFERENCES users(id),
+      doc_type     varchar NOT NULL,
+      version      varchar NOT NULL,
+      accepted_at  timestamp DEFAULT now(),
+      ip_address   varchar,
+      user_agent   varchar
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+
+  // Seed the initial ToS/Privacy versions once — matches the prior hardcoded
+  // CURRENT_TERMS_VERSION so existing acceptances (backfilled below) remain valid.
+  await db.execute(sql`
+    INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
+    VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
+    ON CONFLICT (doc_type, version) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
+    VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
+    ON CONFLICT (doc_type, version) DO NOTHING;
+  `);
+
+  // Backfill legal_acceptances for every user who already accepted the old
+  // single-column terms flag, so no one is re-prompted the moment this ships.
+  // Safe to re-run: only inserts rows for users who don't already have one
+  // for this exact (user_id, doc_type, version) combination.
+  await db.execute(sql`
+    INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
+    SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
+    FROM users u
+    WHERE u.terms_accepted_at IS NOT NULL
+      AND u.terms_version IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM legal_acceptances la
+        WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
+      );
+  `);
+  // Users who accepted the old combined ToS+Privacy gate implicitly accepted
+  // Privacy too — backfill the same acceptance row under doc_type='privacy'
+  // at the seed version so they aren't re-prompted for the Privacy half either.
+  await db.execute(sql`
+    INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
+    SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
+    FROM users u
+    WHERE u.terms_accepted_at IS NOT NULL
+      AND u.terms_version = ${SEED_LEGAL_VERSION}
+      AND NOT EXISTS (
+        SELECT 1 FROM legal_acceptances la
+        WHERE la.user_id = u.id AND la.doc_type = 'privacy' AND la.version = ${SEED_LEGAL_VERSION}
+      );
   `);
 }
 

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   index,
+  unique,
   jsonb,
   pgTable,
   timestamp,
@@ -209,6 +210,7 @@ export const songAssets = pgTable("song_assets", {
   title: varchar("title").notNull(),
   artistName: varchar("artist_name"),
   isrc: varchar("isrc"), // International Standard Recording Code
+  slSongId: varchar("sl_song_id").unique(), // permanent external ID: SL-SONG-XXXXXXXX
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   contractId: varchar("contract_id").references(() => contracts.id),
   status: varchar("status").default("active"), // active, archived
@@ -226,6 +228,10 @@ export const ownershipRecords = pgTable("ownership_records", {
   role: varchar("role").notNull(), // writer, producer, performer, publisher
   version: integer("version").notNull(),
   changeReason: text("change_reason"),
+  // Global rights framework — which right this record applies to, where, and for how long.
+  ownershipType: varchar("ownership_type").default("composition"), // composition, master, publishing, neighboring_rights, mechanical_rights, performance_rights
+  territory: varchar("territory"), // CA, US, UK, EU, AU, OTHER
+  expirationDate: timestamp("expiration_date"),
   effectiveAt: timestamp("effective_at").defaultNow(),
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
@@ -339,6 +345,104 @@ export const organizationApiKeys = pgTable("organization_api_keys", {
 export const ORGANIZATION_TYPES = ["label", "studio", "publisher", "distributor", "pro"] as const;
 export const ORGANIZATION_ROLES = ["owner", "admin", "member", "viewer"] as const;
 
+// ─── GLOBAL RIGHTS FRAMEWORK ─────────────────────────────────────────────────
+// Territories and right-types are closed enums (TypeScript consts), not DB
+// tables — same pattern as ORGANIZATION_TYPES/ORGANIZATION_ROLES above.
+export const TERRITORIES = ["CA", "US", "UK", "EU", "AU", "OTHER"] as const;
+export const OWNERSHIP_RIGHT_TYPES = [
+  "composition",
+  "master",
+  "publishing",
+  "neighboring_rights",
+  "mechanical_rights",
+  "performance_rights",
+] as const;
+
+// Rights organizations (PROs/CMOs/MROs) — small seeded reference table.
+// Read-only from the API; seeded once in server/db-migrations.ts.
+export const rightsOrganizations = pgTable("rights_organizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  territory: varchar("territory").notNull(), // CA, US, UK, EU, AU, OTHER
+  organizationType: varchar("organization_type").notNull().default("pro"), // pro, mro, neighboring_rights, cmo
+  website: varchar("website"),
+  supportedRights: text("supported_rights").array().notNull().default(sql`'{}'::text[]`),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Creators — permanent roster of songwriters/producers/artists/publishers,
+// each assigned a permanent SL-CREATOR-XXXXXXXX id (see .agents/memory/identity-layer.md).
+// Distinct from `creatorRightsProfiles` below, which is a platform *user's own*
+// PRO/territory settings — `creators` is a roster an operator manages of
+// other people (who may or may not have a SplitSheet account).
+export const creators = pgTable("creators", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slCreatorId: varchar("sl_creator_id").notNull().unique(), // permanent external ID: SL-CREATOR-XXXXXXXX
+  name: varchar("name").notNull(),
+  type: varchar("type").notNull().default("songwriter"), // songwriter, producer, artist, publisher
+  email: varchar("email"),
+  pro: varchar("pro"), // PRO affiliation display name (e.g. "SOCAN")
+  ipi: varchar("ipi"), // IPI / CAE number
+  isni: varchar("isni"),
+  bio: text("bio"),
+  website: varchar("website"),
+  createdBy: varchar("created_by").references(() => users.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Creator rights profiles — one per platform user, powers Settings → Rights Profile.
+export const creatorRightsProfiles = pgTable("creator_rights_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull().unique(),
+  ipiNumber: varchar("ipi_number"),
+  proAffiliation: varchar("pro_affiliation"), // references rightsOrganizations.name (free text for orgs not in the seed list)
+  territory: varchar("territory").default("CA"), // CA, US, UK, EU, AU, OTHER
+  songwriterStatus: boolean("songwriter_status").default(false),
+  publisherStatus: boolean("publisher_status").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ─── MASTER VS COMPOSITION RIGHTS ────────────────────────────────────────────
+// Each song asset may have one composition-rights record and one
+// master-rights record — the two halves of music ownership tracked separately.
+export const compositionAssets = pgTable("composition_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  songAssetId: varchar("song_asset_id").references(() => songAssets.id).notNull().unique(),
+  title: varchar("title").notNull(),
+  iswc: varchar("iswc"), // International Standard Musical Work Code
+  ownershipStatus: varchar("ownership_status").default("pending"), // pending, complete, disputed
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const masterAssets = pgTable("master_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  songAssetId: varchar("song_asset_id").references(() => songAssets.id).notNull().unique(),
+  recordingTitle: varchar("recording_title").notNull(),
+  isrc: varchar("isrc"), // International Standard Recording Code
+  artistOwner: varchar("artist_owner"),
+  labelOwner: varchar("label_owner"),
+  distributor: varchar("distributor"),
+  releaseDate: timestamp("release_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ─── LICENSING READINESS SYSTEM ──────────────────────────────────────────────
+export const licenseReadiness = pgTable("license_readiness", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  songAssetId: varchar("song_asset_id").references(() => songAssets.id).notNull().unique(),
+  ownershipComplete: boolean("ownership_complete").default(false),
+  contributorConfirmed: boolean("contributor_confirmed").default(false),
+  agreementsComplete: boolean("agreements_complete").default(false),
+  metadataComplete: boolean("metadata_complete").default(false),
+  sampleClearanceStatus: varchar("sample_clearance_status").default("pending"), // clear, pending, not_cleared, not_applicable
+  licenseScore: integer("license_score").notNull().default(0),
+  lastCheckedAt: timestamp("last_checked_at").defaultNow(),
+});
+
 // ─── PAYMENT WEBHOOK IDEMPOTENCY ─────────────────────────────────────────────
 export const paymentEvents = pgTable("payment_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -383,6 +487,41 @@ export const verificationCodes = pgTable("verification_codes", {
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE ─────────────────────────────────
+// Counsel-editable Terms/Privacy/DPA/contributor-consent text, decoupled from
+// code deploys. `legal_documents` is an append-only version history (publish
+// = new row, never mutate a published version); `legal_acceptances` is the
+// authoritative per-user, per-doc-type acceptance ledger. `users.termsAcceptedAt`
+// / `users.termsVersion` remain as a denormalized fast-path cache of the
+// user's latest `tos` acceptance only, read by the global per-request
+// requireTermsAccepted middleware — legal_acceptances is the source of truth.
+export const LEGAL_DOC_TYPES = ["tos", "privacy", "dpa", "contributor_consent"] as const;
+export type LegalDocType = typeof LEGAL_DOC_TYPES[number];
+
+export const legalDocuments = pgTable("legal_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  docType: varchar("doc_type").notNull(), // tos, privacy, dpa, contributor_consent
+  version: varchar("version").notNull(),
+  effectiveDate: timestamp("effective_date").notNull(),
+  markdownBody: text("markdown_body").notNull(),
+  publishedBy: varchar("published_by").references(() => users.id),
+  publishedAt: timestamp("published_at").defaultNow(),
+}, (table) => [
+  unique("uq_legal_documents_type_version").on(table.docType, table.version),
+]);
+
+export const legalAcceptances = pgTable("legal_acceptances", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  docType: varchar("doc_type").notNull(),
+  version: varchar("version").notNull(),
+  acceptedAt: timestamp("accepted_at").defaultNow(),
+  ipAddress: varchar("ip_address"),
+  userAgent: varchar("user_agent"),
+}, (table) => [
+  index("idx_legal_acceptances_user").on(table.userId),
+]);
 
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
 
@@ -462,6 +601,41 @@ export const confirmationsRelations = relations(confirmations, ({ one }) => ({
   collaborator: one(contractCollaborators, {
     fields: [confirmations.collaboratorId],
     references: [contractCollaborators.id],
+  }),
+}));
+
+export const creatorsRelations = relations(creators, ({ one }) => ({
+  creator: one(users, {
+    fields: [creators.createdBy],
+    references: [users.id],
+  }),
+}));
+
+export const creatorRightsProfilesRelations = relations(creatorRightsProfiles, ({ one }) => ({
+  user: one(users, {
+    fields: [creatorRightsProfiles.userId],
+    references: [users.id],
+  }),
+}));
+
+export const compositionAssetsRelations = relations(compositionAssets, ({ one }) => ({
+  songAsset: one(songAssets, {
+    fields: [compositionAssets.songAssetId],
+    references: [songAssets.id],
+  }),
+}));
+
+export const masterAssetsRelations = relations(masterAssets, ({ one }) => ({
+  songAsset: one(songAssets, {
+    fields: [masterAssets.songAssetId],
+    references: [songAssets.id],
+  }),
+}));
+
+export const licenseReadinessRelations = relations(licenseReadiness, ({ one }) => ({
+  songAsset: one(songAssets, {
+    fields: [licenseReadiness.songAssetId],
+    references: [songAssets.id],
   }),
 }));
 
@@ -647,6 +821,77 @@ export type OrganizationMember = typeof organizationMembers.$inferSelect;
 export type InsertOrganizationMember = z.infer<typeof insertOrganizationMemberSchema>;
 export type OrganizationApiKey = typeof organizationApiKeys.$inferSelect;
 export type InsertOrganizationApiKey = z.infer<typeof insertOrganizationApiKeySchema>;
+
+// Global Rights Framework
+export const insertRightsOrganizationSchema = createInsertSchema(rightsOrganizations).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertCreatorSchema = createInsertSchema(creators).omit({
+  id: true,
+  slCreatorId: true,
+  createdBy: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertCreatorRightsProfileSchema = createInsertSchema(creatorRightsProfiles).omit({
+  id: true,
+  userId: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type RightsOrganization = typeof rightsOrganizations.$inferSelect;
+export type InsertRightsOrganization = z.infer<typeof insertRightsOrganizationSchema>;
+export type Creator = typeof creators.$inferSelect;
+export type InsertCreator = z.infer<typeof insertCreatorSchema>;
+export type CreatorRightsProfile = typeof creatorRightsProfiles.$inferSelect;
+export type InsertCreatorRightsProfile = z.infer<typeof insertCreatorRightsProfileSchema>;
+
+// Master vs Composition Rights
+export const insertCompositionAssetSchema = createInsertSchema(compositionAssets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertMasterAssetSchema = createInsertSchema(masterAssets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type CompositionAsset = typeof compositionAssets.$inferSelect;
+export type InsertCompositionAsset = z.infer<typeof insertCompositionAssetSchema>;
+export type MasterAsset = typeof masterAssets.$inferSelect;
+export type InsertMasterAsset = z.infer<typeof insertMasterAssetSchema>;
+
+// Licensing Readiness System
+export const insertLicenseReadinessSchema = createInsertSchema(licenseReadiness).omit({
+  id: true,
+  lastCheckedAt: true,
+});
+export type LicenseReadiness = typeof licenseReadiness.$inferSelect;
+export type InsertLicenseReadiness = z.infer<typeof insertLicenseReadinessSchema>;
+
+// Legal document versioning & acceptance
+export const insertLegalDocumentSchema = createInsertSchema(legalDocuments).omit({
+  id: true,
+  publishedAt: true,
+}).extend({
+  docType: z.enum(LEGAL_DOC_TYPES),
+  effectiveDate: z.coerce.date(),
+});
+export type LegalDocument = typeof legalDocuments.$inferSelect;
+export type InsertLegalDocument = z.infer<typeof insertLegalDocumentSchema>;
+
+export const insertLegalAcceptanceSchema = createInsertSchema(legalAcceptances).omit({
+  id: true,
+  acceptedAt: true,
+}).extend({
+  docType: z.enum(LEGAL_DOC_TYPES),
+});
+export type LegalAcceptance = typeof legalAcceptances.$inferSelect;
+export type InsertLegalAcceptance = z.infer<typeof insertLegalAcceptanceSchema>;
 
 // Activity tracking schemas
 export const activityEventSchema = z.object({

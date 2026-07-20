@@ -6,7 +6,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { seedContractTemplates } from "./seedData";
 import { applyTransportSecurity } from "./transport-security";
 import { sanitizeMiddleware, createPgRateLimiter } from "./security";
-import { runCoreSchemaMigrations, runSecurityEngineMigrations } from "./db-migrations";
+import { runCoreSchemaMigrations, runSecurityEngineMigrations, runLegalDocumentMigrations } from "./db-migrations";
 import { logger } from "./logger";
 
 process.on("unhandledRejection", (reason) => {
@@ -84,6 +84,7 @@ app.use((req, res, next) => {
   try {
     await runCoreSchemaMigrations();
     await runSecurityEngineMigrations();
+    await runLegalDocumentMigrations();
     log("Database schema up to date");
   } catch (err: any) {
     logger.fatal("startup.migration_failed", { message: err?.message, stack: err?.stack });

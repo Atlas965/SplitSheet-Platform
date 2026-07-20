@@ -28,13 +28,13 @@ export default function OperatorLayout({ children }: OperatorLayoutProps) {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
+      <nav className="bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-50 supports-[backdrop-filter]:bg-card/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
           <div className="flex items-center gap-3">
             <Link href="/">
               <Logo />
             </Link>
-            <Link href="/" className="text-xl font-bold text-primary">
+            <Link href="/" className="text-xl font-bold text-primary tracking-tight">
               SplitSheet
             </Link>
           </div>

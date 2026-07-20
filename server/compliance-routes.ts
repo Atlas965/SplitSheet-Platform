@@ -31,10 +31,17 @@ import {
 import { isAuthenticated } from "./replitAuth";
 import { storage } from "./storage";
 import { logger } from "./logger";
+import type { LegalDocType } from "@shared/schema";
 
-/** Bump this whenever the published Terms/Privacy text materially changes —
- *  existing users will be prompted to re-accept. */
+/** Fallback only — used if no `legal_documents` row exists yet for a doc
+ *  type (should not happen after server/db-migrations.ts seeds the initial
+ *  versions, but keeps terms-status from crashing on a fresh/partial DB). */
 export const CURRENT_TERMS_VERSION = "2026-07-12";
+
+/** The doc types that gate the operator app (block the UI via TermsGate).
+ *  `dpa` and `contributor_consent` are published/versioned the same way but
+ *  are not part of this blocking gate — see server/legal-routes.ts. */
+export const GATED_DOC_TYPES: LegalDocType[] = ["tos", "privacy"];
 
 /** Paths that must always be reachable even for a user who hasn't accepted
  *  the current Terms yet (otherwise the client could never show/complete
@@ -57,7 +64,12 @@ const TERMS_ALLOWLIST = new Set<string>([
  */
 export function requireTermsAccepted(req: Request, res: Response, next: NextFunction): void {
   const path = req.path;
-  if (!path.startsWith("/api/") || TERMS_ALLOWLIST.has(path)) {
+  // GET /api/legal/documents/:docType/latest|history must always be reachable
+  // — TermsGate itself has to fetch the ToS/Privacy body to show the user
+  // before they can accept it, and the same routes are also public marketing
+  // pages (see server/legal-routes.ts).
+  const isPublicLegalDocRoute = req.method === "GET" && path.startsWith("/api/legal/documents/");
+  if (!path.startsWith("/api/") || TERMS_ALLOWLIST.has(path) || isPublicLegalDocRoute) {
     next();
     return;
   }
@@ -70,19 +82,18 @@ export function requireTermsAccepted(req: Request, res: Response, next: NextFunc
     return;
   }
 
-  // Cached on the session by setupAuth's deserialize step in most Passport
-  // configs; fall back to a DB check to be safe on every request.
-  storage
-    .getUser(user.claims.sub)
-    .then((record) => {
-      if (record?.termsAcceptedAt && record.termsVersion === CURRENT_TERMS_VERSION) {
+  // Checks every gated doc type (tos, privacy) against the authoritative
+  // legal_acceptances ledger — a user must be current on ALL of them.
+  Promise.all(GATED_DOC_TYPES.map((docType) => checkAcceptance(user.claims.sub, docType)))
+    .then((results) => {
+      if (results.every((r) => r.accepted)) {
         next();
         return;
       }
       res.status(403).json({
         error: "TERMS_NOT_ACCEPTED",
-        message: "Please review and accept the current Terms of Service to continue.",
-        currentVersion: CURRENT_TERMS_VERSION,
+        message: "Please review and accept the current Terms of Service and Privacy Policy to continue.",
+        currentVersion: results.find((r) => !r.accepted)?.currentVersion ?? CURRENT_TERMS_VERSION,
       });
     })
     .catch((err) => {
@@ -93,39 +104,122 @@ export function requireTermsAccepted(req: Request, res: Response, next: NextFunc
     });
 }
 
+interface AcceptanceCheck {
+  docType: LegalDocType;
+  currentVersion: string;
+  acceptedVersion: string | null;
+  acceptedAt: Date | string | null;
+  accepted: boolean;
+}
+
+/** Pure comparison, exported for unit testing without a database — a user
+ *  is current on a doc type only if they have an acceptance AND its version
+ *  string exactly matches the latest published version. Publishing a new
+ *  version (any different string) always re-opens the gate. */
+export function isAcceptanceCurrent(acceptedVersion: string | null | undefined, currentVersion: string): boolean {
+  return Boolean(acceptedVersion) && acceptedVersion === currentVersion;
+}
+
+/** Compares a user's latest legal_acceptances row for `docType` against the
+ *  latest published legal_documents version for that type. */
+async function checkAcceptance(userId: string, docType: LegalDocType): Promise<AcceptanceCheck> {
+  const [latestDoc, acceptance] = await Promise.all([
+    storage.getLatestLegalDocument(docType),
+    storage.getLegalAcceptance(userId, docType),
+  ]);
+  const currentVersion = latestDoc?.version ?? CURRENT_TERMS_VERSION;
+  return {
+    docType,
+    currentVersion,
+    acceptedVersion: acceptance?.version ?? null,
+    acceptedAt: acceptance?.acceptedAt ?? null,
+    accepted: isAcceptanceCurrent(acceptance?.version, currentVersion),
+  };
+}
+
 export function registerComplianceRoutes(app: Express): void {
   // ══════════════════════════════════════════════════════════════════════════
   // TERMS OF SERVICE ACCEPTANCE
   // ══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * GET /api/user/terms-status
+   * Reports acceptance status per gated doc type (tos, privacy) against the
+   * latest published legal_documents version for each — plus a top-level
+   * `accepted` flag (true only if ALL gated types are current) kept for
+   * backward compatibility with the pre-Priority-1.1 TermsGate contract.
+   */
   app.get("/api/user/terms-status", isAuthenticated, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
-    const user = await storage.getUser(userId);
-    res.json({
-      currentVersion: CURRENT_TERMS_VERSION,
-      acceptedVersion: user?.termsVersion ?? null,
-      acceptedAt: user?.termsAcceptedAt ?? null,
-      accepted: Boolean(user?.termsAcceptedAt && user.termsVersion === CURRENT_TERMS_VERSION),
-    });
+    try {
+      const [tos, privacy] = await Promise.all(
+        GATED_DOC_TYPES.map((docType) => checkAcceptance(userId, docType))
+      );
+      res.json({
+        tos,
+        privacy,
+        // Legacy top-level fields — mirror `tos` so any old client build
+        // still functions correctly during rollout.
+        currentVersion: tos.currentVersion,
+        acceptedVersion: tos.acceptedVersion,
+        acceptedAt: tos.acceptedAt,
+        accepted: tos.accepted && privacy.accepted,
+      });
+    } catch (err) {
+      logger.error("compliance.terms_status_failed", { userId, error: (err as Error)?.message });
+      res.status(500).json({ error: "Failed to load terms status" });
+    }
   });
 
+  /**
+   * POST /api/user/accept-terms
+   * Records acceptance for one or both gated doc types. Body may specify a
+   * single `docType`, or omit it to accept all gated types at once (the
+   * TermsGate UI shows both ToS and Privacy on one screen with one button).
+   */
   app.post("/api/user/accept-terms", isAuthenticated, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
-    const schema = z.object({ version: z.string().max(40).optional() });
+    const schema = z.object({
+      docType: z.enum(GATED_DOC_TYPES as [LegalDocType, ...LegalDocType[]]).optional(),
+      version: z.string().max(40).optional(), // legacy field, ignored — version is always the current published one
+    });
     try {
-      const { version } = schema.parse(req.body ?? {});
+      const { docType } = schema.parse(req.body ?? {});
+      const docTypesToAccept = docType ? [docType] : GATED_DOC_TYPES;
       const acceptedAt = new Date();
-      await db
-        .update(users)
-        .set({ termsAcceptedAt: acceptedAt, termsVersion: version ?? CURRENT_TERMS_VERSION })
-        .where(eq(users.id, userId));
+
+      const results = await Promise.all(
+        docTypesToAccept.map(async (dt) => {
+          const latestDoc = await storage.getLatestLegalDocument(dt);
+          const version = latestDoc?.version ?? CURRENT_TERMS_VERSION;
+          await storage.createLegalAcceptance({
+            userId,
+            docType: dt,
+            version,
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"],
+          });
+          return { docType: dt, version };
+        })
+      );
+
+      // Keep the fast-path cache on `users` in sync for the `tos` type only
+      // (read by the per-request requireTermsAccepted middleware).
+      const tosResult = results.find((r) => r.docType === "tos");
+      if (tosResult) {
+        await db
+          .update(users)
+          .set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version })
+          .where(eq(users.id, userId));
+      }
 
       await storage.trackUserActivity(userId, "terms_accepted", {
-        version: version ?? CURRENT_TERMS_VERSION,
+        docTypes: results.map((r) => r.docType),
+        versions: results.map((r) => r.version),
         ipAddress: req.ip,
       });
 
-      res.json({ accepted: true, version: version ?? CURRENT_TERMS_VERSION, acceptedAt });
+      res.json({ accepted: true, results, acceptedAt });
     } catch (err) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: "Invalid request" });
