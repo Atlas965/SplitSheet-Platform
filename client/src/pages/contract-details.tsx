@@ -254,7 +254,9 @@ export default function ContractDetails() {
         title: contract.title,
         type: contract.type,
         data: contract.data,
-        createdAt: contract.createdAt
+        createdAt: contract.createdAt,
+        legalBodyMarkdown: contract.metadata?.legalBodyMarkdownSnapshot,
+        legalBodyVersion: contract.metadata?.legalBodyVersion,
       });
 
       toast({

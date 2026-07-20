@@ -10,7 +10,13 @@
     "check": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:push": "cross-env NODE_ENV=development tsx node_modules/drizzle-kit/bin.cjs push"
+    "test:e2e": "playwright test --config=e2e/playwright.config.ts",
+    "lint:marketing-claims": "tsx server/scripts/check-marketing-claims.ts",
+    "db:push": "cross-env NODE_ENV=development tsx node_modules/drizzle-kit/bin.cjs push",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:check": "tsx server/scripts/check-schema-drift.ts",
+    "stripe:preflight": "tsx server/scripts/stripe-preflight.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.17.1",
@@ -94,6 +100,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@replit/vite-plugin-cartographer": "^0.3.1",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",

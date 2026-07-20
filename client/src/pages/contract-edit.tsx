@@ -16,9 +16,21 @@ interface Contract {
   type: string;
   status: string;
   data: any;
+  metadata?: {
+    legalBodyVersion?: string;
+    legalBodyMarkdownSnapshot?: string;
+    [key: string]: any;
+  };
   createdAt: string;
   updatedAt: string;
   createdBy: string;
+}
+
+interface ContractTemplateRecord {
+  id: string;
+  type: string;
+  legalBodyMarkdown: string | null;
+  legalBodyVersion: string | null;
 }
 
 export default function ContractEdit() {
@@ -47,6 +59,17 @@ export default function ContractEdit() {
     enabled: !!id && isAuthenticated,
     retry: false,
   });
+
+  // Counsel-editable legal body for this template type (Priority 1.2).
+  const { data: templates } = useQuery<ContractTemplateRecord[]>({
+    queryKey: ["/api/contract-templates"],
+    enabled: !!isAuthenticated,
+  });
+  const activeTemplate = templates?.find((t) => t.type === contract?.type);
+  // Prefer the original snapshot (what the signer actually saw) over the
+  // template's current text, which may have been edited since creation.
+  const displayLegalBodyMarkdown = contract?.metadata?.legalBodyMarkdownSnapshot ?? activeTemplate?.legalBodyMarkdown;
+  const displayLegalBodyVersion = contract?.metadata?.legalBodyVersion ?? activeTemplate?.legalBodyVersion;
 
   const updateContractMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -101,8 +124,18 @@ export default function ContractEdit() {
       status: data.saveAsDraft ? "draft" : "pending",
       data: data,
       metadata: {
+        ...contract?.metadata,
         contractType: contract?.type,
         lastModified: new Date().toISOString(),
+        // Backfill the legal-body snapshot for contracts created before
+        // Priority 1.2, or before counsel published text for this template —
+        // once set, later edits keep the original snapshot (see above).
+        ...(!contract?.metadata?.legalBodyVersion && activeTemplate?.legalBodyMarkdown
+          ? {
+              legalBodyVersion: activeTemplate.legalBodyVersion,
+              legalBodyMarkdownSnapshot: activeTemplate.legalBodyMarkdown,
+            }
+          : {}),
       }
     });
   };
@@ -244,6 +277,8 @@ export default function ContractEdit() {
             onCancel={handleCancel}
             isLoading={updateContractMutation.isPending}
             isEdit={true}
+            legalBodyMarkdown={displayLegalBodyMarkdown ?? undefined}
+            legalBodyVersion={displayLegalBodyVersion ?? undefined}
           />
         </div>
       </div>

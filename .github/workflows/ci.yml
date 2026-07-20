@@ -31,6 +31,12 @@ jobs:
       - name: Run vitest suite (split math, hash chain, fraud scoring)
         run: npm run test
 
+      - name: Marketing-claim guardrail (Priority 1.4)
+        run: npm run lint:marketing-claims
+
+      - name: Schema drift check (Priority 4.2)
+        run: npm run db:check
+
   typecheck:
     name: Type Check
     runs-on: ubuntu-latest

@@ -262,6 +262,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * PATCH /api/contract-templates/:id
+   * Admin-only (Priority 1.2). Publishes/updates the counsel-supplied legal
+   * body markdown for a contract template — rendered above the dynamic
+   * fields in ContractForm.tsx and snapshotted onto new contracts at
+   * creation/signing time. Unlike legal_documents (Priority 1.1) this is a
+   * single mutable field, not an append-only version history — publishing
+   * simply overwrites the previous text and version string.
+   */
+  app.patch("/api/contract-templates/:id", isAuthenticated, isAdmin, async (req: any, res) => {
+    const schema = z.object({
+      legalBodyMarkdown: z.string().min(1),
+      legalBodyVersion: z.string().min(1).max(40),
+    });
+    try {
+      const { legalBodyMarkdown, legalBodyVersion } = schema.parse(req.body);
+      const existing = await storage.getContractTemplate(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Contract template not found" });
+      }
+
+      const updated = await storage.updateContractTemplateLegalBody(
+        req.params.id,
+        legalBodyMarkdown,
+        legalBodyVersion
+      );
+
+      await auditLog({
+        userId: req.user.claims.sub,
+        action: "contract_template.legal_body_publish",
+        resourceType: "contract_template",
+        resourceId: req.params.id,
+        beforeState: { legalBodyVersion: existing.legalBodyVersion },
+        afterState: { legalBodyVersion: updated.legalBodyVersion },
+        ipAddress: req.ip,
+      });
+
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: "Validation failed", issues: error.errors });
+      } else {
+        console.error("Error updating contract template legal body:", error);
+        res.status(500).json({ message: "Failed to update contract template" });
+      }
+    }
+  });
+
   // Contract routes
   app.get("/api/contracts", isAuthenticated, async (req: any, res) => {
     try {
@@ -605,6 +653,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
             signatures: updatedSignatures,
           },
         });
+
+        // Priority 3.1 — seal server-side PDF hash when ENABLE_SERVER_PDF=true
+        try {
+          const { sealSignedContractPdf } = await import("./pdf-service");
+          const sealed = await sealSignedContractPdf({
+            contract: {
+              id: updatedContract.id,
+              title: updatedContract.title,
+              type: updatedContract.type,
+              data: (updatedContract.data as any) ?? {},
+              metadata: updatedContract.metadata as any,
+              createdAt: updatedContract.createdAt,
+            },
+            userId,
+            ipAddress: req.ip,
+          });
+          if (sealed) {
+            await storage.updateContract(req.params.id, {
+              metadata: {
+                ...((updatedContract.metadata as any) || {}),
+                serverPdfSha256: sealed.hash,
+                serverPdfObjectKey: sealed.objectKey,
+              },
+            });
+          }
+        } catch (pdfErr) {
+          console.warn("[sign] server PDF seal skipped:", pdfErr);
+        }
 
         // Notify contract collaborators that the owner has signed
         try {

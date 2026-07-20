@@ -1,4 +1,5 @@
 import "./loadEnv";
+import "./otel"; // Priority 5.1 — no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { registerChatbotRoutes } from "./chatbotRoutes";
@@ -6,8 +7,10 @@ import { setupVite, serveStatic, log } from "./vite";
 import { seedContractTemplates } from "./seedData";
 import { applyTransportSecurity } from "./transport-security";
 import { sanitizeMiddleware, createPgRateLimiter } from "./security";
-import { runCoreSchemaMigrations, runSecurityEngineMigrations, runLegalDocumentMigrations } from "./db-migrations";
+import { runCoreSchemaMigrations, runSecurityEngineMigrations, runLegalDocumentMigrations, runSubprocessorMigrations, runCopilotUsageMigrations } from "./db-migrations";
 import { logger } from "./logger";
+import { runStripePreflight } from "./scripts/stripe-preflight";
+import { startPayoutReconcileScheduler } from "./jobs/reconcile-payouts";
 
 process.on("unhandledRejection", (reason) => {
   logger.error("process.unhandled_rejection", { reason: reason instanceof Error ? reason.message : String(reason), stack: (reason as Error)?.stack });
@@ -85,12 +88,28 @@ app.use((req, res, next) => {
     await runCoreSchemaMigrations();
     await runSecurityEngineMigrations();
     await runLegalDocumentMigrations();
+    await runSubprocessorMigrations();
+    await runCopilotUsageMigrations();
     log("Database schema up to date");
   } catch (err: any) {
     logger.fatal("startup.migration_failed", { message: err?.message, stack: err?.stack });
     console.error("FATAL: database migrations failed:", err);
     process.exit(1);
   }
+
+  // Priority 3.3 — fail production boot if Stripe live-mode preflight fails
+  if (process.env.NODE_ENV === "production") {
+    const preflight = await runStripePreflight();
+    for (const w of preflight.warnings) console.warn("[stripe-preflight]", w);
+    if (!preflight.ok) {
+      console.error("[stripe-preflight] FATAL:", preflight.errors);
+      process.exit(1);
+    }
+    log("Stripe preflight OK");
+  }
+
+  // Priority 3.4 — optional hourly payout reconciliation
+  startPayoutReconcileScheduler();
 
   // Seed contract templates
   await seedContractTemplates();

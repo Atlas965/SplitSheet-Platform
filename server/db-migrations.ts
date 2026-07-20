@@ -40,6 +40,14 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS terms_version varchar;
   `);
 
+  // ── contract_templates: counsel-editable legal body (Priority 1.2) ────────
+  // Left NULL — populated later by counsel via PATCH /api/contract-templates/:id.
+  await db.execute(sql`
+    ALTER TABLE contract_templates
+      ADD COLUMN IF NOT EXISTS legal_body_markdown text,
+      ADD COLUMN IF NOT EXISTS legal_body_version varchar;
+  `);
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -533,6 +541,61 @@ export async function runLegalDocumentMigrations(): Promise<void> {
         SELECT 1 FROM legal_acceptances la
         WHERE la.user_id = u.id AND la.doc_type = 'privacy' AND la.version = ${SEED_LEGAL_VERSION}
       );
+  `);
+}
+
+/**
+ * Priority 1.3 — Sub-processor / DPA registry.
+ * Public list of vendors that process personal data. Seeded once; re-runs
+ * are no-ops thanks to the name uniqueness check.
+ */
+export async function runSubprocessorMigrations(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS subprocessors (
+      id        varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      name      varchar NOT NULL,
+      purpose   text NOT NULL,
+      region    varchar NOT NULL,
+      dpa_url   varchar,
+      added_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_subprocessors_name ON subprocessors (name);
+  `);
+
+  // Seed core vendors. ON CONFLICT DO NOTHING so re-runs are safe.
+  // Twilio is listed as "pending" until Priority 3.2 wires SMS delivery.
+  await db.execute(sql`
+    INSERT INTO subprocessors (name, purpose, region, dpa_url)
+    VALUES
+      ('Stripe', 'Subscription billing and Connect royalty payouts', 'United States / EU', 'https://stripe.com/legal/dpa'),
+      ('OpenAI', 'SoundLedger CoPilot AI assistance (gpt-4o-mini)', 'United States', 'https://openai.com/policies/data-processing-addendum'),
+      ('Neon', 'PostgreSQL database hosting (serverless)', 'United States / EU', 'https://neon.tech/docs/security/compliance'),
+      ('Replit / Google Cloud Storage', 'Object storage for profile images and uploads', 'United States', 'https://cloud.google.com/terms/data-processing-addendum'),
+      ('Twilio (pending)', 'SMS OTP delivery — not yet active; email OTP used today', 'United States', 'https://www.twilio.com/legal/data-protection-addendum')
+    ON CONFLICT (name) DO NOTHING;
+  `);
+}
+
+/**
+ * Priority 6.1 — CoPilot token usage ledger for per-user/org quotas.
+ */
+export async function runCopilotUsageMigrations(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS copilot_usage (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     varchar NOT NULL,
+      org_id      varchar,
+      tokens_in   integer NOT NULL DEFAULT 0,
+      tokens_out  integer NOT NULL DEFAULT 0,
+      model       varchar,
+      day         varchar NOT NULL,
+      created_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_copilot_usage_user_day ON copilot_usage (user_id, day);
   `);
 }
 

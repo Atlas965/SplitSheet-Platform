@@ -19,6 +19,7 @@ import { isAuthenticated } from "./replitAuth";
 import { storage } from "./storage";
 import { sha256 } from "./security";
 import { sendEmail, verificationCodeEmail, emailDeliveryMode } from "./email-service";
+import { isTwilioConfigured, sendSms } from "./verification/sms-provider";
 
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_ATTEMPTS = 5;
@@ -69,22 +70,36 @@ export function registerVerificationRoutes(app: Express): void {
         expiresAt,
       });
 
-      const user = await storage.getUser(userId).catch(() => undefined);
-      const emailTarget = body.channel === "email" ? body.destination : user?.email;
-
+      // Priority 3.2 — prefer real SMS via Twilio when channel=sms and configured;
+      // otherwise fall back to email (honest labeling).
+      let deliveryChannel = body.channel;
       let delivery: { delivered: boolean; mode: string } = { delivered: false, mode: emailDeliveryMode };
-      if (emailTarget) {
-        const template = verificationCodeEmail(code);
-        delivery = await sendEmail({ to: emailTarget, ...template });
+
+      if (body.channel === "sms" && isTwilioConfigured()) {
+        const sms = await sendSms(
+          body.destination,
+          `Your SplitSheet verification code is ${code}. Expires in 10 minutes.`,
+        );
+        delivery = { delivered: sms.sent, mode: sms.mode };
+        deliveryChannel = "sms";
+      } else {
+        const user = await storage.getUser(userId).catch(() => undefined);
+        const emailTarget = body.channel === "email" ? body.destination : user?.email;
+        if (emailTarget) {
+          const template = verificationCodeEmail(code);
+          delivery = await sendEmail({ to: emailTarget, ...template });
+        }
+        if (body.channel === "sms" && !isTwilioConfigured()) {
+          deliveryChannel = "email"; // honest fallback
+        }
       }
 
       res.json({
         sent: true,
         channel: body.channel,
+        deliveryChannel,
         expiresInSeconds: CODE_TTL_MS / 1000,
-        delivery: delivery.mode, // "smtp" (really sent) or "log" (no SMTP configured — check server logs)
-        // Only expose the raw code outside production so the flow is testable
-        // end-to-end without a paid SMTP provider during development.
+        delivery: delivery.mode,
         devCode: process.env.NODE_ENV !== "production" && delivery.mode === "log" ? code : undefined,
       });
     } catch (err) {

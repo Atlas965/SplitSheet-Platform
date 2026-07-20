@@ -129,7 +129,9 @@ export default function Contracts() {
         title: fullContract.title,
         type: fullContract.type,
         data: fullContract.data,
-        createdAt: fullContract.createdAt
+        createdAt: fullContract.createdAt,
+        legalBodyMarkdown: fullContract.metadata?.legalBodyMarkdownSnapshot,
+        legalBodyVersion: fullContract.metadata?.legalBodyVersion,
       });
       
       toast({
