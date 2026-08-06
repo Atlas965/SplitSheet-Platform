@@ -1,14 +1,16 @@
-# SplitSheet — Music Agreement & Rights Management Platform
+# SplitSheet — Workflow-Driven Rights Management Platform
 
-> Built by **SoundLedger Technologies inc ** · Canadian copyright principles · Operator-managed service model
+> Built by **SoundLedger Technologies Inc.** · Canadian copyright principles · Operator-managed Rights-as-a-Service (RaaS)
 
-SplitSheet is a full-stack music industry platform that combines split sheet management, contributor confirmation workflows, rights ledger tracking, and document generation into one operator-controlled system. It is designed for music service providers (producers, studios, publishers) who manage agreements on behalf of their clients — not as a self-serve product for end users.
+SplitSheet is a full-stack music rights platform for operators (producers, studios, publishers, labels) who manage documentation and rights administration on behalf of artists — not a self-serve split-sheet app. It combines a **16-stage workflow engine**, rights validation, agreement recommendations, internal review, contributor confirmation, Rights Ledger sync, Catalog Intelligence, and the Rights Graph.
+
+Canonical product docs: **[PRODUCT.md](./PRODUCT.md)** · **[WORKFLOW_ARCHITECTURE.md](./WORKFLOW_ARCHITECTURE.md)** · root [README.md](../README.md)
 
 ---
 
 ## Table of Contents
 
-1. [Product Overview](#1-product-overview) · **[Full Product Document](./PRODUCT.md)**
+1. [Product Overview](#1-product-overview) · **[Full Product Document](./PRODUCT.md)** · **[Launch Checklist](./LAUNCH_CHECKLIST.md)** · **[Business Ops Checklist](./BUSINESS_OPS_CHECKLIST.md)** · **[Workflow Architecture](./WORKFLOW_ARCHITECTURE.md)**
 2. [Architecture](#2-architecture)
 3. [Database Schema](#3-database-schema)
 4. [Operator Service Workflow](#4-operator-service-workflow)
@@ -34,12 +36,17 @@ SplitSheet operates as an **internal operations tool** for a music service busin
 
 | System | What It Does |
 |---|---|
-| **Operator Dashboard** | Command-centre view of all clients, active projects, and pending confirmations |
-| **Client Management** | CRM-lite for artists, producers, labels, and songwriters the operator serves |
-| **Service Projects** | Per-song split sheet jobs from intake to confirmed record |
-| **Contributor Confirmation** | Token-based public links for each contributor — no auth required |
-| **Music Agreements** | Create, manage, and sign legal document templates (split sheets, producer deals, etc.) |
-| **Rights Ledger** | Track song asset ownership, archive/deactivate assets, log activity |
+| **Ops Center** | Dashboard widgets for confirmations, reviews, validation errors, bottlenecks, throughput |
+| **Workflow Engine** | 16-stage project lifecycle with audit log, stage statuses, wizard drafts |
+| **Project Wizard** | Guided intake at `/projects/new` with auto-save |
+| **Rights Validation** | Critical / Warning / Passed — blocks send/sign on criticals |
+| **Template Recommendation** | Infers required agreements from contributor roles |
+| **Internal Review Queue** | Approve before external confirmation (`/review-queue`) |
+| **Client Management** | CRM-lite for artists, producers, labels, and songwriters |
+| **Service Projects** | Per-song jobs (contracts) from intake through ledger sync |
+| **Contributor Confirmation** | Token-based public links — no contributor account required |
+| **Music Agreements** | Split sheets, producer, performance, management templates |
+| **Rights Ledger** | Song ownership, master/composition, license readiness, archive |
 | **Billing** | Stripe-backed subscription and session-based payment handling |
 
 ---
@@ -210,47 +217,27 @@ Running balance per user across all payout events.
 
 ## 4. Operator Service Workflow
 
-The service business follows a linear four-stage pipeline:
+Process-centric **16-stage lifecycle** (see [WORKFLOW_ARCHITECTURE.md](./WORKFLOW_ARCHITECTURE.md)):
 
 ```
-Client Intake → Split Setup → Confirmation → Confirmed Record
+Client Intake → Identity Verification → Project Creation → Song Metadata
+→ Contributors → Rights Validation → Template Recommendation → Agreement Generation
+→ Internal Review → Approval → Contributor Confirmation → E-Signatures
+→ Rights Ledger Registration → Royalty Preparation → PRO Export → Completed
 ```
 
-### Stage 1 — Client Intake
-- Operator creates or selects a **Client** (artist, producer, songwriter, or label)
-- Client stores contact info and type
+**Day-to-day path**
 
-### Stage 2 — Split Setup (Project)
-- Operator creates a **Service Project** linked to the client
-- Sets the song title and project label
-- Adds **Contributors** — each gets a name, email, role, PRO, IPI, and ownership %
-- UI validates that ownership percentages total exactly **100%** before allowing progression
+1. Dashboard **Ops Center** — see blockers and throughput  
+2. **Project Wizard** (`/projects/new`) — guided intake, auto-save  
+3. **Rights validation** must clear criticals before send/review  
+4. **Review queue** (`/review-queue`) — approve before external links  
+5. **Send confirmations** — public token URLs (`/confirm/{contractId}/{token}`)  
+6. After signed — **ledger sync** registers the asset automatically  
 
-### Stage 3 — Generate Confirmation Links
-- Operator clicks **"Generate Confirmation Links"** on the project detail page
-- Each contributor without a token receives a unique URL:
-  ```
-  https://yourapp.com/confirm/{token}
-  ```
-- Project status advances to `pending_confirmation`
-- Links can be copied and sent via any channel (email, WhatsApp, DM)
+Legacy banner still shows: Client Intake → Split Setup → Confirmation → Ledger.
 
-### Stage 4 — Contributor Confirmation
-- Contributor visits their link — **no account required**
-- They see the full split breakdown for the song
-- They check an agreement checkbox and click confirm
-- Confirmation is timestamped and IP-logged server-side
-- When **all contributors** have confirmed → project auto-advances to `confirmed`
-
-### Project Status Flow
-
-```
-draft ──> pending_confirmation ──> confirmed
-                                        │
-                               (can be archived)
-                                        ▼
-                                    archived
-```
+Contract status compatibility: `draft` → `pending` → `signed` (aliased as confirmed in project APIs).
 
 ---
 
@@ -375,23 +362,37 @@ All authenticated routes require an active session cookie. Public routes are not
 
 | Method | Route | Auth | Description |
 |---|---|---|---|
+| GET | `/api/workflow/status` | ✅ | Legacy 4-stage pipeline health |
 | GET | `/api/projects` | ✅ | List operator's projects |
-| POST | `/api/projects` | ✅ | Create a new project |
-| GET | `/api/projects/:id` | ✅ | Get project details |
+| GET | `/api/projects/:id` | ✅ | Get project + workflow stage |
 | PATCH | `/api/projects/:id` | ✅ | Update project |
-| DELETE | `/api/projects/:id` | ✅ | Delete project |
 | GET | `/api/projects/:id/contributors` | ✅ | List contributors |
 | POST | `/api/projects/:id/contributors` | ✅ | Add a contributor |
-| PATCH | `/api/projects/:projectId/contributors/:id` | ✅ | Edit a contributor |
-| DELETE | `/api/projects/:projectId/contributors/:id` | ✅ | Remove a contributor |
-| POST | `/api/projects/:id/send-confirmations` | ✅ | Generate confirmation tokens |
+| PATCH | `/api/projects/:id/contributors/:contribId` | ✅ | Edit a contributor |
+| DELETE | `/api/projects/:id/contributors/:contribId` | ✅ | Remove a contributor |
+| POST | `/api/projects/:id/send-confirmations` | ✅ | Generate links (blocked on critical validation) |
+
+### Workflow Engine
+
+| Method | Route | Auth | Description |
+|---|---|---|---|
+| GET | `/api/ops/dashboard` | ✅ | Ops Center aggregates |
+| GET | `/api/projects/:id/workflow` | ✅ | Stage timeline + events |
+| POST | `/api/projects/:id/workflow/advance` | ✅ | Advance stage |
+| PUT | `/api/projects/:id/workflow/wizard` | ✅ | Auto-save wizard draft |
+| GET | `/api/projects/:id/rights-validation` | ✅ | Run validation engine |
+| GET | `/api/projects/:id/recommended-agreements` | ✅ | Role → agreement inference |
+| POST | `/api/projects/:id/workflow/submit-review` | ✅ | Enter review queue |
+| GET | `/api/review-queue` | ✅ | List reviews |
+| PATCH | `/api/review-queue/:id` | ✅ | Approve / revise / comment |
+| POST | `/api/projects/:id/workflow/sync-ledger` | ✅ | Sync signed agreement → ledger |
 
 ### Contributor Confirmation (Public)
 
 | Method | Route | Auth | Description |
 |---|---|---|---|
-| GET | `/api/confirm/:token` | ❌ Public | Get contributor + project info |
-| POST | `/api/confirm/:token` | ❌ Public | Submit confirmation (timestamped, IP-logged) |
+| GET | `/api/confirm/:contractId/:token` | ❌ Public | Load confirmation page data |
+| POST | `/api/confirm/:contractId/:token` | ❌ Public | Submit confirmation (timestamp + IP) |
 
 ### Music Agreements
 
@@ -448,9 +449,13 @@ All authenticated routes require an active session cookie. Public routes are not
 
 | Route | Page | Description |
 |---|---|---|
-| `/` | `dashboard.tsx` | Operator command centre |
+| `/` | `dashboard.tsx` | Ops Center + workflow banner |
 | `/clients` | `clients.tsx` | Client list and management |
 | `/projects` | `projects.tsx` | Project pipeline |
+| `/projects/new` | `project-wizard.tsx` | Guided project wizard |
+| `/projects/:id/wizard` | `project-wizard.tsx` | Resume wizard |
+| `/projects/:id` | `project-detail.tsx` | Split editor + confirmations |
+| `/review-queue` | `review-queue.tsx` | Internal review queue |
 | `/contracts` | `contracts.tsx` | Music agreements list |
 | `/contracts/:id` | `contract-details.tsx` | Agreement detail view |
 | `/contracts/:id/edit` | `contract-edit.tsx` | Edit agreement fields |
