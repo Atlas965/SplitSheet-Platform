@@ -2,6 +2,16 @@
 
 > Built by **SoundLedger Technologies Inc.** · Canadian copyright principles · Operator-managed Rights-as-a-Service (RaaS)
 
+### View this docs README online
+
+| Format | URL |
+| --- | --- |
+| **GitHub page** | https://github.com/Atlas965/SplitSheet-Platform/blob/main/docs/README.md |
+| **Raw markdown** | https://raw.githubusercontent.com/Atlas965/SplitSheet-Platform/main/docs/README.md |
+| **Root README** | https://github.com/Atlas965/SplitSheet-Platform/blob/main/README.md |
+| **Root README (raw)** | https://raw.githubusercontent.com/Atlas965/SplitSheet-Platform/main/README.md |
+| **Repository** | https://github.com/Atlas965/SplitSheet-Platform |
+
 SplitSheet is a full-stack music rights platform for operators (producers, studios, publishers, labels) who manage documentation and rights administration on behalf of artists — not a self-serve split-sheet app. It combines a **16-stage workflow engine**, **Operations Copilot** (SOP-aware guidance), rights validation, agreement recommendations, internal review, contributor confirmation, Rights Ledger sync, Catalog Intelligence, and the Rights Graph.
 
 Canonical product docs: **[PRODUCT.md](./PRODUCT.md)** · **[WORKFLOW_ARCHITECTURE.md](./WORKFLOW_ARCHITECTURE.md)** · **[OPS_COPILOT.md](./OPS_COPILOT.md)** · root [README.md](../README.md)
@@ -10,7 +20,7 @@ Canonical product docs: **[PRODUCT.md](./PRODUCT.md)** · **[WORKFLOW_ARCHITECTU
 
 ## Table of Contents
 
-1. [Product Overview](#1-product-overview) · **[Full Product Document](./PRODUCT.md)** · **[Launch Checklist](./LAUNCH_CHECKLIST.md)** · **[Business Ops Checklist](./BUSINESS_OPS_CHECKLIST.md)** · **[Workflow Architecture](./WORKFLOW_ARCHITECTURE.md)** · **[Operations Copilot](./OPS_COPILOT.md)**
+1. [Product Overview](#1-product-overview) · **[PRODUCT](./PRODUCT.md)** · **[Workflow](./WORKFLOW_ARCHITECTURE.md)** · **[Ops Copilot](./OPS_COPILOT.md)** · **[Rights Graph](./RIGHTS_GRAPH.md)** · **[Security](./SECURITY_ARCHITECTURE.md)** · **[Legal Review](./LEGAL_REVIEW_PACKAGE.md)** · **[Commercial Readiness](./COMMERCIAL_READINESS.md)** · **[Final Report](./FINAL_IMPLEMENTATION_REPORT.md)**
 2. [Architecture](#2-architecture)
 3. [Database Schema](#3-database-schema)
 4. [Operator Service Workflow](#4-operator-service-workflow)
