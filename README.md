@@ -2,15 +2,15 @@
 
 > Built by **SoundLedger Technologies Inc.** · Canadian copyright principles · Operator-managed Rights-as-a-Service (RaaS)
 
-SplitSheet is a full-stack music rights platform for operators (producers, studios, publishers, labels) who manage documentation and rights administration on behalf of artists — not a self-serve split-sheet app. It combines a **16-stage workflow engine**, rights validation, agreement recommendations, internal review, contributor confirmation, Rights Ledger sync, Catalog Intelligence, and the Rights Graph.
+SplitSheet is a full-stack music rights platform for operators (producers, studios, publishers, labels) who manage documentation and rights administration on behalf of artists — not a self-serve split-sheet app. It combines a **16-stage workflow engine**, **Operations Copilot** (SOP-aware guidance), rights validation, agreement recommendations, internal review, contributor confirmation, Rights Ledger sync, Catalog Intelligence, and the Rights Graph.
 
-Canonical product docs: **[PRODUCT.md](./PRODUCT.md)** · **[WORKFLOW_ARCHITECTURE.md](./WORKFLOW_ARCHITECTURE.md)** · root [README.md](../README.md)
+Canonical product docs: **[PRODUCT.md](./PRODUCT.md)** · **[WORKFLOW_ARCHITECTURE.md](./WORKFLOW_ARCHITECTURE.md)** · **[OPS_COPILOT.md](./OPS_COPILOT.md)** · root [README.md](../README.md)
 
 ---
 
 ## Table of Contents
 
-1. [Product Overview](#1-product-overview) · **[Full Product Document](./PRODUCT.md)** · **[Launch Checklist](./LAUNCH_CHECKLIST.md)** · **[Business Ops Checklist](./BUSINESS_OPS_CHECKLIST.md)** · **[Workflow Architecture](./WORKFLOW_ARCHITECTURE.md)**
+1. [Product Overview](#1-product-overview) · **[Full Product Document](./PRODUCT.md)** · **[Launch Checklist](./LAUNCH_CHECKLIST.md)** · **[Business Ops Checklist](./BUSINESS_OPS_CHECKLIST.md)** · **[Workflow Architecture](./WORKFLOW_ARCHITECTURE.md)** · **[Operations Copilot](./OPS_COPILOT.md)**
 2. [Architecture](#2-architecture)
 3. [Database Schema](#3-database-schema)
 4. [Operator Service Workflow](#4-operator-service-workflow)
@@ -42,6 +42,8 @@ SplitSheet operates as an **internal operations tool** for a music service busin
 | **Rights Validation** | Critical / Warning / Passed — blocks send/sign on criticals |
 | **Template Recommendation** | Infers required agreements from contributor roles |
 | **Internal Review Queue** | Approve before external confirmation (`/review-queue`) |
+| **Operations Copilot** | SOP-aware next-step guidance + LLM explain; escalations; audit — see [OPS_COPILOT.md](./OPS_COPILOT.md) |
+| **SOP Library** | Versioned SPLIT-001…016 procedures at `/sops` |
 | **Client Management** | CRM-lite for artists, producers, labels, and songwriters |
 | **Service Projects** | Per-song jobs (contracts) from intake through ledger sync |
 | **Contributor Confirmation** | Token-based public links — no contributor account required |
@@ -387,6 +389,19 @@ All authenticated routes require an active session cookie. Public routes are not
 | PATCH | `/api/review-queue/:id` | ✅ | Approve / revise / comment |
 | POST | `/api/projects/:id/workflow/sync-ledger` | ✅ | Sync signed agreement → ledger |
 
+### Operations Copilot & SOPs
+
+See **[OPS_COPILOT.md](./OPS_COPILOT.md)** for architecture and safety boundaries.
+
+| Method | Route | Auth | Description |
+|---|---|---|---|
+| GET | `/api/sops` | ✅ | List active SOPs |
+| GET | `/api/sops/:code` | ✅ | SOP detail + versions |
+| POST | `/api/ops-copilot/recommend` | ✅ | Deterministic next-step recommendation |
+| GET | `/api/ops-copilot/briefing` | ✅ | Daily ops briefing |
+| POST | `/api/escalations` | ✅ | Create escalation |
+| POST | `/api/copilot` | ✅ | LLM chat (SOP + project aware) |
+
 ### Contributor Confirmation (Public)
 
 | Method | Route | Auth | Description |
@@ -456,6 +471,8 @@ All authenticated routes require an active session cookie. Public routes are not
 | `/projects/:id/wizard` | `project-wizard.tsx` | Resume wizard |
 | `/projects/:id` | `project-detail.tsx` | Split editor + confirmations |
 | `/review-queue` | `review-queue.tsx` | Internal review queue |
+| `/sops` | `sop-library.tsx` | Operations SOP library |
+| `/sops/:code` | `sop-library.tsx` | Single SOP viewer |
 | `/contracts` | `contracts.tsx` | Music agreements list |
 | `/contracts/:id` | `contract-details.tsx` | Agreement detail view |
 | `/contracts/:id/edit` | `contract-edit.tsx` | Edit agreement fields |
