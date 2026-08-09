@@ -14,26 +14,31 @@ export function assertRuntimeEnv(): void {
 
   const isProd =
     process.env.NODE_ENV === "production" || isVercelRuntime();
+  const useLocalAuth = process.env.AUTH_PROVIDER === "local";
 
   if (isProd) {
     if (process.env.LOCAL_DEV === "true") {
       throw new Error(
-        "LOCAL_DEV=true is not allowed when NODE_ENV=production / Vercel. Set LOCAL_DEV=false.",
+        "LOCAL_DEV=true is not allowed when NODE_ENV=production / Vercel. Set LOCAL_DEV=false and use AUTH_PROVIDER=local for operator login.",
       );
     }
-    // main branch auth is Replit OIDC outside local-dev mode
-    if (!process.env.REPL_ID) missing.push("REPL_ID");
-    if (!process.env.REPLIT_DOMAINS) {
-      missing.push(
-        "REPLIT_DOMAINS (hostname only, e.g. your-app.vercel.app)",
-      );
+
+    if (useLocalAuth) {
+      // Operator login — no Replit OIDC vars required
+    } else {
+      if (!process.env.REPL_ID) missing.push("REPL_ID");
+      if (!process.env.REPLIT_DOMAINS) {
+        missing.push(
+          "REPLIT_DOMAINS (hostname only) — or set AUTH_PROVIDER=local",
+        );
+      }
     }
   }
 
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variable(s): ${missing.join(", ")}. ` +
-        "In Vercel, ensure these are enabled for the Environment that is deploying (Production vs Preview), then Redeploy.",
+        "In Vercel, ensure these are enabled for Production (and Preview), then Redeploy.",
     );
   }
 }

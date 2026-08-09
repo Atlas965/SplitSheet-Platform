@@ -3,7 +3,7 @@
   "outputDirectory": "dist/public",
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "includeFiles": "dist/public/**",
       "maxDuration": 60
     }

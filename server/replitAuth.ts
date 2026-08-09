@@ -9,10 +9,20 @@ import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import { db } from "./db";
 import { users } from "@shared/schema";
+import { isVercelRuntime } from "./runtime";
 
+/** Cursor/local: NODE_ENV=development + LOCAL_DEV=true */
 const isLocalDev =
   process.env.NODE_ENV === "development" &&
   process.env.LOCAL_DEV === "true";
+
+/**
+ * Explicit operator login without Replit OIDC.
+ * Use on Vercel Preview/Production until portable OIDC is wired:
+ *   AUTH_PROVIDER=local
+ */
+const useLocalAuth =
+  isLocalDev || process.env.AUTH_PROVIDER === "local";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
@@ -40,7 +50,8 @@ export function getSession() {
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     conString: databaseUrl,
-    createTableIfMissing: false,
+    // Serverless / fresh Neon: ensure sessions table exists
+    createTableIfMissing: true,
     ttl: sessionTtl,
     tableName: "sessions",
   });
@@ -49,9 +60,11 @@ export function getSession() {
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
+    proxy: true,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production" || isVercelRuntime(),
+      sameSite: "lax",
       maxAge: sessionTtl,
     },
   });
@@ -107,18 +120,28 @@ async function setupLocalDevAuth(app: Express) {
   };
 
   app.get("/api/login", async (req, res) => {
-    await upsertUser(devClaims);
-    const user = {
-      claims: devClaims,
-      expires_at: devClaims.exp,
-    };
-    req.login(user, (err) => {
-      if (err) {
-        res.status(500).json({ message: "Login failed" });
-        return;
-      }
-      res.redirect("/");
-    });
+    try {
+      await upsertUser(devClaims);
+      const user = {
+        claims: devClaims,
+        expires_at: devClaims.exp,
+      };
+      req.login(user, (err) => {
+        if (err) {
+          console.error("[auth] local login failed:", err);
+          res.status(500).json({ message: "Login failed" });
+          return;
+        }
+        // Authenticated App renders Dashboard at "/"
+        res.redirect("/");
+      });
+    } catch (err) {
+      console.error("[auth] local login upsert failed:", err);
+      res.status(500).json({
+        message: "Login failed",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   app.get("/api/logout", (req, res) => {
@@ -127,7 +150,10 @@ async function setupLocalDevAuth(app: Express) {
 }
 
 export async function setupAuth(app: Express) {
-  if (isLocalDev) {
+  if (useLocalAuth) {
+    console.log(
+      "[auth] Using AUTH_PROVIDER=local (operator login via /api/login)",
+    );
     await setupLocalDevAuth(app);
     return;
   }
@@ -155,7 +181,7 @@ export async function setupAuth(app: Express) {
 
   if (domains.length === 0) {
     throw new Error(
-      "REPLIT_DOMAINS must be set for Replit OIDC auth (comma-separated hostnames).",
+      "REPLIT_DOMAINS must be set for Replit OIDC auth (comma-separated hostnames). Or set AUTH_PROVIDER=local for operator login on Vercel.",
     );
   }
 
@@ -213,7 +239,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     return next();
   }
 
-  if (isLocalDev) {
+  if (useLocalAuth) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 

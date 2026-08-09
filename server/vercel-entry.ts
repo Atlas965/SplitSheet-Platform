@@ -1,9 +1,8 @@
 /**
- * Vercel Serverless entry (committed so `functions` / `api/*` detection matches).
- * Bundled by `@vercel/node` from this file's import graph.
+ * Bundled by `npm run build:vercel` → api/index.js
  */
 import express, { type Express } from "express";
-import { getApp } from "../server/app";
+import { getApp } from "./app";
 
 function bootFailureApp(err: unknown): Express {
   const message =
@@ -19,7 +18,7 @@ function bootFailureApp(err: unknown): Express {
       error: "SERVICE_UNAVAILABLE",
       message,
       hint:
-        "Check Vercel Environment Variables for Production vs Preview, then Redeploy. See Runtime Logs for details.",
+        "Set Production env: DATABASE_URL/NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Redeploy.",
     });
   });
   return app;

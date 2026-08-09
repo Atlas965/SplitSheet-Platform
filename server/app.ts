@@ -115,7 +115,11 @@ async function buildApp(): Promise<AppBundle> {
     next();
   });
 
-  if (shouldSkipBootMigrations()) {
+  // AUTH_PROVIDER=local on Vercel still needs schema (users/sessions) for login.
+  const skipMigrations =
+    shouldSkipBootMigrations() && process.env.AUTH_PROVIDER !== "local";
+
+  if (skipMigrations) {
     log("Skipping boot migrations (SKIP_BOOT_MIGRATIONS or Vercel runtime)");
   } else {
     try {
@@ -133,7 +137,7 @@ async function buildApp(): Promise<AppBundle> {
     }
   }
 
-  if (!shouldSkipBootMigrations()) {
+  if (!skipMigrations) {
     await seedContractTemplates();
   }
 
