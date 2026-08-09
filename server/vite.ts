@@ -67,13 +67,28 @@ export async function setupVite(app: Express, server: Server) {
   });
 }
 
-export function serveStatic(app: Express) {
-  const distPath = path.resolve(import.meta.dirname, "public");
+export function serveStatic(
+  app: Express,
+  options: { optional?: boolean } = {},
+) {
+  // esbuild bundle lives in dist/ → dist/public
+  // source runtime (Vercel TS) lives in server/ → ../dist/public
+  const candidates = [
+    path.resolve(import.meta.dirname, "public"),
+    path.resolve(import.meta.dirname, "..", "dist", "public"),
+    path.resolve(process.cwd(), "dist", "public"),
+  ];
+  const distPath = candidates.find((p) => fs.existsSync(p));
 
-  if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
-    );
+  if (!distPath) {
+    const message =
+      `Could not find the build directory (tried: ${candidates.join(", ")}). ` +
+      "Run `vite build` / `npm run build` first.";
+    if (options.optional) {
+      console.warn(`[static] ${message}`);
+      return;
+    }
+    throw new Error(message);
   }
 
   app.use(express.static(distPath));
