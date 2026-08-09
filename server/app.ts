@@ -24,6 +24,7 @@ import {
   isVercelRuntime,
   shouldSkipBootMigrations,
 } from "./runtime";
+import { assertRuntimeEnv } from "./boot-check";
 
 export type AppBundle = {
   app: Express;
@@ -49,6 +50,8 @@ async function runBootMigrations(): Promise<void> {
 }
 
 async function buildApp(): Promise<AppBundle> {
+  assertRuntimeEnv();
+
   const app = express();
   applyTransportSecurity(app);
 
