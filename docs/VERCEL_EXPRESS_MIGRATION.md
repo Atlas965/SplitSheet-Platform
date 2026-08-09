@@ -6,10 +6,10 @@ SoundLedger / SplitSheet can deploy to Vercel as a full-stack app: Vite SPA + ex
 
 ```text
 Vercel
-├── server.ts          → export default Express app (Vercel entry)
-├── server/index.ts    → listen() for local / Docker / Fly
-├── server/app.ts      → shared getApp() factory
-├── dist/public        → Vite build (included via vercel.json)
+├── server/vercel-entry.ts → bundled to api/index.js (Vercel function)
+├── server/index.ts        → listen() for local / Docker / Fly
+├── server/app.ts          → shared getApp() factory
+├── dist/public            → Vite build (included via vercel.json)
 └── Neon PostgreSQL + Drizzle
 ```
 
@@ -17,10 +17,10 @@ Vercel
 
 | Area | Change |
 | --- | --- |
-| Entry | Express exported from root `server.ts`; `listen()` only in `server/index.ts` |
+| Entry | Vercel serves bundled `api/index.js` (avoids Node ESM extensionless import failures); `listen()` only in `server/index.ts` |
 | Boot migrations | Skipped when `VERCEL=1` or `SKIP_BOOT_MIGRATIONS=true` — run schema push/migrate against Neon separately |
 | Stripe webhooks | Global JSON parser skips webhook paths so `express.raw` + signature verify work |
-| Static SPA | `serveStatic` resolves `dist/public` for bundled and Vercel TS layouts |
+| Static SPA | `serveStatic` resolves `dist/public` for bundled and Vercel layouts |
 
 ## Operator checklist (Preview)
 

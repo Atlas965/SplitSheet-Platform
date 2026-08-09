@@ -1,14 +1,11 @@
 /**
- * Vercel Express entry — default-export the existing Express application.
- * Local / Docker / Fly continue to use `server/index.ts` + listen().
+ * Source entry bundled for Vercel → api/index.js
  *
- * Vercel detects Express only if this file imports `express` directly.
- * Use a static import (not dynamic) so the Express bundler includes `server/app`.
- *
- * @see https://vercel.com/docs/frameworks/backend/express
+ * Vercel's per-file TS compile breaks extensionless ESM imports
+ * (e.g. "./loadEnv"). Bundling inlines the server graph instead.
  */
 import express, { type Express } from "express";
-import { getApp } from "./server/app.js";
+import { getApp } from "./app";
 
 function bootFailureApp(err: unknown): Express {
   const message =

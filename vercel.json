@@ -1,8 +1,9 @@
 {
   "buildCommand": "npm run build:vercel",
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "functions": {
-    "server.ts": {
-      "includeFiles": "{dist/public/**,server/**,shared/**}"
+    "api/index.js": {
+      "includeFiles": "dist/public/**"
     }
   }
 }
