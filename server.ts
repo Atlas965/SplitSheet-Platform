@@ -3,12 +3,12 @@
  * Local / Docker / Fly continue to use `server/index.ts` + listen().
  *
  * Vercel detects Express only if this file imports `express` directly.
- * App modules are loaded via dynamic import so missing env fails inside try/catch
- * (db.ts throws at import time if DATABASE_URL is unset).
+ * Use a static import (not dynamic) so the Express bundler includes `server/app`.
  *
  * @see https://vercel.com/docs/frameworks/backend/express
  */
 import express, { type Express } from "express";
+import { getApp } from "./server/app.js";
 
 function bootFailureApp(err: unknown): Express {
   const message =
@@ -32,7 +32,6 @@ function bootFailureApp(err: unknown): Express {
 
 let app: Express;
 try {
-  const { getApp } = await import("./server/app");
   ({ app } = await getApp());
 } catch (err) {
   app = bootFailureApp(err);
