@@ -1,11 +1,9 @@
 /**
- * Source entry bundled for Vercel → api/index.js
- *
- * Vercel's per-file TS compile breaks extensionless ESM imports
- * (e.g. "./loadEnv"). Bundling inlines the server graph instead.
+ * Vercel Serverless entry (committed so `functions` / `api/*` detection matches).
+ * Bundled by `@vercel/node` from this file's import graph.
  */
 import express, { type Express } from "express";
-import { getApp } from "./app";
+import { getApp } from "../server/app";
 
 function bootFailureApp(err: unknown): Express {
   const message =
