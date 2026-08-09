@@ -1,5 +1,5 @@
 {
-  "buildCommand": "vite build",
+  "buildCommand": "npm run build:vercel",
   "functions": {
     "server.ts": {
       "includeFiles": "dist/public/**"
