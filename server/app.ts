@@ -3,14 +3,17 @@
  *
  * Used by:
  * - `server/index.ts` (local / Docker / Fly) — getApp() then listen
- * - root `server.ts` (Vercel) — export default app
+ * - `server/vercel-entry.ts` → bundled `api/index.js` on Vercel
+ *
+ * Important: do not statically import `./vite` here — that pulls in `vite.config.ts`
+ * (top-level await) and crashes the Vercel serverless isolate on module load.
  */
 import "./loadEnv";
 import express, { type Express, type Request, Response, NextFunction } from "express";
 import { type Server } from "http";
 import { registerRoutes } from "./routes";
 import { registerChatbotRoutes } from "./chatbotRoutes";
-import { setupVite, serveStatic, log } from "./vite";
+import { log, serveStatic } from "./static-serve";
 import { seedContractTemplates } from "./seedData";
 import { applyTransportSecurity } from "./transport-security";
 import { sanitizeMiddleware, createPgRateLimiter } from "./security";
@@ -23,6 +26,7 @@ import { logger } from "./logger";
 import {
   isVercelRuntime,
   shouldSkipBootMigrations,
+  useLocalAuthProvider,
 } from "./runtime";
 import { assertRuntimeEnv } from "./boot-check";
 
@@ -66,6 +70,9 @@ async function buildApp(): Promise<AppBundle> {
       ? "AES-256-GCM at rest"
       : "Dev key — set FIELD_ENCRYPTION_SECRET for production",
   );
+  if (useLocalAuthProvider()) {
+    console.log("[auth] AUTH_PROVIDER=local (operator /api/login)");
+  }
 
   // Skip JSON/urlencoded for Stripe webhooks so route-level express.raw
   // can supply the raw Buffer required for signature verification.
@@ -115,9 +122,9 @@ async function buildApp(): Promise<AppBundle> {
     next();
   });
 
-  // AUTH_PROVIDER=local on Vercel still needs schema (users/sessions) for login.
+  // Local-auth on Vercel still needs users/sessions tables.
   const skipMigrations =
-    shouldSkipBootMigrations() && process.env.AUTH_PROVIDER !== "local";
+    shouldSkipBootMigrations() && !useLocalAuthProvider();
 
   if (skipMigrations) {
     log("Skipping boot migrations (SKIP_BOOT_MIGRATIONS or Vercel runtime)");
@@ -161,11 +168,17 @@ async function buildApp(): Promise<AppBundle> {
     }
   });
 
-  // Vite HMR only on long-running local/dev hosts (not Vercel).
-  if (!isVercelRuntime() && app.get("env") === "development") {
+  if (isVercelRuntime()) {
+    // Static SPA is served by Vercel `outputDirectory` (dist/public).
+    log("Vercel runtime: API-only Express (static via outputDirectory)");
+  } else if (app.get("env") === "development") {
+    // Non-literal import so esbuild does NOT bundle vite.config (top-level await)
+    // into the Vercel api/index.js isolate.
+    const viteModule = "./vite";
+    const { setupVite } = await import(viteModule);
     await setupVite(app, server);
   } else {
-    serveStatic(app, { optional: isVercelRuntime() });
+    serveStatic(app);
   }
 
   return { app, server };

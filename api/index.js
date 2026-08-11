@@ -2717,11 +2717,11 @@ var init_objectAcl = __esm({
 // server/objectStorage.ts
 import { Storage } from "@google-cloud/storage";
 import { randomUUID } from "crypto";
-function parseObjectPath(path4) {
-  if (!path4.startsWith("/")) {
-    path4 = `/${path4}`;
+function parseObjectPath(path3) {
+  if (!path3.startsWith("/")) {
+    path3 = `/${path3}`;
   }
-  const pathParts = path4.split("/");
+  const pathParts = path3.split("/");
   if (pathParts.length < 3) {
     throw new Error("Invalid path: must contain at least a bucket name");
   }
@@ -2800,7 +2800,7 @@ var init_objectStorage = __esm({
         const pathsStr = process.env.PUBLIC_OBJECT_SEARCH_PATHS || "";
         const paths = Array.from(
           new Set(
-            pathsStr.split(",").map((path4) => path4.trim()).filter((path4) => path4.length > 0)
+            pathsStr.split(",").map((path3) => path3.trim()).filter((path3) => path3.length > 0)
           )
         );
         if (paths.length === 0) {
@@ -3480,14 +3480,14 @@ var init_confirmation_routes = __esm({
 });
 
 // server/copilot-knowledge.ts
-function resolveCopilotPageKey(path4) {
-  if (!path4) return void 0;
+function resolveCopilotPageKey(path3) {
+  if (!path3) return void 0;
   const keys = ["/", "/clients", "/projects", "/contracts", "/ownership", "/billing", "/analytics"];
-  if (keys.includes(path4)) return path4;
+  if (keys.includes(path3)) return path3;
   for (const key of keys) {
-    if (key !== "/" && path4.startsWith(`${key}/`)) return key;
+    if (key !== "/" && path3.startsWith(`${key}/`)) return key;
   }
-  return path4;
+  return path3;
 }
 var COPILOT_PRICING, COPILOT_SYSTEM_PROMPT;
 var init_copilot_knowledge = __esm({
@@ -6028,9 +6028,9 @@ var init_security_routes = __esm({
 import { z as z9 } from "zod";
 import { eq as eq2 } from "drizzle-orm";
 function requireTermsAccepted(req, res, next) {
-  const path4 = req.path;
-  const isPublicLegalDocRoute = req.method === "GET" && path4.startsWith("/api/legal/documents/");
-  if (!path4.startsWith("/api/") || TERMS_ALLOWLIST.has(path4) || isPublicLegalDocRoute) {
+  const path3 = req.path;
+  const isPublicLegalDocRoute = req.method === "GET" && path3.startsWith("/api/legal/documents/");
+  if (!path3.startsWith("/api/") || TERMS_ALLOWLIST.has(path3) || isPublicLegalDocRoute) {
     next();
     return;
   }
@@ -6050,7 +6050,7 @@ function requireTermsAccepted(req, res, next) {
       currentVersion: results.find((r) => !r.accepted)?.currentVersion ?? CURRENT_TERMS_VERSION
     });
   }).catch((err) => {
-    logger.error("compliance.terms_check_failed", { error: err?.message, route: path4 });
+    logger.error("compliance.terms_check_failed", { error: err?.message, route: path3 });
     next();
   });
 }
@@ -8799,56 +8799,10 @@ var init_chatbotRoutes = __esm({
   }
 });
 
-// vite.config.ts
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import path2 from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
-var vite_config_default;
-var init_vite_config = __esm({
-  async "vite.config.ts"() {
-    "use strict";
-    vite_config_default = defineConfig({
-      plugins: [
-        react(),
-        runtimeErrorOverlay(),
-        ...process.env.NODE_ENV !== "production" && process.env.REPL_ID !== void 0 ? [
-          await import("@replit/vite-plugin-cartographer").then(
-            (m) => m.cartographer()
-          ),
-          await import("@replit/vite-plugin-dev-banner").then(
-            (m) => m.devBanner()
-          )
-        ] : []
-      ],
-      resolve: {
-        alias: {
-          "@": path2.resolve(import.meta.dirname, "client", "src"),
-          "@shared": path2.resolve(import.meta.dirname, "shared"),
-          "@assets": path2.resolve(import.meta.dirname, "attached_assets")
-        }
-      },
-      root: path2.resolve(import.meta.dirname, "client"),
-      build: {
-        outDir: path2.resolve(import.meta.dirname, "dist/public"),
-        emptyOutDir: true
-      },
-      server: {
-        fs: {
-          strict: true,
-          deny: ["**/.*"]
-        }
-      }
-    });
-  }
-});
-
-// server/vite.ts
+// server/static-serve.ts
 import express3 from "express";
 import fs3 from "fs";
-import path3 from "path";
-import { createServer as createViteServer, createLogger } from "vite";
-import { nanoid } from "nanoid";
+import path2 from "path";
 function log2(message, source = "express") {
   const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -8858,53 +8812,11 @@ function log2(message, source = "express") {
   });
   console.log(`${formattedTime} [${source}] ${message}`);
 }
-async function setupVite(app, server) {
-  const serverOptions = {
-    middlewareMode: true,
-    hmr: { server },
-    allowedHosts: true
-  };
-  const vite = await createViteServer({
-    ...vite_config_default,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      }
-    },
-    server: serverOptions,
-    appType: "custom"
-  });
-  app.use(vite.middlewares);
-  app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
-    try {
-      const clientTemplate = path3.resolve(
-        import.meta.dirname,
-        "..",
-        "client",
-        "index.html"
-      );
-      let template = await fs3.promises.readFile(clientTemplate, "utf-8");
-      template = template.replace(
-        `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`
-      );
-      const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
-    } catch (e) {
-      vite.ssrFixStacktrace(e);
-      next(e);
-    }
-  });
-}
 function serveStatic(app, options = {}) {
   const candidates = [
-    path3.resolve(import.meta.dirname, "public"),
-    path3.resolve(import.meta.dirname, "..", "dist", "public"),
-    path3.resolve(process.cwd(), "dist", "public")
+    path2.resolve(import.meta.dirname, "public"),
+    path2.resolve(import.meta.dirname, "..", "dist", "public"),
+    path2.resolve(process.cwd(), "dist", "public")
   ];
   const distPath = candidates.find((p) => fs3.existsSync(p));
   if (!distPath) {
@@ -8917,15 +8829,12 @@ function serveStatic(app, options = {}) {
   }
   app.use(express3.static(distPath));
   app.use("*", (_req, res) => {
-    res.sendFile(path3.resolve(distPath, "index.html"));
+    res.sendFile(path2.resolve(distPath, "index.html"));
   });
 }
-var viteLogger;
-var init_vite = __esm({
-  async "server/vite.ts"() {
+var init_static_serve = __esm({
+  "server/static-serve.ts"() {
     "use strict";
-    await init_vite_config();
-    viteLogger = createLogger();
   }
 });
 
@@ -9795,6 +9704,9 @@ async function buildApp() {
     "Message encryption:",
     process.env.FIELD_ENCRYPTION_SECRET || process.env.SESSION_SECRET ? "AES-256-GCM at rest" : "Dev key \u2014 set FIELD_ENCRYPTION_SECRET for production"
   );
+  if (useLocalAuthProvider()) {
+    console.log("[auth] AUTH_PROVIDER=local (operator /api/login)");
+  }
   app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();
     return express4.json({ limit: "1mb" })(req, res, next);
@@ -9807,9 +9719,9 @@ async function buildApp() {
   app.use("/api", createPgRateLimiter(300, 6e4, "global-api"));
   app.use((req, res, next) => {
     const start = Date.now();
-    const path4 = req.path;
+    const path3 = req.path;
     let capturedJsonResponse = void 0;
-    const sensitive = path4.startsWith("/api/messages") || path4.startsWith("/api/conversations");
+    const sensitive = path3.startsWith("/api/messages") || path3.startsWith("/api/conversations");
     const originalResJson = res.json;
     res.json = function(bodyJson, ...args) {
       if (!sensitive) capturedJsonResponse = bodyJson;
@@ -9817,8 +9729,8 @@ async function buildApp() {
     };
     res.on("finish", () => {
       const duration = Date.now() - start;
-      if (path4.startsWith("/api")) {
-        let logLine = `${req.method} ${path4} ${res.statusCode} in ${duration}ms`;
+      if (path3.startsWith("/api")) {
+        let logLine = `${req.method} ${path3} ${res.statusCode} in ${duration}ms`;
         if (capturedJsonResponse) {
           logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
         } else if (sensitive) {
@@ -9832,7 +9744,7 @@ async function buildApp() {
     });
     next();
   });
-  const skipMigrations = shouldSkipBootMigrations() && process.env.AUTH_PROVIDER !== "local";
+  const skipMigrations = shouldSkipBootMigrations() && !useLocalAuthProvider();
   if (skipMigrations) {
     log2("Skipping boot migrations (SKIP_BOOT_MIGRATIONS or Vercel runtime)");
   } else {
@@ -9869,10 +9781,14 @@ async function buildApp() {
       res.status(status).json({ message });
     }
   });
-  if (!isVercelRuntime() && app.get("env") === "development") {
+  if (isVercelRuntime()) {
+    log2("Vercel runtime: API-only Express (static via outputDirectory)");
+  } else if (app.get("env") === "development") {
+    const viteModule = "./vite";
+    const { setupVite } = await import(viteModule);
     await setupVite(app, server);
   } else {
-    serveStatic(app, { optional: isVercelRuntime() });
+    serveStatic(app);
   }
   return { app, server };
 }
@@ -9887,12 +9803,12 @@ function getApp() {
 }
 var cached, STRIPE_WEBHOOK_PATHS;
 var init_app = __esm({
-  async "server/app.ts"() {
+  "server/app.ts"() {
     "use strict";
     init_loadEnv();
     init_routes();
     init_chatbotRoutes();
-    await init_vite();
+    init_static_serve();
     init_seedData();
     init_transport_security();
     init_security();
@@ -9934,7 +9850,7 @@ async function ensureApp() {
   if (!bootPromise) {
     bootPromise = (async () => {
       try {
-        const { getApp: getApp2 } = await init_app().then(() => app_exports);
+        const { getApp: getApp2 } = await Promise.resolve().then(() => (init_app(), app_exports));
         const { app } = await getApp2();
         realApp = app;
         return app;
@@ -9949,7 +9865,7 @@ async function ensureApp() {
 bridge.use(async (req, res, next) => {
   try {
     const app = await ensureApp();
-    app(req, res, next);
+    app(req, res);
   } catch (err) {
     if (!res.headersSent) {
       res.status(503).json({

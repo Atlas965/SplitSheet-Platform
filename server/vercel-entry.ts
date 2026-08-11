@@ -52,7 +52,8 @@ async function ensureApp(): Promise<Express> {
 bridge.use(async (req: Request, res: Response, next) => {
   try {
     const app = await ensureApp();
-    app(req, res, next);
+    // Express Application is a request listener — do not pass `next`
+    app(req, res);
   } catch (err) {
     if (!res.headersSent) {
       res.status(503).json({

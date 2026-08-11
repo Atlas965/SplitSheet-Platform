@@ -3,7 +3,7 @@
  * Vercel uses root `server.ts` which exports the Express app instead of listen().
  */
 import { getApp } from "./app";
-import { log } from "./vite";
+import { log } from "./static-serve";
 import { logger } from "./logger";
 import { isVercelRuntime } from "./runtime";
 
