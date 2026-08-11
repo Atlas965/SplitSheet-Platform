@@ -1,8 +1,10 @@
 /**
  * Bundled by `npm run build:vercel` → api/index.js
+ *
+ * No top-level await — Vercel Node can crash the isolate if module init throws.
+ * App boots lazily on the first request and returns a clear 503 on failure.
  */
-import express, { type Express } from "express";
-import { getApp } from "./app";
+import express, { type Express, type Request, type Response } from "express";
 
 function bootFailureApp(err: unknown): Express {
   const message =
@@ -18,17 +20,47 @@ function bootFailureApp(err: unknown): Express {
       error: "SERVICE_UNAVAILABLE",
       message,
       hint:
-        "Set Production env: DATABASE_URL/NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Redeploy.",
+        "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Then Redeploy.",
     });
   });
   return app;
 }
 
-let app: Express;
-try {
-  ({ app } = await getApp());
-} catch (err) {
-  app = bootFailureApp(err);
+const bridge = express();
+let realApp: Express | null = null;
+let bootPromise: Promise<Express> | null = null;
+
+async function ensureApp(): Promise<Express> {
+  if (realApp) return realApp;
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      try {
+        // Dynamic import so db/auth module init stays inside try/catch
+        const { getApp } = await import("./app");
+        const { app } = await getApp();
+        realApp = app;
+        return app;
+      } catch (err) {
+        realApp = bootFailureApp(err);
+        return realApp;
+      }
+    })();
+  }
+  return bootPromise;
 }
 
-export default app;
+bridge.use(async (req: Request, res: Response, next) => {
+  try {
+    const app = await ensureApp();
+    app(req, res, next);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(503).json({
+        error: "SERVICE_UNAVAILABLE",
+        message: err instanceof Error ? err.message : "Boot failed",
+      });
+    }
+  }
+});
+
+export default bridge;

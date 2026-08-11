@@ -2,7 +2,7 @@
  * Fail fast with a clear message when required runtime config is missing.
  * Prevents opaque Vercel FUNCTION_INVOCATION_FAILED crashes during getApp().
  */
-import { isVercelRuntime } from "./runtime";
+import { isVercelRuntime, useLocalAuthProvider } from "./runtime";
 
 export function assertRuntimeEnv(): void {
   const missing: string[] = [];
@@ -14,7 +14,7 @@ export function assertRuntimeEnv(): void {
 
   const isProd =
     process.env.NODE_ENV === "production" || isVercelRuntime();
-  const useLocalAuth = process.env.AUTH_PROVIDER === "local";
+  const useLocalAuth = useLocalAuthProvider();
 
   if (isProd) {
     if (process.env.LOCAL_DEV === "true") {

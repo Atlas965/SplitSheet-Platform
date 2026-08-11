@@ -9,7 +9,7 @@ import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import { db } from "./db";
 import { users } from "@shared/schema";
-import { isVercelRuntime } from "./runtime";
+import { isVercelRuntime, useLocalAuthProvider } from "./runtime";
 
 /** Cursor/local: NODE_ENV=development + LOCAL_DEV=true */
 const isLocalDev =
@@ -18,11 +18,9 @@ const isLocalDev =
 
 /**
  * Explicit operator login without Replit OIDC.
- * Use on Vercel Preview/Production until portable OIDC is wired:
- *   AUTH_PROVIDER=local
+ * Use on Vercel: AUTH_PROVIDER=local (also auto-defaulted on VERCEL=1).
  */
-const useLocalAuth =
-  isLocalDev || process.env.AUTH_PROVIDER === "local";
+const useLocalAuth = isLocalDev || useLocalAuthProvider();
 
 const databaseUrl =
   process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;

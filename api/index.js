@@ -8,6 +8,50 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// server/loadEnv.ts
+import fs from "fs";
+import path from "path";
+function applyRuntimeDefaults() {
+  if (!process.env.DATABASE_URL && process.env.NEON_DATABASE_URL) {
+    process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
+  }
+  if ((process.env.VERCEL === "1" || process.env.VERCEL === "true") && !process.env.AUTH_PROVIDER) {
+    process.env.AUTH_PROVIDER = "local";
+  }
+  if (process.env.LOCAL_DEV === "true" && process.env.NODE_TLS_REJECT_UNAUTHORIZED === void 0) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+}
+function loadEnv() {
+  if (process.env.__ENV_LOADED__) return;
+  const envPath = path.resolve(import.meta.dirname, "..", ".env");
+  if (fs.existsSync(envPath)) {
+    const contents = fs.readFileSync(envPath, "utf-8");
+    for (const line of contents.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq4 = trimmed.indexOf("=");
+      if (eq4 === -1) continue;
+      const key = trimmed.slice(0, eq4).trim();
+      let value = trimmed.slice(eq4 + 1).trim();
+      if (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'")) {
+        value = value.slice(1, -1);
+      }
+      if (!(key in process.env)) {
+        process.env[key] = value;
+      }
+    }
+  }
+  applyRuntimeDefaults();
+  process.env.__ENV_LOADED__ = "1";
+}
+var init_loadEnv = __esm({
+  "server/loadEnv.ts"() {
+    "use strict";
+    loadEnv();
+  }
+});
+
 // shared/schema.ts
 var schema_exports = {};
 __export(schema_exports, {
@@ -853,6 +897,9 @@ var init_db = __esm({
     "use strict";
     init_schema();
     neonConfig.webSocketConstructor = ws;
+    if (process.env.VERCEL === "1" || process.env.VERCEL === "true") {
+      neonConfig.poolQueryViaFetch = true;
+    }
     databaseUrl = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
     if (!databaseUrl) {
       throw new Error(
@@ -1484,60 +1531,7 @@ var init_security = __esm({
   }
 });
 
-// server/vercel-entry.ts
-import express5 from "express";
-
-// server/loadEnv.ts
-import fs from "fs";
-import path from "path";
-function loadEnv() {
-  if (process.env.__ENV_LOADED__) return;
-  const envPath = path.resolve(import.meta.dirname, "..", ".env");
-  if (!fs.existsSync(envPath)) {
-    process.env.__ENV_LOADED__ = "1";
-    return;
-  }
-  const contents = fs.readFileSync(envPath, "utf-8");
-  for (const line of contents.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq4 = trimmed.indexOf("=");
-    if (eq4 === -1) continue;
-    const key = trimmed.slice(0, eq4).trim();
-    let value = trimmed.slice(eq4 + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
-  if (!process.env.DATABASE_URL && process.env.NEON_DATABASE_URL) {
-    process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
-  }
-  if (process.env.LOCAL_DEV === "true" && process.env.NODE_TLS_REJECT_UNAUTHORIZED === void 0) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-  }
-  process.env.__ENV_LOADED__ = "1";
-}
-loadEnv();
-
-// server/app.ts
-import express4 from "express";
-
-// server/routes.ts
-import express2 from "express";
-import { createServer } from "http";
-import Stripe4 from "stripe";
-
-// server/storage.ts
-init_schema();
-init_db();
-import { eq, desc, and, or, sql as sql3, count, gte, lt, max } from "drizzle-orm";
-
 // server/message-crypto.ts
-init_security();
-var ENC_PREFIX = "enc:v1:";
 function getMessageEncryptionSecret() {
   const secret = process.env.FIELD_ENCRYPTION_SECRET || process.env.SESSION_SECRET;
   if (!secret && process.env.NODE_ENV === "production") {
@@ -1561,778 +1555,794 @@ function decryptMessageContent(stored) {
     return "[Unable to decrypt message]";
   }
 }
+var ENC_PREFIX;
+var init_message_crypto = __esm({
+  "server/message-crypto.ts"() {
+    "use strict";
+    init_security();
+    ENC_PREFIX = "enc:v1:";
+  }
+});
 
 // server/storage.ts
-var DatabaseStorage = class {
-  // User operations
-  async getUser(id) {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
-    return user;
-  }
-  async getUserByStripeCustomerId(stripeCustomerId) {
-    const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, stripeCustomerId));
-    return user;
-  }
-  async upsertUser(userData) {
-    const [user] = await db.insert(users).values(userData).onConflictDoUpdate({
-      target: users.id,
-      set: {
-        ...userData,
-        updatedAt: /* @__PURE__ */ new Date()
+import { eq, desc, and, or, sql as sql3, count, gte, lt, max } from "drizzle-orm";
+var DatabaseStorage, storage;
+var init_storage = __esm({
+  "server/storage.ts"() {
+    "use strict";
+    init_schema();
+    init_db();
+    init_message_crypto();
+    DatabaseStorage = class {
+      // User operations
+      async getUser(id) {
+        const [user] = await db.select().from(users).where(eq(users.id, id));
+        return user;
       }
-    }).returning();
-    return user;
-  }
-  async updateUser(id, updates) {
-    const [user] = await db.update(users).set({
-      ...updates,
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(users.id, id)).returning();
-    return user;
-  }
-  async updateUserStripeInfo(userId, stripeCustomerId, stripeSubscriptionId) {
-    const [user] = await db.update(users).set({
-      stripeCustomerId,
-      stripeSubscriptionId,
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(users.id, userId)).returning();
-    return user;
-  }
-  // Contract template operations
-  async getContractTemplates() {
-    return await db.select().from(contractTemplates).where(eq(contractTemplates.isActive, true)).orderBy(contractTemplates.name);
-  }
-  async getContractTemplate(id) {
-    const [template] = await db.select().from(contractTemplates).where(eq(contractTemplates.id, id));
-    return template;
-  }
-  async createContractTemplate(template) {
-    const [newTemplate] = await db.insert(contractTemplates).values(template).returning();
-    return newTemplate;
-  }
-  // Contract operations
-  async getContracts(userId) {
-    return await db.select().from(contracts).where(
-      or(
-        eq(contracts.createdBy, userId)
-        // TODO: Add join for collaborators
-      )
-    ).orderBy(desc(contracts.updatedAt));
-  }
-  async getContract(id) {
-    const [contract] = await db.select().from(contracts).where(eq(contracts.id, id));
-    return contract;
-  }
-  async createContract(contract) {
-    const [newContract] = await db.insert(contracts).values(contract).returning();
-    return newContract;
-  }
-  async updateContract(id, updates) {
-    const [updatedContract] = await db.update(contracts).set({
-      ...updates,
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(contracts.id, id)).returning();
-    return updatedContract;
-  }
-  async deleteContract(id) {
-    await db.delete(contracts).where(eq(contracts.id, id));
-  }
-  // Contract collaborator operations
-  async getContractCollaborators(contractId) {
-    return await db.select().from(contractCollaborators).where(eq(contractCollaborators.contractId, contractId));
-  }
-  async addContractCollaborator(collaborator) {
-    const [newCollaborator] = await db.insert(contractCollaborators).values(collaborator).returning();
-    return newCollaborator;
-  }
-  async updateCollaboratorStatus(id, status) {
-    const [updatedCollaborator] = await db.update(contractCollaborators).set({
-      status,
-      signedAt: status === "signed" ? /* @__PURE__ */ new Date() : null
-    }).where(eq(contractCollaborators.id, id)).returning();
-    return updatedCollaborator;
-  }
-  async updateContractCollaborator(id, updates) {
-    const [updated] = await db.update(contractCollaborators).set(updates).where(eq(contractCollaborators.id, id)).returning();
-    return updated;
-  }
-  async deleteContractCollaborator(id) {
-    await db.delete(contractCollaborators).where(eq(contractCollaborators.id, id));
-  }
-  // Contract signature operations
-  async createContractSignature(signature) {
-    const [newSignature] = await db.insert(contractSignatures).values(signature).returning();
-    return newSignature;
-  }
-  async getContractSignatures(contractId) {
-    return await db.select().from(contractSignatures).where(eq(contractSignatures.contractId, contractId));
-  }
-  // Analytics operations
-  async getAnalyticsData(userId) {
-    const now = /* @__PURE__ */ new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1e3);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3);
-    const today = new Date(now.toDateString());
-    const isUserScoped = !!userId;
-    let totalUsers, activeUsers, newUsersToday, userGrowthRate;
-    if (isUserScoped) {
-      totalUsers = 1;
-      const userActivityResult = await db.select({ count: count() }).from(userActivity).where(
-        and(
-          eq(userActivity.userId, userId),
-          gte(userActivity.createdAt, sevenDaysAgo)
-        )
-      );
-      activeUsers = userActivityResult[0]?.count > 0 ? 1 : 0;
-      const userCreatedResult = await db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId));
-      const userCreatedAt = userCreatedResult[0]?.createdAt;
-      newUsersToday = userCreatedAt && userCreatedAt >= today ? 1 : 0;
-      userGrowthRate = 0;
-    } else {
-      const totalUsersResult = await db.select({ count: count() }).from(users);
-      totalUsers = totalUsersResult[0]?.count || 0;
-      const activeUsersResult = await db.selectDistinct({ userId: userActivity.userId }).from(userActivity).where(gte(userActivity.createdAt, sevenDaysAgo));
-      activeUsers = activeUsersResult.length;
-      const newUsersTodayResult = await db.select({ count: count() }).from(users).where(gte(users.createdAt, today));
-      newUsersToday = newUsersTodayResult[0]?.count || 0;
-      const previousMonth = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1e3);
-      const startOfCurrentMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3);
-      const previousMonthResult = await db.select({ count: count() }).from(users).where(
-        and(
-          gte(users.createdAt, previousMonth),
-          lt(users.createdAt, startOfCurrentMonth)
-        )
-      );
-      const previousMonthUsers = previousMonthResult[0]?.count || 0;
-      const currentMonthResult = await db.select({ count: count() }).from(users).where(gte(users.createdAt, startOfCurrentMonth));
-      const currentMonthUsers = currentMonthResult[0]?.count || 0;
-      userGrowthRate = previousMonthUsers > 0 ? Math.round((currentMonthUsers - previousMonthUsers) / previousMonthUsers * 100) : 0;
-    }
-    const thirtyDaysAgoStr = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3).toISOString().split("T")[0];
-    let dailyLoginsData, profileViewsData;
-    if (isUserScoped) {
-      dailyLoginsData = await db.select({
-        date: sql3`DATE(${userActivity.createdAt})`,
-        logins: count()
-      }).from(userActivity).where(
-        and(
-          eq(userActivity.userId, userId),
-          eq(userActivity.activityType, "login"),
-          gte(userActivity.createdAt, thirtyDaysAgo)
-        )
-      ).groupBy(sql3`DATE(${userActivity.createdAt})`).orderBy(sql3`DATE(${userActivity.createdAt})`);
-      profileViewsData = await db.select({
-        date: sql3`DATE(${profileViews.viewedAt})`,
-        views: count()
-      }).from(profileViews).where(
-        and(
-          eq(profileViews.profileId, userId),
-          gte(profileViews.viewedAt, thirtyDaysAgo)
-        )
-      ).groupBy(sql3`DATE(${profileViews.viewedAt})`).orderBy(sql3`DATE(${profileViews.viewedAt})`);
-    } else {
-      dailyLoginsData = await db.select({
-        date: sql3`DATE(${userActivity.createdAt})`,
-        logins: sql3`COUNT(DISTINCT ${userActivity.userId})`
-      }).from(userActivity).where(
-        and(
-          eq(userActivity.activityType, "login"),
-          gte(userActivity.createdAt, thirtyDaysAgo)
-        )
-      ).groupBy(sql3`DATE(${userActivity.createdAt})`).orderBy(sql3`DATE(${userActivity.createdAt})`);
-      profileViewsData = await db.select({
-        date: sql3`DATE(${profileViews.viewedAt})`,
-        views: count()
-      }).from(profileViews).where(gte(profileViews.viewedAt, thirtyDaysAgo)).groupBy(sql3`DATE(${profileViews.viewedAt})`).orderBy(sql3`DATE(${profileViews.viewedAt})`);
-    }
-    const dailyLoginsMap = new Map(dailyLoginsData.map((d) => [d.date, Number(d.logins)]));
-    const profileViewsMap = new Map(profileViewsData.map((d) => [d.date, Number(d.views)]));
-    const dailyLogins = [];
-    const profileViewsDaily = [];
-    for (let i = 29; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1e3);
-      const dateStr = date.toISOString().split("T")[0];
-      dailyLogins.push({
-        date: dateStr,
-        logins: dailyLoginsMap.get(dateStr) || 0
-      });
-      profileViewsDaily.push({
-        date: dateStr,
-        views: profileViewsMap.get(dateStr) || 0
-      });
-    }
-    const usersWithProfiles = await db.select({
-      id: users.id,
-      bio: users.bio,
-      skills: users.skills,
-      profileImageUrl: users.profileImageUrl,
-      contactInfo: users.contactInfo
-    }).from(users);
-    const profileCompleteness = [
-      { range: "0-25%", count: 0, color: "#ff6b6b" },
-      { range: "26-50%", count: 0, color: "#feca57" },
-      { range: "51-75%", count: 0, color: "#48dbfb" },
-      { range: "76-100%", count: 0, color: "#1dd1a1" }
-    ];
-    usersWithProfiles.forEach((user) => {
-      let completeness = 0;
-      if (user.bio) completeness += 25;
-      if (user.skills && user.skills.length > 0) completeness += 25;
-      if (user.profileImageUrl) completeness += 25;
-      if (user.contactInfo && user.contactInfo?.phone) completeness += 25;
-      if (completeness <= 25) profileCompleteness[0].count++;
-      else if (completeness <= 50) profileCompleteness[1].count++;
-      else if (completeness <= 75) profileCompleteness[2].count++;
-      else profileCompleteness[3].count++;
-    });
-    const skillCounts = {};
-    usersWithProfiles.forEach((user) => {
-      if (user.skills && Array.isArray(user.skills)) {
-        user.skills.forEach((skill) => {
-          skillCounts[skill] = (skillCounts[skill] || 0) + 1;
-        });
+      async getUserByStripeCustomerId(stripeCustomerId) {
+        const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, stripeCustomerId));
+        return user;
       }
-    });
-    const topSkills = Object.entries(skillCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([skill, count2]) => ({ skill, count: count2 }));
-    const locationCounts = {};
-    usersWithProfiles.forEach((user) => {
-      if (user.contactInfo && user.contactInfo?.location) {
-        const location = user.contactInfo.location;
-        locationCounts[location] = (locationCounts[location] || 0) + 1;
+      async upsertUser(userData) {
+        const [user] = await db.insert(users).values(userData).onConflictDoUpdate({
+          target: users.id,
+          set: {
+            ...userData,
+            updatedAt: /* @__PURE__ */ new Date()
+          }
+        }).returning();
+        return user;
       }
-    });
-    const usersByLocation = Object.entries(locationCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([location, count2]) => ({ location, count: count2 }));
-    return {
-      userStats: {
-        totalUsers,
-        activeUsers,
-        newUsersToday,
-        userGrowthRate
-      },
-      activityStats: {
-        dailyLogins,
-        profileViews: profileViewsDaily,
-        messagesSent: []
-        // TODO: Implement when messaging system is built
-      },
-      userEngagement: {
-        profileCompleteness,
-        topSkills,
-        usersByLocation
-      }
-    };
-  }
-  async trackUserActivity(userId, activityType, activityData) {
-    await db.insert(userActivity).values({
-      userId,
-      activityType,
-      activityData: activityData ? activityData : null
-    });
-  }
-  async trackUserActivitiesBulk(userId, activities) {
-    if (activities.length === 0) return;
-    const activityRecords = activities.map((activity) => ({
-      userId,
-      activityType: activity.activityType,
-      activityData: activity.activityData ? activity.activityData : null
-    }));
-    await db.insert(userActivity).values(activityRecords);
-  }
-  async trackProfileView(viewerId, profileId) {
-    await db.insert(profileViews).values({
-      viewerId,
-      profileId
-    });
-  }
-  // User matching methods
-  async getUserRecommendations(userId, limit = 10) {
-    const currentUser = await this.getUser(userId);
-    if (!currentUser) return [];
-    const allUsers = await db.select().from(users).where(and(
-      eq(users.isActive, true),
-      sql3`${users.id} != ${userId}`
-    ));
-    const recommendations = allUsers.map((user) => {
-      const currentSkills = currentUser.skills || [];
-      const userSkills = user.skills || [];
-      const commonSkills = currentSkills.filter((skill) => userSkills.includes(skill));
-      const skillScore = commonSkills.length / Math.max(currentSkills.length, userSkills.length, 1);
-      const randomScore = Math.random() * 0.3;
-      const matchScore = Math.min(skillScore + randomScore, 1);
-      const matchReason = commonSkills.length > 0 ? `Shared skills: ${commonSkills.slice(0, 3).join(", ")}` : "Similar profile interests";
-      return {
-        ...user,
-        matchScore: Math.round(matchScore * 100) / 100,
-        matchReason
-      };
-    }).sort((a, b) => b.matchScore - a.matchScore).slice(0, limit);
-    return recommendations;
-  }
-  async createUserMatch(userId, matchedUserId, matchScore, matchReason) {
-    const [match] = await db.insert(userMatches).values({
-      userId,
-      matchedUserId,
-      matchScore: matchScore.toString(),
-      matchReason,
-      status: "suggested"
-    }).returning();
-    return match;
-  }
-  async updateMatchStatus(matchId, status) {
-    await db.update(userMatches).set({ status }).where(eq(userMatches.id, matchId));
-  }
-  async getUserMatches(userId, status) {
-    const conditions = [eq(userMatches.userId, userId)];
-    if (status) {
-      conditions.push(eq(userMatches.status, status));
-    }
-    return await db.select({
-      match: userMatches,
-      user: users
-    }).from(userMatches).leftJoin(users, eq(userMatches.matchedUserId, users.id)).where(and(...conditions)).orderBy(desc(userMatches.createdAt));
-  }
-  // Messaging methods
-  async sendMessage(senderId, receiverId, content, messageType = "text") {
-    const encryptedContent = encryptMessageContent(content);
-    const [message] = await db.insert(messages).values({
-      senderId,
-      receiverId,
-      content: encryptedContent,
-      messageType
-    }).returning();
-    await this.trackUserActivity(senderId, "message_sent", { receiverId });
-    return { ...message, content };
-  }
-  decryptMessageRow(row) {
-    return { ...row, content: decryptMessageContent(row.content) };
-  }
-  async getConversation(userId1, userId2, limit = 50) {
-    const rows = await db.select().from(messages).where(
-      or(
-        and(eq(messages.senderId, userId1), eq(messages.receiverId, userId2)),
-        and(eq(messages.senderId, userId2), eq(messages.receiverId, userId1))
-      )
-    ).orderBy(desc(messages.createdAt)).limit(limit);
-    return rows.map((row) => this.decryptMessageRow(row));
-  }
-  async getUserConversations(userId) {
-    const conversations = await db.select({
-      message: messages,
-      sender: {
-        id: sql3`sender.id`,
-        firstName: sql3`sender.first_name`,
-        lastName: sql3`sender.last_name`,
-        profileImageUrl: sql3`sender.profile_image_url`
-      },
-      receiver: {
-        id: sql3`receiver.id`,
-        firstName: sql3`receiver.first_name`,
-        lastName: sql3`receiver.last_name`,
-        profileImageUrl: sql3`receiver.profile_image_url`
-      }
-    }).from(messages).leftJoin(sql3`users AS sender`, sql3`sender.id = ${messages.senderId}`).leftJoin(sql3`users AS receiver`, sql3`receiver.id = ${messages.receiverId}`).where(
-      or(
-        eq(messages.senderId, userId),
-        eq(messages.receiverId, userId)
-      )
-    ).orderBy(desc(messages.createdAt));
-    const unreadRows = await db.select({
-      senderId: messages.senderId,
-      count: sql3`count(*)::int`
-    }).from(messages).where(and(
-      eq(messages.receiverId, userId),
-      eq(messages.isRead, false)
-    )).groupBy(messages.senderId);
-    const unreadMap = new Map(unreadRows.map((r) => [r.senderId, r.count]));
-    const conversationMap = /* @__PURE__ */ new Map();
-    conversations.forEach((conv) => {
-      const partnerId = conv.message.senderId === userId ? conv.message.receiverId : conv.message.senderId;
-      const partner = conv.message.senderId === userId ? conv.receiver : conv.sender;
-      if (!conversationMap.has(partnerId)) {
-        conversationMap.set(partnerId, {
-          partner,
-          latestMessage: this.decryptMessageRow(conv.message),
-          unreadCount: unreadMap.get(partnerId) ?? 0
-        });
-      }
-    });
-    return Array.from(conversationMap.values());
-  }
-  async getUnreadMessageCount(userId) {
-    const [row] = await db.select({ count: sql3`count(*)::int` }).from(messages).where(and(
-      eq(messages.receiverId, userId),
-      eq(messages.isRead, false)
-    ));
-    return row?.count ?? 0;
-  }
-  async markMessagesAsRead(userId, senderId) {
-    await db.update(messages).set({ isRead: true }).where(
-      and(
-        eq(messages.receiverId, userId),
-        eq(messages.senderId, senderId),
-        eq(messages.isRead, false)
-      )
-    );
-  }
-  // Notification methods
-  async createNotification(userId, title, content, type, actionUrl) {
-    const [notification] = await db.insert(notifications).values({
-      userId,
-      title,
-      content,
-      type,
-      actionUrl
-    }).returning();
-    return notification;
-  }
-  async getUserNotifications(userId, unreadOnly = false) {
-    const conditions = [eq(notifications.userId, userId)];
-    if (unreadOnly) {
-      conditions.push(eq(notifications.isRead, false));
-    }
-    return await db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt));
-  }
-  async markNotificationAsRead(notificationId) {
-    await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, notificationId));
-  }
-  async markAllNotificationsAsRead(userId) {
-    await db.update(notifications).set({ isRead: true }).where(
-      and(
-        eq(notifications.userId, userId),
-        eq(notifications.isRead, false)
-      )
-    );
-  }
-  // Negotiation methods
-  async getNegotiations(userId) {
-    return await db.select().from(negotiations).where(
-      or(
-        eq(negotiations.createdBy, userId),
-        sql3`${userId} = ANY(${negotiations.participants})`
-      )
-    ).orderBy(desc(negotiations.createdAt));
-  }
-  async getNegotiation(id) {
-    const [negotiation] = await db.select().from(negotiations).where(eq(negotiations.id, id));
-    return negotiation;
-  }
-  async createNegotiation(negotiationData) {
-    const [negotiation] = await db.insert(negotiations).values(negotiationData).returning();
-    return negotiation;
-  }
-  async updateNegotiation(id, updates) {
-    const [negotiation] = await db.update(negotiations).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(negotiations.id, id)).returning();
-    return negotiation;
-  }
-  async getNegotiationConversations(negotiationId) {
-    return await db.select().from(negotiationConversations).where(eq(negotiationConversations.negotiationId, negotiationId)).orderBy(desc(negotiationConversations.createdAt));
-  }
-  async addNegotiationConversation(conversationData) {
-    const [conversation] = await db.insert(negotiationConversations).values(conversationData).returning();
-    return conversation;
-  }
-  // ─── OWNERSHIP LEDGER ────────────────────────────────────────────────────
-  async createSongAsset(asset) {
-    const [newAsset] = await db.insert(songAssets).values(asset).returning();
-    return newAsset;
-  }
-  async getSongAssets(userId) {
-    return await db.select().from(songAssets).where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, "active"))).orderBy(desc(songAssets.createdAt));
-  }
-  async getSongAsset(id) {
-    const [asset] = await db.select().from(songAssets).where(eq(songAssets.id, id));
-    return asset;
-  }
-  async getSongAssetBySlSongId(slSongId) {
-    const [asset] = await db.select().from(songAssets).where(eq(songAssets.slSongId, slSongId));
-    return asset;
-  }
-  async getSongAssetsByContract(contractId) {
-    return await db.select().from(songAssets).where(eq(songAssets.contractId, contractId)).orderBy(desc(songAssets.createdAt));
-  }
-  async updateSongAsset(id, updates) {
-    const [asset] = await db.update(songAssets).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(songAssets.id, id)).returning();
-    return asset;
-  }
-  async createOwnershipRecord(record) {
-    const [newRecord] = await db.insert(ownershipRecords).values(record).returning();
-    return newRecord;
-  }
-  // Return the latest version of each stakeholder's ownership for a given asset
-  async getCurrentOwnership(assetId) {
-    const latestVersion = await db.select({ maxVersion: max(ownershipRecords.version) }).from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId));
-    const maxV = latestVersion[0]?.maxVersion ?? 0;
-    if (!maxV) return [];
-    return await db.select().from(ownershipRecords).where(and(eq(ownershipRecords.assetId, assetId), eq(ownershipRecords.version, maxV))).orderBy(desc(ownershipRecords.ownershipPercentage));
-  }
-  // Current ownership joined with stakeholder display names/emails (for exports, CWR, UI)
-  async getCurrentOwnershipWithNames(assetId) {
-    const ownership = await this.getCurrentOwnership(assetId);
-    const rows = await Promise.all(
-      ownership.map(async (o) => {
-        const user = await this.getUser(o.userId).catch(() => void 0);
-        const name = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || user.email || o.userId.slice(0, 8) : o.userId.slice(0, 8);
-        return { ...o, name, email: user?.email ?? null };
-      })
-    );
-    return rows;
-  }
-  // Full immutable audit trail — every version of every ownership change
-  async getOwnershipHistory(assetId) {
-    return await db.select().from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId)).orderBy(desc(ownershipRecords.version), desc(ownershipRecords.createdAt));
-  }
-  // Append a new version for all stakeholders (never overwrites)
-  async updateOwnershipSplit(assetId, splits, changedBy, changeReason) {
-    const total = splits.reduce((sum, s) => sum + parseFloat(s.ownershipPercentage), 0);
-    if (Math.abs(total - 100) > 0.01) {
-      throw new Error(`Ownership must total 100%. Current total: ${total.toFixed(2)}%`);
-    }
-    const latestVersion = await db.select({ maxVersion: max(ownershipRecords.version) }).from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId));
-    const nextVersion = (latestVersion[0]?.maxVersion ?? 0) + 1;
-    const newRecords = splits.map((s) => ({
-      assetId,
-      userId: s.userId,
-      ownershipPercentage: s.ownershipPercentage,
-      role: s.role,
-      version: nextVersion,
-      changeReason: changeReason ?? null,
-      createdBy: changedBy,
-      effectiveAt: /* @__PURE__ */ new Date()
-    }));
-    return await db.insert(ownershipRecords).values(newRecords).returning();
-  }
-  // ─── REVENUE & PAYOUTS ────────────────────────────────────────────────────
-  async recordRevenueEvent(event) {
-    const [newEvent] = await db.insert(revenueEvents).values(event).returning();
-    return newEvent;
-  }
-  async getRevenueEvents(assetId) {
-    return await db.select().from(revenueEvents).where(eq(revenueEvents.assetId, assetId)).orderBy(desc(revenueEvents.createdAt));
-  }
-  async getPayoutRecordsByRevenueEvent(revenueEventId) {
-    return await db.select().from(payoutRecords).where(eq(payoutRecords.revenueEventId, revenueEventId)).orderBy(desc(payoutRecords.createdAt));
-  }
-  // Calculate (but do not execute) payout splits based on current ownership
-  async calculatePayouts(revenueEventId) {
-    const [event] = await db.select().from(revenueEvents).where(eq(revenueEvents.id, revenueEventId));
-    if (!event) throw new Error("Revenue event not found");
-    const ownership = await this.getCurrentOwnership(event.assetId);
-    const totalAmount = parseFloat(event.amount);
-    return ownership.map((o) => ({
-      id: "preview",
-      revenueEventId,
-      userId: o.userId,
-      assetId: event.assetId,
-      ownershipPercentage: o.ownershipPercentage,
-      amount: (parseFloat(o.ownershipPercentage) / 100 * totalAmount).toFixed(2),
-      currency: event.currency ?? "USD",
-      status: "pending",
-      stripeTransferId: null,
-      processedAt: null,
-      createdAt: /* @__PURE__ */ new Date()
-    }));
-  }
-  // Execute payouts — persist payout records and update user balances
-  async executePayouts(revenueEventId) {
-    const previews = await this.calculatePayouts(revenueEventId);
-    if (!previews.length) return [];
-    const toInsert = previews.map(({ id: _id, ...rest }) => rest);
-    const saved = await db.insert(payoutRecords).values(toInsert).returning();
-    for (const payout of saved) {
-      const amount = parseFloat(payout.amount);
-      const existing = await db.select().from(userBalances).where(eq(userBalances.userId, payout.userId));
-      if (existing.length > 0) {
-        const current = existing[0];
-        await db.update(userBalances).set({
-          totalEarned: (parseFloat(current.totalEarned) + amount).toFixed(2),
-          pendingBalance: (parseFloat(current.pendingBalance) + amount).toFixed(2),
+      async updateUser(id, updates) {
+        const [user] = await db.update(users).set({
+          ...updates,
           updatedAt: /* @__PURE__ */ new Date()
-        }).where(eq(userBalances.userId, payout.userId));
-      } else {
-        await db.insert(userBalances).values({
-          userId: payout.userId,
-          totalEarned: amount.toFixed(2),
-          totalPaid: "0",
-          pendingBalance: amount.toFixed(2),
-          currency: payout.currency ?? "USD",
+        }).where(eq(users.id, id)).returning();
+        return user;
+      }
+      async updateUserStripeInfo(userId, stripeCustomerId, stripeSubscriptionId) {
+        const [user] = await db.update(users).set({
+          stripeCustomerId,
+          stripeSubscriptionId,
           updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(users.id, userId)).returning();
+        return user;
+      }
+      // Contract template operations
+      async getContractTemplates() {
+        return await db.select().from(contractTemplates).where(eq(contractTemplates.isActive, true)).orderBy(contractTemplates.name);
+      }
+      async getContractTemplate(id) {
+        const [template] = await db.select().from(contractTemplates).where(eq(contractTemplates.id, id));
+        return template;
+      }
+      async createContractTemplate(template) {
+        const [newTemplate] = await db.insert(contractTemplates).values(template).returning();
+        return newTemplate;
+      }
+      // Contract operations
+      async getContracts(userId) {
+        return await db.select().from(contracts).where(
+          or(
+            eq(contracts.createdBy, userId)
+            // TODO: Add join for collaborators
+          )
+        ).orderBy(desc(contracts.updatedAt));
+      }
+      async getContract(id) {
+        const [contract] = await db.select().from(contracts).where(eq(contracts.id, id));
+        return contract;
+      }
+      async createContract(contract) {
+        const [newContract] = await db.insert(contracts).values(contract).returning();
+        return newContract;
+      }
+      async updateContract(id, updates) {
+        const [updatedContract] = await db.update(contracts).set({
+          ...updates,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(contracts.id, id)).returning();
+        return updatedContract;
+      }
+      async deleteContract(id) {
+        await db.delete(contracts).where(eq(contracts.id, id));
+      }
+      // Contract collaborator operations
+      async getContractCollaborators(contractId) {
+        return await db.select().from(contractCollaborators).where(eq(contractCollaborators.contractId, contractId));
+      }
+      async addContractCollaborator(collaborator) {
+        const [newCollaborator] = await db.insert(contractCollaborators).values(collaborator).returning();
+        return newCollaborator;
+      }
+      async updateCollaboratorStatus(id, status) {
+        const [updatedCollaborator] = await db.update(contractCollaborators).set({
+          status,
+          signedAt: status === "signed" ? /* @__PURE__ */ new Date() : null
+        }).where(eq(contractCollaborators.id, id)).returning();
+        return updatedCollaborator;
+      }
+      async updateContractCollaborator(id, updates) {
+        const [updated] = await db.update(contractCollaborators).set(updates).where(eq(contractCollaborators.id, id)).returning();
+        return updated;
+      }
+      async deleteContractCollaborator(id) {
+        await db.delete(contractCollaborators).where(eq(contractCollaborators.id, id));
+      }
+      // Contract signature operations
+      async createContractSignature(signature) {
+        const [newSignature] = await db.insert(contractSignatures).values(signature).returning();
+        return newSignature;
+      }
+      async getContractSignatures(contractId) {
+        return await db.select().from(contractSignatures).where(eq(contractSignatures.contractId, contractId));
+      }
+      // Analytics operations
+      async getAnalyticsData(userId) {
+        const now = /* @__PURE__ */ new Date();
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1e3);
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3);
+        const today = new Date(now.toDateString());
+        const isUserScoped = !!userId;
+        let totalUsers, activeUsers, newUsersToday, userGrowthRate;
+        if (isUserScoped) {
+          totalUsers = 1;
+          const userActivityResult = await db.select({ count: count() }).from(userActivity).where(
+            and(
+              eq(userActivity.userId, userId),
+              gte(userActivity.createdAt, sevenDaysAgo)
+            )
+          );
+          activeUsers = userActivityResult[0]?.count > 0 ? 1 : 0;
+          const userCreatedResult = await db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId));
+          const userCreatedAt = userCreatedResult[0]?.createdAt;
+          newUsersToday = userCreatedAt && userCreatedAt >= today ? 1 : 0;
+          userGrowthRate = 0;
+        } else {
+          const totalUsersResult = await db.select({ count: count() }).from(users);
+          totalUsers = totalUsersResult[0]?.count || 0;
+          const activeUsersResult = await db.selectDistinct({ userId: userActivity.userId }).from(userActivity).where(gte(userActivity.createdAt, sevenDaysAgo));
+          activeUsers = activeUsersResult.length;
+          const newUsersTodayResult = await db.select({ count: count() }).from(users).where(gte(users.createdAt, today));
+          newUsersToday = newUsersTodayResult[0]?.count || 0;
+          const previousMonth = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1e3);
+          const startOfCurrentMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3);
+          const previousMonthResult = await db.select({ count: count() }).from(users).where(
+            and(
+              gte(users.createdAt, previousMonth),
+              lt(users.createdAt, startOfCurrentMonth)
+            )
+          );
+          const previousMonthUsers = previousMonthResult[0]?.count || 0;
+          const currentMonthResult = await db.select({ count: count() }).from(users).where(gte(users.createdAt, startOfCurrentMonth));
+          const currentMonthUsers = currentMonthResult[0]?.count || 0;
+          userGrowthRate = previousMonthUsers > 0 ? Math.round((currentMonthUsers - previousMonthUsers) / previousMonthUsers * 100) : 0;
+        }
+        const thirtyDaysAgoStr = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1e3).toISOString().split("T")[0];
+        let dailyLoginsData, profileViewsData;
+        if (isUserScoped) {
+          dailyLoginsData = await db.select({
+            date: sql3`DATE(${userActivity.createdAt})`,
+            logins: count()
+          }).from(userActivity).where(
+            and(
+              eq(userActivity.userId, userId),
+              eq(userActivity.activityType, "login"),
+              gte(userActivity.createdAt, thirtyDaysAgo)
+            )
+          ).groupBy(sql3`DATE(${userActivity.createdAt})`).orderBy(sql3`DATE(${userActivity.createdAt})`);
+          profileViewsData = await db.select({
+            date: sql3`DATE(${profileViews.viewedAt})`,
+            views: count()
+          }).from(profileViews).where(
+            and(
+              eq(profileViews.profileId, userId),
+              gte(profileViews.viewedAt, thirtyDaysAgo)
+            )
+          ).groupBy(sql3`DATE(${profileViews.viewedAt})`).orderBy(sql3`DATE(${profileViews.viewedAt})`);
+        } else {
+          dailyLoginsData = await db.select({
+            date: sql3`DATE(${userActivity.createdAt})`,
+            logins: sql3`COUNT(DISTINCT ${userActivity.userId})`
+          }).from(userActivity).where(
+            and(
+              eq(userActivity.activityType, "login"),
+              gte(userActivity.createdAt, thirtyDaysAgo)
+            )
+          ).groupBy(sql3`DATE(${userActivity.createdAt})`).orderBy(sql3`DATE(${userActivity.createdAt})`);
+          profileViewsData = await db.select({
+            date: sql3`DATE(${profileViews.viewedAt})`,
+            views: count()
+          }).from(profileViews).where(gte(profileViews.viewedAt, thirtyDaysAgo)).groupBy(sql3`DATE(${profileViews.viewedAt})`).orderBy(sql3`DATE(${profileViews.viewedAt})`);
+        }
+        const dailyLoginsMap = new Map(dailyLoginsData.map((d) => [d.date, Number(d.logins)]));
+        const profileViewsMap = new Map(profileViewsData.map((d) => [d.date, Number(d.views)]));
+        const dailyLogins = [];
+        const profileViewsDaily = [];
+        for (let i = 29; i >= 0; i--) {
+          const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1e3);
+          const dateStr = date.toISOString().split("T")[0];
+          dailyLogins.push({
+            date: dateStr,
+            logins: dailyLoginsMap.get(dateStr) || 0
+          });
+          profileViewsDaily.push({
+            date: dateStr,
+            views: profileViewsMap.get(dateStr) || 0
+          });
+        }
+        const usersWithProfiles = await db.select({
+          id: users.id,
+          bio: users.bio,
+          skills: users.skills,
+          profileImageUrl: users.profileImageUrl,
+          contactInfo: users.contactInfo
+        }).from(users);
+        const profileCompleteness = [
+          { range: "0-25%", count: 0, color: "#ff6b6b" },
+          { range: "26-50%", count: 0, color: "#feca57" },
+          { range: "51-75%", count: 0, color: "#48dbfb" },
+          { range: "76-100%", count: 0, color: "#1dd1a1" }
+        ];
+        usersWithProfiles.forEach((user) => {
+          let completeness = 0;
+          if (user.bio) completeness += 25;
+          if (user.skills && user.skills.length > 0) completeness += 25;
+          if (user.profileImageUrl) completeness += 25;
+          if (user.contactInfo && user.contactInfo?.phone) completeness += 25;
+          if (completeness <= 25) profileCompleteness[0].count++;
+          else if (completeness <= 50) profileCompleteness[1].count++;
+          else if (completeness <= 75) profileCompleteness[2].count++;
+          else profileCompleteness[3].count++;
+        });
+        const skillCounts = {};
+        usersWithProfiles.forEach((user) => {
+          if (user.skills && Array.isArray(user.skills)) {
+            user.skills.forEach((skill) => {
+              skillCounts[skill] = (skillCounts[skill] || 0) + 1;
+            });
+          }
+        });
+        const topSkills = Object.entries(skillCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([skill, count2]) => ({ skill, count: count2 }));
+        const locationCounts = {};
+        usersWithProfiles.forEach((user) => {
+          if (user.contactInfo && user.contactInfo?.location) {
+            const location = user.contactInfo.location;
+            locationCounts[location] = (locationCounts[location] || 0) + 1;
+          }
+        });
+        const usersByLocation = Object.entries(locationCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([location, count2]) => ({ location, count: count2 }));
+        return {
+          userStats: {
+            totalUsers,
+            activeUsers,
+            newUsersToday,
+            userGrowthRate
+          },
+          activityStats: {
+            dailyLogins,
+            profileViews: profileViewsDaily,
+            messagesSent: []
+            // TODO: Implement when messaging system is built
+          },
+          userEngagement: {
+            profileCompleteness,
+            topSkills,
+            usersByLocation
+          }
+        };
+      }
+      async trackUserActivity(userId, activityType, activityData) {
+        await db.insert(userActivity).values({
+          userId,
+          activityType,
+          activityData: activityData ? activityData : null
         });
       }
-    }
-    return saved;
-  }
-  async getUserEarnings(userId) {
-    const [balance] = await db.select().from(userBalances).where(eq(userBalances.userId, userId));
-    return balance ?? null;
-  }
-  async getUserPayouts(userId) {
-    return await db.select().from(payoutRecords).where(eq(payoutRecords.userId, userId)).orderBy(desc(payoutRecords.createdAt));
-  }
-  // Confirmation methods
-  async getConfirmationByToken(token) {
-    const [confirmation] = await db.select().from(confirmations).where(eq(confirmations.token, token));
-    return confirmation;
-  }
-  async getConfirmationsByContract(contractId) {
-    return await db.select().from(confirmations).where(eq(confirmations.contractId, contractId));
-  }
-  async createConfirmation(confirmation) {
-    const [newConfirmation] = await db.insert(confirmations).values(confirmation).returning();
-    return newConfirmation;
-  }
-  async updateConfirmation(id, updates) {
-    const [updatedConfirmation] = await db.update(confirmations).set({
-      ...updates,
-      updatedAt: /* @__PURE__ */ new Date()
-    }).where(eq(confirmations.id, id)).returning();
-    return updatedConfirmation;
-  }
-  // ─── ORGANIZATIONS — enterprise multi-tenant workspaces ───────────────────
-  async getOrganizationsForUser(userId) {
-    const rows = await db.select({ organization: organizations }).from(organizationMembers).innerJoin(organizations, eq(organizationMembers.organizationId, organizations.id)).where(eq(organizationMembers.userId, userId)).orderBy(desc(organizations.createdAt));
-    return rows.map((r) => r.organization);
-  }
-  async getOrganization(id) {
-    const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
-    return org;
-  }
-  async getOrganizationBySlOrgId(slOrgId) {
-    const [org] = await db.select().from(organizations).where(eq(organizations.slOrgId, slOrgId));
-    return org;
-  }
-  async createOrganization(org) {
-    const [newOrg] = await db.insert(organizations).values(org).returning();
-    return newOrg;
-  }
-  async updateOrganization(id, updates) {
-    const [updated] = await db.update(organizations).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(organizations.id, id)).returning();
-    return updated;
-  }
-  // Organization membership (RBAC)
-  async getOrganizationMembers(organizationId) {
-    return await db.select().from(organizationMembers).where(eq(organizationMembers.organizationId, organizationId)).orderBy(organizationMembers.createdAt);
-  }
-  async getOrganizationMember(organizationId, userId) {
-    const [member] = await db.select().from(organizationMembers).where(
-      and(
-        eq(organizationMembers.organizationId, organizationId),
-        eq(organizationMembers.userId, userId)
-      )
-    );
-    return member;
-  }
-  async addOrganizationMember(member) {
-    const [newMember] = await db.insert(organizationMembers).values(member).returning();
-    return newMember;
-  }
-  async updateOrganizationMemberRole(id, role) {
-    const [updated] = await db.update(organizationMembers).set({ role }).where(eq(organizationMembers.id, id)).returning();
-    return updated;
-  }
-  async removeOrganizationMember(id) {
-    await db.delete(organizationMembers).where(eq(organizationMembers.id, id));
-  }
-  // Organization-scoped API keys
-  async getOrganizationApiKeys(organizationId) {
-    return await db.select().from(organizationApiKeys).where(eq(organizationApiKeys.organizationId, organizationId)).orderBy(desc(organizationApiKeys.createdAt));
-  }
-  async createOrganizationApiKey(key) {
-    const [newKey] = await db.insert(organizationApiKeys).values(key).returning();
-    return newKey;
-  }
-  async revokeOrganizationApiKey(id, organizationId) {
-    await db.update(organizationApiKeys).set({ revokedAt: /* @__PURE__ */ new Date() }).where(
-      and(
-        eq(organizationApiKeys.id, id),
-        eq(organizationApiKeys.organizationId, organizationId)
-      )
-    );
-  }
-  // ─── GLOBAL RIGHTS FRAMEWORK ───────────────────────────────────────────────
-  async getRightsOrganizations(territory) {
-    const query = db.select().from(rightsOrganizations);
-    if (territory) {
-      return await query.where(eq(rightsOrganizations.territory, territory)).orderBy(rightsOrganizations.name);
-    }
-    return await query.orderBy(rightsOrganizations.territory, rightsOrganizations.name);
-  }
-  async getCreators(createdBy) {
-    return await db.select().from(creators).where(eq(creators.createdBy, createdBy)).orderBy(desc(creators.createdAt));
-  }
-  async getCreator(id) {
-    const [creator] = await db.select().from(creators).where(eq(creators.id, id));
-    return creator;
-  }
-  async getCreatorBySlCreatorId(slCreatorId) {
-    const [creator] = await db.select().from(creators).where(eq(creators.slCreatorId, slCreatorId));
-    return creator;
-  }
-  async createCreator(creator) {
-    const [newCreator] = await db.insert(creators).values(creator).returning();
-    return newCreator;
-  }
-  async updateCreator(id, updates) {
-    const [updated] = await db.update(creators).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(creators.id, id)).returning();
-    return updated;
-  }
-  async deleteCreator(id) {
-    await db.delete(creators).where(eq(creators.id, id));
-  }
-  async getCreatorRightsProfile(userId) {
-    const [profile] = await db.select().from(creatorRightsProfiles).where(eq(creatorRightsProfiles.userId, userId));
-    return profile;
-  }
-  async upsertCreatorRightsProfile(userId, profile) {
-    const [updated] = await db.insert(creatorRightsProfiles).values({ ...profile, userId }).onConflictDoUpdate({
-      target: creatorRightsProfiles.userId,
-      set: { ...profile, updatedAt: /* @__PURE__ */ new Date() }
-    }).returning();
-    return updated;
-  }
-  // ─── MASTER VS COMPOSITION RIGHTS ──────────────────────────────────────────
-  async getCompositionAsset(songAssetId) {
-    const [asset] = await db.select().from(compositionAssets).where(eq(compositionAssets.songAssetId, songAssetId));
-    return asset;
-  }
-  async upsertCompositionAsset(songAssetId, data) {
-    const [asset] = await db.insert(compositionAssets).values({ ...data, songAssetId }).onConflictDoUpdate({
-      target: compositionAssets.songAssetId,
-      set: { ...data, updatedAt: /* @__PURE__ */ new Date() }
-    }).returning();
-    return asset;
-  }
-  async getMasterAsset(songAssetId) {
-    const [asset] = await db.select().from(masterAssets).where(eq(masterAssets.songAssetId, songAssetId));
-    return asset;
-  }
-  async upsertMasterAsset(songAssetId, data) {
-    const [asset] = await db.insert(masterAssets).values({ ...data, songAssetId }).onConflictDoUpdate({
-      target: masterAssets.songAssetId,
-      set: { ...data, updatedAt: /* @__PURE__ */ new Date() }
-    }).returning();
-    return asset;
-  }
-  // ─── LICENSING READINESS SYSTEM ────────────────────────────────────────────
-  async getLicenseReadiness(songAssetId) {
-    const [readiness] = await db.select().from(licenseReadiness).where(eq(licenseReadiness.songAssetId, songAssetId));
-    return readiness;
-  }
-  async upsertLicenseReadiness(songAssetId, data) {
-    const [readiness] = await db.insert(licenseReadiness).values({ ...data, songAssetId }).onConflictDoUpdate({
-      target: licenseReadiness.songAssetId,
-      set: { ...data, lastCheckedAt: /* @__PURE__ */ new Date() }
-    }).returning();
-    return readiness;
-  }
-  // ─── RIGHTS CHANGE HISTORY (reuses the existing audit_log table — see
-  // .agents/memory/identity-layer.md for why no separate table was created) ──
-  async getRightsChangeHistory(songAssetId, relatedIds = []) {
-    const ids = [songAssetId, ...relatedIds];
-    const idList = sql3.join(
-      ids.map((id) => sql3`${id}`),
-      sql3`, `
-    );
-    const result = await db.execute(sql3`
+      async trackUserActivitiesBulk(userId, activities) {
+        if (activities.length === 0) return;
+        const activityRecords = activities.map((activity) => ({
+          userId,
+          activityType: activity.activityType,
+          activityData: activity.activityData ? activity.activityData : null
+        }));
+        await db.insert(userActivity).values(activityRecords);
+      }
+      async trackProfileView(viewerId, profileId) {
+        await db.insert(profileViews).values({
+          viewerId,
+          profileId
+        });
+      }
+      // User matching methods
+      async getUserRecommendations(userId, limit = 10) {
+        const currentUser = await this.getUser(userId);
+        if (!currentUser) return [];
+        const allUsers = await db.select().from(users).where(and(
+          eq(users.isActive, true),
+          sql3`${users.id} != ${userId}`
+        ));
+        const recommendations = allUsers.map((user) => {
+          const currentSkills = currentUser.skills || [];
+          const userSkills = user.skills || [];
+          const commonSkills = currentSkills.filter((skill) => userSkills.includes(skill));
+          const skillScore = commonSkills.length / Math.max(currentSkills.length, userSkills.length, 1);
+          const randomScore = Math.random() * 0.3;
+          const matchScore = Math.min(skillScore + randomScore, 1);
+          const matchReason = commonSkills.length > 0 ? `Shared skills: ${commonSkills.slice(0, 3).join(", ")}` : "Similar profile interests";
+          return {
+            ...user,
+            matchScore: Math.round(matchScore * 100) / 100,
+            matchReason
+          };
+        }).sort((a, b) => b.matchScore - a.matchScore).slice(0, limit);
+        return recommendations;
+      }
+      async createUserMatch(userId, matchedUserId, matchScore, matchReason) {
+        const [match] = await db.insert(userMatches).values({
+          userId,
+          matchedUserId,
+          matchScore: matchScore.toString(),
+          matchReason,
+          status: "suggested"
+        }).returning();
+        return match;
+      }
+      async updateMatchStatus(matchId, status) {
+        await db.update(userMatches).set({ status }).where(eq(userMatches.id, matchId));
+      }
+      async getUserMatches(userId, status) {
+        const conditions = [eq(userMatches.userId, userId)];
+        if (status) {
+          conditions.push(eq(userMatches.status, status));
+        }
+        return await db.select({
+          match: userMatches,
+          user: users
+        }).from(userMatches).leftJoin(users, eq(userMatches.matchedUserId, users.id)).where(and(...conditions)).orderBy(desc(userMatches.createdAt));
+      }
+      // Messaging methods
+      async sendMessage(senderId, receiverId, content, messageType = "text") {
+        const encryptedContent = encryptMessageContent(content);
+        const [message] = await db.insert(messages).values({
+          senderId,
+          receiverId,
+          content: encryptedContent,
+          messageType
+        }).returning();
+        await this.trackUserActivity(senderId, "message_sent", { receiverId });
+        return { ...message, content };
+      }
+      decryptMessageRow(row) {
+        return { ...row, content: decryptMessageContent(row.content) };
+      }
+      async getConversation(userId1, userId2, limit = 50) {
+        const rows = await db.select().from(messages).where(
+          or(
+            and(eq(messages.senderId, userId1), eq(messages.receiverId, userId2)),
+            and(eq(messages.senderId, userId2), eq(messages.receiverId, userId1))
+          )
+        ).orderBy(desc(messages.createdAt)).limit(limit);
+        return rows.map((row) => this.decryptMessageRow(row));
+      }
+      async getUserConversations(userId) {
+        const conversations = await db.select({
+          message: messages,
+          sender: {
+            id: sql3`sender.id`,
+            firstName: sql3`sender.first_name`,
+            lastName: sql3`sender.last_name`,
+            profileImageUrl: sql3`sender.profile_image_url`
+          },
+          receiver: {
+            id: sql3`receiver.id`,
+            firstName: sql3`receiver.first_name`,
+            lastName: sql3`receiver.last_name`,
+            profileImageUrl: sql3`receiver.profile_image_url`
+          }
+        }).from(messages).leftJoin(sql3`users AS sender`, sql3`sender.id = ${messages.senderId}`).leftJoin(sql3`users AS receiver`, sql3`receiver.id = ${messages.receiverId}`).where(
+          or(
+            eq(messages.senderId, userId),
+            eq(messages.receiverId, userId)
+          )
+        ).orderBy(desc(messages.createdAt));
+        const unreadRows = await db.select({
+          senderId: messages.senderId,
+          count: sql3`count(*)::int`
+        }).from(messages).where(and(
+          eq(messages.receiverId, userId),
+          eq(messages.isRead, false)
+        )).groupBy(messages.senderId);
+        const unreadMap = new Map(unreadRows.map((r) => [r.senderId, r.count]));
+        const conversationMap = /* @__PURE__ */ new Map();
+        conversations.forEach((conv) => {
+          const partnerId = conv.message.senderId === userId ? conv.message.receiverId : conv.message.senderId;
+          const partner = conv.message.senderId === userId ? conv.receiver : conv.sender;
+          if (!conversationMap.has(partnerId)) {
+            conversationMap.set(partnerId, {
+              partner,
+              latestMessage: this.decryptMessageRow(conv.message),
+              unreadCount: unreadMap.get(partnerId) ?? 0
+            });
+          }
+        });
+        return Array.from(conversationMap.values());
+      }
+      async getUnreadMessageCount(userId) {
+        const [row] = await db.select({ count: sql3`count(*)::int` }).from(messages).where(and(
+          eq(messages.receiverId, userId),
+          eq(messages.isRead, false)
+        ));
+        return row?.count ?? 0;
+      }
+      async markMessagesAsRead(userId, senderId) {
+        await db.update(messages).set({ isRead: true }).where(
+          and(
+            eq(messages.receiverId, userId),
+            eq(messages.senderId, senderId),
+            eq(messages.isRead, false)
+          )
+        );
+      }
+      // Notification methods
+      async createNotification(userId, title, content, type, actionUrl) {
+        const [notification] = await db.insert(notifications).values({
+          userId,
+          title,
+          content,
+          type,
+          actionUrl
+        }).returning();
+        return notification;
+      }
+      async getUserNotifications(userId, unreadOnly = false) {
+        const conditions = [eq(notifications.userId, userId)];
+        if (unreadOnly) {
+          conditions.push(eq(notifications.isRead, false));
+        }
+        return await db.select().from(notifications).where(and(...conditions)).orderBy(desc(notifications.createdAt));
+      }
+      async markNotificationAsRead(notificationId) {
+        await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, notificationId));
+      }
+      async markAllNotificationsAsRead(userId) {
+        await db.update(notifications).set({ isRead: true }).where(
+          and(
+            eq(notifications.userId, userId),
+            eq(notifications.isRead, false)
+          )
+        );
+      }
+      // Negotiation methods
+      async getNegotiations(userId) {
+        return await db.select().from(negotiations).where(
+          or(
+            eq(negotiations.createdBy, userId),
+            sql3`${userId} = ANY(${negotiations.participants})`
+          )
+        ).orderBy(desc(negotiations.createdAt));
+      }
+      async getNegotiation(id) {
+        const [negotiation] = await db.select().from(negotiations).where(eq(negotiations.id, id));
+        return negotiation;
+      }
+      async createNegotiation(negotiationData) {
+        const [negotiation] = await db.insert(negotiations).values(negotiationData).returning();
+        return negotiation;
+      }
+      async updateNegotiation(id, updates) {
+        const [negotiation] = await db.update(negotiations).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(negotiations.id, id)).returning();
+        return negotiation;
+      }
+      async getNegotiationConversations(negotiationId) {
+        return await db.select().from(negotiationConversations).where(eq(negotiationConversations.negotiationId, negotiationId)).orderBy(desc(negotiationConversations.createdAt));
+      }
+      async addNegotiationConversation(conversationData) {
+        const [conversation] = await db.insert(negotiationConversations).values(conversationData).returning();
+        return conversation;
+      }
+      // ─── OWNERSHIP LEDGER ────────────────────────────────────────────────────
+      async createSongAsset(asset) {
+        const [newAsset] = await db.insert(songAssets).values(asset).returning();
+        return newAsset;
+      }
+      async getSongAssets(userId) {
+        return await db.select().from(songAssets).where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, "active"))).orderBy(desc(songAssets.createdAt));
+      }
+      async getSongAsset(id) {
+        const [asset] = await db.select().from(songAssets).where(eq(songAssets.id, id));
+        return asset;
+      }
+      async getSongAssetBySlSongId(slSongId) {
+        const [asset] = await db.select().from(songAssets).where(eq(songAssets.slSongId, slSongId));
+        return asset;
+      }
+      async getSongAssetsByContract(contractId) {
+        return await db.select().from(songAssets).where(eq(songAssets.contractId, contractId)).orderBy(desc(songAssets.createdAt));
+      }
+      async updateSongAsset(id, updates) {
+        const [asset] = await db.update(songAssets).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(songAssets.id, id)).returning();
+        return asset;
+      }
+      async createOwnershipRecord(record) {
+        const [newRecord] = await db.insert(ownershipRecords).values(record).returning();
+        return newRecord;
+      }
+      // Return the latest version of each stakeholder's ownership for a given asset
+      async getCurrentOwnership(assetId) {
+        const latestVersion = await db.select({ maxVersion: max(ownershipRecords.version) }).from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId));
+        const maxV = latestVersion[0]?.maxVersion ?? 0;
+        if (!maxV) return [];
+        return await db.select().from(ownershipRecords).where(and(eq(ownershipRecords.assetId, assetId), eq(ownershipRecords.version, maxV))).orderBy(desc(ownershipRecords.ownershipPercentage));
+      }
+      // Current ownership joined with stakeholder display names/emails (for exports, CWR, UI)
+      async getCurrentOwnershipWithNames(assetId) {
+        const ownership = await this.getCurrentOwnership(assetId);
+        const rows = await Promise.all(
+          ownership.map(async (o) => {
+            const user = await this.getUser(o.userId).catch(() => void 0);
+            const name = user ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim() || user.email || o.userId.slice(0, 8) : o.userId.slice(0, 8);
+            return { ...o, name, email: user?.email ?? null };
+          })
+        );
+        return rows;
+      }
+      // Full immutable audit trail — every version of every ownership change
+      async getOwnershipHistory(assetId) {
+        return await db.select().from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId)).orderBy(desc(ownershipRecords.version), desc(ownershipRecords.createdAt));
+      }
+      // Append a new version for all stakeholders (never overwrites)
+      async updateOwnershipSplit(assetId, splits, changedBy, changeReason) {
+        const total = splits.reduce((sum, s) => sum + parseFloat(s.ownershipPercentage), 0);
+        if (Math.abs(total - 100) > 0.01) {
+          throw new Error(`Ownership must total 100%. Current total: ${total.toFixed(2)}%`);
+        }
+        const latestVersion = await db.select({ maxVersion: max(ownershipRecords.version) }).from(ownershipRecords).where(eq(ownershipRecords.assetId, assetId));
+        const nextVersion = (latestVersion[0]?.maxVersion ?? 0) + 1;
+        const newRecords = splits.map((s) => ({
+          assetId,
+          userId: s.userId,
+          ownershipPercentage: s.ownershipPercentage,
+          role: s.role,
+          version: nextVersion,
+          changeReason: changeReason ?? null,
+          createdBy: changedBy,
+          effectiveAt: /* @__PURE__ */ new Date()
+        }));
+        return await db.insert(ownershipRecords).values(newRecords).returning();
+      }
+      // ─── REVENUE & PAYOUTS ────────────────────────────────────────────────────
+      async recordRevenueEvent(event) {
+        const [newEvent] = await db.insert(revenueEvents).values(event).returning();
+        return newEvent;
+      }
+      async getRevenueEvents(assetId) {
+        return await db.select().from(revenueEvents).where(eq(revenueEvents.assetId, assetId)).orderBy(desc(revenueEvents.createdAt));
+      }
+      async getPayoutRecordsByRevenueEvent(revenueEventId) {
+        return await db.select().from(payoutRecords).where(eq(payoutRecords.revenueEventId, revenueEventId)).orderBy(desc(payoutRecords.createdAt));
+      }
+      // Calculate (but do not execute) payout splits based on current ownership
+      async calculatePayouts(revenueEventId) {
+        const [event] = await db.select().from(revenueEvents).where(eq(revenueEvents.id, revenueEventId));
+        if (!event) throw new Error("Revenue event not found");
+        const ownership = await this.getCurrentOwnership(event.assetId);
+        const totalAmount = parseFloat(event.amount);
+        return ownership.map((o) => ({
+          id: "preview",
+          revenueEventId,
+          userId: o.userId,
+          assetId: event.assetId,
+          ownershipPercentage: o.ownershipPercentage,
+          amount: (parseFloat(o.ownershipPercentage) / 100 * totalAmount).toFixed(2),
+          currency: event.currency ?? "USD",
+          status: "pending",
+          stripeTransferId: null,
+          processedAt: null,
+          createdAt: /* @__PURE__ */ new Date()
+        }));
+      }
+      // Execute payouts — persist payout records and update user balances
+      async executePayouts(revenueEventId) {
+        const previews = await this.calculatePayouts(revenueEventId);
+        if (!previews.length) return [];
+        const toInsert = previews.map(({ id: _id, ...rest }) => rest);
+        const saved = await db.insert(payoutRecords).values(toInsert).returning();
+        for (const payout of saved) {
+          const amount = parseFloat(payout.amount);
+          const existing = await db.select().from(userBalances).where(eq(userBalances.userId, payout.userId));
+          if (existing.length > 0) {
+            const current = existing[0];
+            await db.update(userBalances).set({
+              totalEarned: (parseFloat(current.totalEarned) + amount).toFixed(2),
+              pendingBalance: (parseFloat(current.pendingBalance) + amount).toFixed(2),
+              updatedAt: /* @__PURE__ */ new Date()
+            }).where(eq(userBalances.userId, payout.userId));
+          } else {
+            await db.insert(userBalances).values({
+              userId: payout.userId,
+              totalEarned: amount.toFixed(2),
+              totalPaid: "0",
+              pendingBalance: amount.toFixed(2),
+              currency: payout.currency ?? "USD",
+              updatedAt: /* @__PURE__ */ new Date()
+            });
+          }
+        }
+        return saved;
+      }
+      async getUserEarnings(userId) {
+        const [balance] = await db.select().from(userBalances).where(eq(userBalances.userId, userId));
+        return balance ?? null;
+      }
+      async getUserPayouts(userId) {
+        return await db.select().from(payoutRecords).where(eq(payoutRecords.userId, userId)).orderBy(desc(payoutRecords.createdAt));
+      }
+      // Confirmation methods
+      async getConfirmationByToken(token) {
+        const [confirmation] = await db.select().from(confirmations).where(eq(confirmations.token, token));
+        return confirmation;
+      }
+      async getConfirmationsByContract(contractId) {
+        return await db.select().from(confirmations).where(eq(confirmations.contractId, contractId));
+      }
+      async createConfirmation(confirmation) {
+        const [newConfirmation] = await db.insert(confirmations).values(confirmation).returning();
+        return newConfirmation;
+      }
+      async updateConfirmation(id, updates) {
+        const [updatedConfirmation] = await db.update(confirmations).set({
+          ...updates,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(confirmations.id, id)).returning();
+        return updatedConfirmation;
+      }
+      // ─── ORGANIZATIONS — enterprise multi-tenant workspaces ───────────────────
+      async getOrganizationsForUser(userId) {
+        const rows = await db.select({ organization: organizations }).from(organizationMembers).innerJoin(organizations, eq(organizationMembers.organizationId, organizations.id)).where(eq(organizationMembers.userId, userId)).orderBy(desc(organizations.createdAt));
+        return rows.map((r) => r.organization);
+      }
+      async getOrganization(id) {
+        const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
+        return org;
+      }
+      async getOrganizationBySlOrgId(slOrgId) {
+        const [org] = await db.select().from(organizations).where(eq(organizations.slOrgId, slOrgId));
+        return org;
+      }
+      async createOrganization(org) {
+        const [newOrg] = await db.insert(organizations).values(org).returning();
+        return newOrg;
+      }
+      async updateOrganization(id, updates) {
+        const [updated] = await db.update(organizations).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(organizations.id, id)).returning();
+        return updated;
+      }
+      // Organization membership (RBAC)
+      async getOrganizationMembers(organizationId) {
+        return await db.select().from(organizationMembers).where(eq(organizationMembers.organizationId, organizationId)).orderBy(organizationMembers.createdAt);
+      }
+      async getOrganizationMember(organizationId, userId) {
+        const [member] = await db.select().from(organizationMembers).where(
+          and(
+            eq(organizationMembers.organizationId, organizationId),
+            eq(organizationMembers.userId, userId)
+          )
+        );
+        return member;
+      }
+      async addOrganizationMember(member) {
+        const [newMember] = await db.insert(organizationMembers).values(member).returning();
+        return newMember;
+      }
+      async updateOrganizationMemberRole(id, role) {
+        const [updated] = await db.update(organizationMembers).set({ role }).where(eq(organizationMembers.id, id)).returning();
+        return updated;
+      }
+      async removeOrganizationMember(id) {
+        await db.delete(organizationMembers).where(eq(organizationMembers.id, id));
+      }
+      // Organization-scoped API keys
+      async getOrganizationApiKeys(organizationId) {
+        return await db.select().from(organizationApiKeys).where(eq(organizationApiKeys.organizationId, organizationId)).orderBy(desc(organizationApiKeys.createdAt));
+      }
+      async createOrganizationApiKey(key) {
+        const [newKey] = await db.insert(organizationApiKeys).values(key).returning();
+        return newKey;
+      }
+      async revokeOrganizationApiKey(id, organizationId) {
+        await db.update(organizationApiKeys).set({ revokedAt: /* @__PURE__ */ new Date() }).where(
+          and(
+            eq(organizationApiKeys.id, id),
+            eq(organizationApiKeys.organizationId, organizationId)
+          )
+        );
+      }
+      // ─── GLOBAL RIGHTS FRAMEWORK ───────────────────────────────────────────────
+      async getRightsOrganizations(territory) {
+        const query = db.select().from(rightsOrganizations);
+        if (territory) {
+          return await query.where(eq(rightsOrganizations.territory, territory)).orderBy(rightsOrganizations.name);
+        }
+        return await query.orderBy(rightsOrganizations.territory, rightsOrganizations.name);
+      }
+      async getCreators(createdBy) {
+        return await db.select().from(creators).where(eq(creators.createdBy, createdBy)).orderBy(desc(creators.createdAt));
+      }
+      async getCreator(id) {
+        const [creator] = await db.select().from(creators).where(eq(creators.id, id));
+        return creator;
+      }
+      async getCreatorBySlCreatorId(slCreatorId) {
+        const [creator] = await db.select().from(creators).where(eq(creators.slCreatorId, slCreatorId));
+        return creator;
+      }
+      async createCreator(creator) {
+        const [newCreator] = await db.insert(creators).values(creator).returning();
+        return newCreator;
+      }
+      async updateCreator(id, updates) {
+        const [updated] = await db.update(creators).set({ ...updates, updatedAt: /* @__PURE__ */ new Date() }).where(eq(creators.id, id)).returning();
+        return updated;
+      }
+      async deleteCreator(id) {
+        await db.delete(creators).where(eq(creators.id, id));
+      }
+      async getCreatorRightsProfile(userId) {
+        const [profile] = await db.select().from(creatorRightsProfiles).where(eq(creatorRightsProfiles.userId, userId));
+        return profile;
+      }
+      async upsertCreatorRightsProfile(userId, profile) {
+        const [updated] = await db.insert(creatorRightsProfiles).values({ ...profile, userId }).onConflictDoUpdate({
+          target: creatorRightsProfiles.userId,
+          set: { ...profile, updatedAt: /* @__PURE__ */ new Date() }
+        }).returning();
+        return updated;
+      }
+      // ─── MASTER VS COMPOSITION RIGHTS ──────────────────────────────────────────
+      async getCompositionAsset(songAssetId) {
+        const [asset] = await db.select().from(compositionAssets).where(eq(compositionAssets.songAssetId, songAssetId));
+        return asset;
+      }
+      async upsertCompositionAsset(songAssetId, data) {
+        const [asset] = await db.insert(compositionAssets).values({ ...data, songAssetId }).onConflictDoUpdate({
+          target: compositionAssets.songAssetId,
+          set: { ...data, updatedAt: /* @__PURE__ */ new Date() }
+        }).returning();
+        return asset;
+      }
+      async getMasterAsset(songAssetId) {
+        const [asset] = await db.select().from(masterAssets).where(eq(masterAssets.songAssetId, songAssetId));
+        return asset;
+      }
+      async upsertMasterAsset(songAssetId, data) {
+        const [asset] = await db.insert(masterAssets).values({ ...data, songAssetId }).onConflictDoUpdate({
+          target: masterAssets.songAssetId,
+          set: { ...data, updatedAt: /* @__PURE__ */ new Date() }
+        }).returning();
+        return asset;
+      }
+      // ─── LICENSING READINESS SYSTEM ────────────────────────────────────────────
+      async getLicenseReadiness(songAssetId) {
+        const [readiness] = await db.select().from(licenseReadiness).where(eq(licenseReadiness.songAssetId, songAssetId));
+        return readiness;
+      }
+      async upsertLicenseReadiness(songAssetId, data) {
+        const [readiness] = await db.insert(licenseReadiness).values({ ...data, songAssetId }).onConflictDoUpdate({
+          target: licenseReadiness.songAssetId,
+          set: { ...data, lastCheckedAt: /* @__PURE__ */ new Date() }
+        }).returning();
+        return readiness;
+      }
+      // ─── RIGHTS CHANGE HISTORY (reuses the existing audit_log table — see
+      // .agents/memory/identity-layer.md for why no separate table was created) ──
+      async getRightsChangeHistory(songAssetId, relatedIds = []) {
+        const ids = [songAssetId, ...relatedIds];
+        const idList = sql3.join(
+          ids.map((id) => sql3`${id}`),
+          sql3`, `
+        );
+        const result = await db.execute(sql3`
       SELECT id, user_id, action, resource_type, resource_id, before_state, after_state, created_at
       FROM audit_log
       WHERE resource_id IN (${idList})
@@ -2340,56 +2350,78 @@ var DatabaseStorage = class {
       ORDER BY created_at DESC
       LIMIT 100
     `);
-    return result.rows;
-  }
-  // ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE (Priority 1.1) ───────────────
-  async getLatestLegalDocument(docType) {
-    const [doc] = await db.select().from(legalDocuments).where(eq(legalDocuments.docType, docType)).orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt)).limit(1);
-    return doc;
-  }
-  async getLegalDocumentHistory(docType) {
-    return await db.select().from(legalDocuments).where(eq(legalDocuments.docType, docType)).orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt));
-  }
-  async createLegalDocument(doc) {
-    const [created] = await db.insert(legalDocuments).values(doc).returning();
-    return created;
-  }
-  async getLegalAcceptance(userId, docType) {
-    const [acceptance] = await db.select().from(legalAcceptances).where(and(eq(legalAcceptances.userId, userId), eq(legalAcceptances.docType, docType))).orderBy(desc(legalAcceptances.acceptedAt)).limit(1);
-    return acceptance;
-  }
-  async createLegalAcceptance(acceptance) {
-    const [created] = await db.insert(legalAcceptances).values(acceptance).returning();
-    return created;
-  }
-  // Admin methods
-  async getAllUsers(page = 1, limit = 20, search = "") {
-    const offset = (page - 1) * limit;
-    if (search) {
-      return await db.select().from(users).where(
-        or(
-          sql3`LOWER(${users.firstName}) LIKE LOWER(${"%" + search + "%"})`,
-          sql3`LOWER(${users.lastName}) LIKE LOWER(${"%" + search + "%"})`,
-          sql3`LOWER(${users.email}) LIKE LOWER(${"%" + search + "%"})`
-        )
-      ).offset(offset).limit(limit).orderBy(desc(users.createdAt));
-    } else {
-      return await db.select().from(users).offset(offset).limit(limit).orderBy(desc(users.createdAt));
-    }
-  }
-  async getRecentActivity(limit = 50) {
-    return await db.select({
-      activity: userActivity,
-      user: {
-        id: users.id,
-        firstName: users.firstName,
-        lastName: users.lastName,
-        email: users.email
+        return result.rows;
       }
-    }).from(userActivity).leftJoin(users, eq(userActivity.userId, users.id)).orderBy(desc(userActivity.createdAt)).limit(limit);
+      // ─── LEGAL DOCUMENT VERSIONING & ACCEPTANCE (Priority 1.1) ───────────────
+      async getLatestLegalDocument(docType) {
+        const [doc] = await db.select().from(legalDocuments).where(eq(legalDocuments.docType, docType)).orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt)).limit(1);
+        return doc;
+      }
+      async getLegalDocumentHistory(docType) {
+        return await db.select().from(legalDocuments).where(eq(legalDocuments.docType, docType)).orderBy(desc(legalDocuments.effectiveDate), desc(legalDocuments.publishedAt));
+      }
+      async createLegalDocument(doc) {
+        const [created] = await db.insert(legalDocuments).values(doc).returning();
+        return created;
+      }
+      async getLegalAcceptance(userId, docType) {
+        const [acceptance] = await db.select().from(legalAcceptances).where(and(eq(legalAcceptances.userId, userId), eq(legalAcceptances.docType, docType))).orderBy(desc(legalAcceptances.acceptedAt)).limit(1);
+        return acceptance;
+      }
+      async createLegalAcceptance(acceptance) {
+        const [created] = await db.insert(legalAcceptances).values(acceptance).returning();
+        return created;
+      }
+      // Admin methods
+      async getAllUsers(page = 1, limit = 20, search = "") {
+        const offset = (page - 1) * limit;
+        if (search) {
+          return await db.select().from(users).where(
+            or(
+              sql3`LOWER(${users.firstName}) LIKE LOWER(${"%" + search + "%"})`,
+              sql3`LOWER(${users.lastName}) LIKE LOWER(${"%" + search + "%"})`,
+              sql3`LOWER(${users.email}) LIKE LOWER(${"%" + search + "%"})`
+            )
+          ).offset(offset).limit(limit).orderBy(desc(users.createdAt));
+        } else {
+          return await db.select().from(users).offset(offset).limit(limit).orderBy(desc(users.createdAt));
+        }
+      }
+      async getRecentActivity(limit = 50) {
+        return await db.select({
+          activity: userActivity,
+          user: {
+            id: users.id,
+            firstName: users.firstName,
+            lastName: users.lastName,
+            email: users.email
+          }
+        }).from(userActivity).leftJoin(users, eq(userActivity.userId, users.id)).orderBy(desc(userActivity.createdAt)).limit(limit);
+      }
+    };
+    storage = new DatabaseStorage();
   }
-};
-var storage = new DatabaseStorage();
+});
+
+// server/runtime.ts
+function isVercelRuntime() {
+  return process.env.VERCEL === "1" || process.env.VERCEL === "true";
+}
+function useLocalAuthProvider() {
+  if (process.env.AUTH_PROVIDER === "local") return true;
+  if (process.env.AUTH_PROVIDER === "replit" || process.env.AUTH_PROVIDER === "oidc") {
+    return false;
+  }
+  return isVercelRuntime();
+}
+function shouldSkipBootMigrations() {
+  return process.env.SKIP_BOOT_MIGRATIONS === "true" || isVercelRuntime();
+}
+var init_runtime = __esm({
+  "server/runtime.ts"() {
+    "use strict";
+  }
+});
 
 // server/replitAuth.ts
 import * as client from "openid-client";
@@ -2398,30 +2430,6 @@ import passport from "passport";
 import session from "express-session";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
-init_db();
-init_schema();
-
-// server/runtime.ts
-function isVercelRuntime() {
-  return process.env.VERCEL === "1" || process.env.VERCEL === "true";
-}
-function shouldSkipBootMigrations() {
-  return process.env.SKIP_BOOT_MIGRATIONS === "true" || isVercelRuntime();
-}
-
-// server/replitAuth.ts
-var isLocalDev = process.env.NODE_ENV === "development" && process.env.LOCAL_DEV === "true";
-var useLocalAuth = isLocalDev || process.env.AUTH_PROVIDER === "local";
-var databaseUrl2 = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
-var getOidcConfig = memoize(
-  async () => {
-    return await client.discovery(
-      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
-      process.env.REPL_ID
-    );
-  },
-  { maxAge: 3600 * 1e3 }
-);
 function callbackUrlForDomain(domain) {
   const protocol = domain.startsWith("localhost") || domain.startsWith("127.0.0.1") ? "http" : "https";
   return `${protocol}://${domain}/api/callback`;
@@ -2475,11 +2483,11 @@ async function upsertUser(claims) {
     });
   }
 }
-async function setupLocalDevAuth(app2) {
-  app2.set("trust proxy", 1);
-  app2.use(getSession());
-  app2.use(passport.initialize());
-  app2.use(passport.session());
+async function setupLocalDevAuth(app) {
+  app.set("trust proxy", 1);
+  app.use(getSession());
+  app.use(passport.initialize());
+  app.use(passport.session());
   passport.serializeUser((user, cb) => cb(null, user));
   passport.deserializeUser((user, cb) => cb(null, user));
   const devClaims = {
@@ -2490,7 +2498,7 @@ async function setupLocalDevAuth(app2) {
     profile_image_url: null,
     exp: Math.floor(Date.now() / 1e3) + 60 * 60 * 24 * 365
   };
-  app2.get("/api/login", async (req, res) => {
+  app.get("/api/login", async (req, res) => {
     try {
       await upsertUser(devClaims);
       const user = {
@@ -2513,22 +2521,22 @@ async function setupLocalDevAuth(app2) {
       });
     }
   });
-  app2.get("/api/logout", (req, res) => {
+  app.get("/api/logout", (req, res) => {
     req.logout(() => res.redirect("/"));
   });
 }
-async function setupAuth(app2) {
+async function setupAuth(app) {
   if (useLocalAuth) {
     console.log(
       "[auth] Using AUTH_PROVIDER=local (operator login via /api/login)"
     );
-    await setupLocalDevAuth(app2);
+    await setupLocalDevAuth(app);
     return;
   }
-  app2.set("trust proxy", 1);
-  app2.use(getSession());
-  app2.use(passport.initialize());
-  app2.use(passport.session());
+  app.set("trust proxy", 1);
+  app.use(getSession());
+  app.use(passport.initialize());
+  app.use(passport.session());
   const config = await getOidcConfig();
   const verify = async (tokens, verified) => {
     const user = {};
@@ -2556,19 +2564,19 @@ async function setupAuth(app2) {
   }
   passport.serializeUser((user, cb) => cb(null, user));
   passport.deserializeUser((user, cb) => cb(null, user));
-  app2.get("/api/login", (req, res, next) => {
+  app.get("/api/login", (req, res, next) => {
     passport.authenticate(`replitauth:${req.hostname}`, {
       prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"]
     })(req, res, next);
   });
-  app2.get("/api/callback", (req, res, next) => {
+  app.get("/api/callback", (req, res, next) => {
     passport.authenticate(`replitauth:${req.hostname}`, {
       successReturnToOrRedirect: "/",
       failureRedirect: "/api/login"
     })(req, res, next);
   });
-  app2.get("/api/logout", (req, res) => {
+  app.get("/api/logout", (req, res) => {
     req.logout(() => {
       res.redirect(
         client.buildEndSessionUrl(config, {
@@ -2579,44 +2587,57 @@ async function setupAuth(app2) {
     });
   });
 }
-var isAuthenticated = async (req, res, next) => {
-  const user = req.user;
-  if (!req.isAuthenticated() || !user.expires_at) {
-    return res.status(401).json({ message: "Unauthorized" });
+var isLocalDev, useLocalAuth, databaseUrl2, getOidcConfig, isAuthenticated;
+var init_replitAuth = __esm({
+  "server/replitAuth.ts"() {
+    "use strict";
+    init_storage();
+    init_db();
+    init_schema();
+    init_runtime();
+    isLocalDev = process.env.NODE_ENV === "development" && process.env.LOCAL_DEV === "true";
+    useLocalAuth = isLocalDev || useLocalAuthProvider();
+    databaseUrl2 = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
+    getOidcConfig = memoize(
+      async () => {
+        return await client.discovery(
+          new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
+          process.env.REPL_ID
+        );
+      },
+      { maxAge: 3600 * 1e3 }
+    );
+    isAuthenticated = async (req, res, next) => {
+      const user = req.user;
+      if (!req.isAuthenticated() || !user.expires_at) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const now = Math.floor(Date.now() / 1e3);
+      if (now <= user.expires_at) {
+        return next();
+      }
+      if (useLocalAuth) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const refreshToken = user.refresh_token;
+      if (!refreshToken) {
+        res.status(401).json({ message: "Unauthorized" });
+        return;
+      }
+      try {
+        const config = await getOidcConfig();
+        const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
+        updateUserSession(user, tokenResponse);
+        return next();
+      } catch (error) {
+        res.status(401).json({ message: "Unauthorized" });
+        return;
+      }
+    };
   }
-  const now = Math.floor(Date.now() / 1e3);
-  if (now <= user.expires_at) {
-    return next();
-  }
-  if (useLocalAuth) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const refreshToken = user.refresh_token;
-  if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-  try {
-    const config = await getOidcConfig();
-    const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
-    updateUserSession(user, tokenResponse);
-    return next();
-  } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-};
-
-// server/routes.ts
-init_schema();
-import { z as z15 } from "zod";
-
-// server/objectStorage.ts
-import { Storage } from "@google-cloud/storage";
-import { randomUUID } from "crypto";
+});
 
 // server/objectAcl.ts
-var ACL_POLICY_METADATA_KEY = "custom:aclPolicy";
 function isPermissionAllowed(requested, granted) {
   if (requested === "read" /* READ */) {
     return ["read" /* READ */, "write" /* WRITE */].includes(granted);
@@ -2685,182 +2706,17 @@ async function canAccessObject({
   }
   return false;
 }
+var ACL_POLICY_METADATA_KEY;
+var init_objectAcl = __esm({
+  "server/objectAcl.ts"() {
+    "use strict";
+    ACL_POLICY_METADATA_KEY = "custom:aclPolicy";
+  }
+});
 
 // server/objectStorage.ts
-var REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
-var objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token"
-      }
-    },
-    universe_domain: "googleapis.com"
-  },
-  projectId: ""
-});
-var ObjectNotFoundError = class _ObjectNotFoundError extends Error {
-  constructor() {
-    super("Object not found");
-    this.name = "ObjectNotFoundError";
-    Object.setPrototypeOf(this, _ObjectNotFoundError.prototype);
-  }
-};
-var ObjectStorageService = class {
-  constructor() {
-  }
-  // Gets the public object search paths.
-  getPublicObjectSearchPaths() {
-    const pathsStr = process.env.PUBLIC_OBJECT_SEARCH_PATHS || "";
-    const paths = Array.from(
-      new Set(
-        pathsStr.split(",").map((path4) => path4.trim()).filter((path4) => path4.length > 0)
-      )
-    );
-    if (paths.length === 0) {
-      throw new Error(
-        "PUBLIC_OBJECT_SEARCH_PATHS not set. Create a bucket in 'Object Storage' tool and set PUBLIC_OBJECT_SEARCH_PATHS env var (comma-separated paths)."
-      );
-    }
-    return paths;
-  }
-  // Gets the private object directory.
-  getPrivateObjectDir() {
-    const dir = process.env.PRIVATE_OBJECT_DIR || "";
-    if (!dir) {
-      throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' tool and set PRIVATE_OBJECT_DIR env var."
-      );
-    }
-    return dir;
-  }
-  // Search for a public object from the search paths.
-  async searchPublicObject(filePath) {
-    for (const searchPath of this.getPublicObjectSearchPaths()) {
-      const fullPath = `${searchPath}/${filePath}`;
-      const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-      const [exists] = await file.exists();
-      if (exists) {
-        return file;
-      }
-    }
-    return null;
-  }
-  // Downloads an object to the response.
-  async downloadObject(file, res, cacheTtlSec = 3600) {
-    try {
-      const [metadata] = await file.getMetadata();
-      const aclPolicy = await getObjectAclPolicy(file);
-      const isPublic = aclPolicy?.visibility === "public";
-      res.set({
-        "Content-Type": metadata.contentType || "application/octet-stream",
-        "Content-Length": metadata.size,
-        "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`
-      });
-      const stream = file.createReadStream();
-      stream.on("error", (err) => {
-        console.error("Stream error:", err);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Error streaming file" });
-        }
-      });
-      stream.pipe(res);
-    } catch (error) {
-      console.error("Error downloading file:", error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Error downloading file" });
-      }
-    }
-  }
-  // Gets the upload URL for an object entity.
-  async getObjectEntityUploadURL() {
-    const privateObjectDir = this.getPrivateObjectDir();
-    if (!privateObjectDir) {
-      throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' tool and set PRIVATE_OBJECT_DIR env var."
-      );
-    }
-    const objectId = randomUUID();
-    const fullPath = `${privateObjectDir}/uploads/${objectId}`;
-    const { bucketName, objectName } = parseObjectPath(fullPath);
-    return signObjectURL({
-      bucketName,
-      objectName,
-      method: "PUT",
-      ttlSec: 900
-    });
-  }
-  // Gets the object entity file from the object path.
-  async getObjectEntityFile(objectPath) {
-    if (!objectPath.startsWith("/objects/")) {
-      throw new ObjectNotFoundError();
-    }
-    const parts = objectPath.slice(1).split("/");
-    if (parts.length < 2) {
-      throw new ObjectNotFoundError();
-    }
-    const entityId = parts.slice(1).join("/");
-    let entityDir = this.getPrivateObjectDir();
-    if (!entityDir.endsWith("/")) {
-      entityDir = `${entityDir}/`;
-    }
-    const objectEntityPath = `${entityDir}${entityId}`;
-    const { bucketName, objectName } = parseObjectPath(objectEntityPath);
-    const bucket = objectStorageClient.bucket(bucketName);
-    const objectFile = bucket.file(objectName);
-    const [exists] = await objectFile.exists();
-    if (!exists) {
-      throw new ObjectNotFoundError();
-    }
-    return objectFile;
-  }
-  normalizeObjectEntityPath(rawPath) {
-    if (!rawPath.startsWith("https://storage.googleapis.com/")) {
-      return rawPath;
-    }
-    const url = new URL(rawPath);
-    const rawObjectPath = url.pathname;
-    let objectEntityDir = this.getPrivateObjectDir();
-    if (!objectEntityDir.endsWith("/")) {
-      objectEntityDir = `${objectEntityDir}/`;
-    }
-    if (!rawObjectPath.startsWith(objectEntityDir)) {
-      return rawObjectPath;
-    }
-    const entityId = rawObjectPath.slice(objectEntityDir.length);
-    return `/objects/${entityId}`;
-  }
-  // Tries to set the ACL policy for the object entity and return the normalized path.
-  async trySetObjectEntityAclPolicy(rawPath, aclPolicy) {
-    const normalizedPath = this.normalizeObjectEntityPath(rawPath);
-    if (!normalizedPath.startsWith("/")) {
-      return normalizedPath;
-    }
-    const objectFile = await this.getObjectEntityFile(normalizedPath);
-    await setObjectAclPolicy(objectFile, aclPolicy);
-    return normalizedPath;
-  }
-  // Checks if the user can access the object entity.
-  async canAccessObjectEntity({
-    userId,
-    objectFile,
-    requestedPermission
-  }) {
-    return canAccessObject({
-      userId,
-      objectFile,
-      requestedPermission: requestedPermission ?? "read" /* READ */
-    });
-  }
-};
+import { Storage } from "@google-cloud/storage";
+import { randomUUID } from "crypto";
 function parseObjectPath(path4) {
   if (!path4.startsWith("/")) {
     path4 = `/${path4}`;
@@ -2906,22 +2762,189 @@ async function signObjectURL({
   const { signed_url: signedURL } = await response.json();
   return signedURL;
 }
-
-// server/routes.ts
-init_schema();
-import OpenAI2 from "openai";
-
-// server/confirmation-routes.ts
-init_db();
-import crypto2 from "crypto";
-import { sql as sql4 } from "drizzle-orm";
-
-// server/email-service.ts
-import nodemailer from "nodemailer";
+var REPLIT_SIDECAR_ENDPOINT, objectStorageClient, ObjectNotFoundError, ObjectStorageService;
+var init_objectStorage = __esm({
+  "server/objectStorage.ts"() {
+    "use strict";
+    init_objectAcl();
+    REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
+    objectStorageClient = new Storage({
+      credentials: {
+        audience: "replit",
+        subject_token_type: "access_token",
+        token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
+        type: "external_account",
+        credential_source: {
+          url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
+          format: {
+            type: "json",
+            subject_token_field_name: "access_token"
+          }
+        },
+        universe_domain: "googleapis.com"
+      },
+      projectId: ""
+    });
+    ObjectNotFoundError = class _ObjectNotFoundError extends Error {
+      constructor() {
+        super("Object not found");
+        this.name = "ObjectNotFoundError";
+        Object.setPrototypeOf(this, _ObjectNotFoundError.prototype);
+      }
+    };
+    ObjectStorageService = class {
+      constructor() {
+      }
+      // Gets the public object search paths.
+      getPublicObjectSearchPaths() {
+        const pathsStr = process.env.PUBLIC_OBJECT_SEARCH_PATHS || "";
+        const paths = Array.from(
+          new Set(
+            pathsStr.split(",").map((path4) => path4.trim()).filter((path4) => path4.length > 0)
+          )
+        );
+        if (paths.length === 0) {
+          throw new Error(
+            "PUBLIC_OBJECT_SEARCH_PATHS not set. Create a bucket in 'Object Storage' tool and set PUBLIC_OBJECT_SEARCH_PATHS env var (comma-separated paths)."
+          );
+        }
+        return paths;
+      }
+      // Gets the private object directory.
+      getPrivateObjectDir() {
+        const dir = process.env.PRIVATE_OBJECT_DIR || "";
+        if (!dir) {
+          throw new Error(
+            "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' tool and set PRIVATE_OBJECT_DIR env var."
+          );
+        }
+        return dir;
+      }
+      // Search for a public object from the search paths.
+      async searchPublicObject(filePath) {
+        for (const searchPath of this.getPublicObjectSearchPaths()) {
+          const fullPath = `${searchPath}/${filePath}`;
+          const { bucketName, objectName } = parseObjectPath(fullPath);
+          const bucket = objectStorageClient.bucket(bucketName);
+          const file = bucket.file(objectName);
+          const [exists] = await file.exists();
+          if (exists) {
+            return file;
+          }
+        }
+        return null;
+      }
+      // Downloads an object to the response.
+      async downloadObject(file, res, cacheTtlSec = 3600) {
+        try {
+          const [metadata] = await file.getMetadata();
+          const aclPolicy = await getObjectAclPolicy(file);
+          const isPublic = aclPolicy?.visibility === "public";
+          res.set({
+            "Content-Type": metadata.contentType || "application/octet-stream",
+            "Content-Length": metadata.size,
+            "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`
+          });
+          const stream = file.createReadStream();
+          stream.on("error", (err) => {
+            console.error("Stream error:", err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: "Error streaming file" });
+            }
+          });
+          stream.pipe(res);
+        } catch (error) {
+          console.error("Error downloading file:", error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Error downloading file" });
+          }
+        }
+      }
+      // Gets the upload URL for an object entity.
+      async getObjectEntityUploadURL() {
+        const privateObjectDir = this.getPrivateObjectDir();
+        if (!privateObjectDir) {
+          throw new Error(
+            "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' tool and set PRIVATE_OBJECT_DIR env var."
+          );
+        }
+        const objectId = randomUUID();
+        const fullPath = `${privateObjectDir}/uploads/${objectId}`;
+        const { bucketName, objectName } = parseObjectPath(fullPath);
+        return signObjectURL({
+          bucketName,
+          objectName,
+          method: "PUT",
+          ttlSec: 900
+        });
+      }
+      // Gets the object entity file from the object path.
+      async getObjectEntityFile(objectPath) {
+        if (!objectPath.startsWith("/objects/")) {
+          throw new ObjectNotFoundError();
+        }
+        const parts = objectPath.slice(1).split("/");
+        if (parts.length < 2) {
+          throw new ObjectNotFoundError();
+        }
+        const entityId = parts.slice(1).join("/");
+        let entityDir = this.getPrivateObjectDir();
+        if (!entityDir.endsWith("/")) {
+          entityDir = `${entityDir}/`;
+        }
+        const objectEntityPath = `${entityDir}${entityId}`;
+        const { bucketName, objectName } = parseObjectPath(objectEntityPath);
+        const bucket = objectStorageClient.bucket(bucketName);
+        const objectFile = bucket.file(objectName);
+        const [exists] = await objectFile.exists();
+        if (!exists) {
+          throw new ObjectNotFoundError();
+        }
+        return objectFile;
+      }
+      normalizeObjectEntityPath(rawPath) {
+        if (!rawPath.startsWith("https://storage.googleapis.com/")) {
+          return rawPath;
+        }
+        const url = new URL(rawPath);
+        const rawObjectPath = url.pathname;
+        let objectEntityDir = this.getPrivateObjectDir();
+        if (!objectEntityDir.endsWith("/")) {
+          objectEntityDir = `${objectEntityDir}/`;
+        }
+        if (!rawObjectPath.startsWith(objectEntityDir)) {
+          return rawObjectPath;
+        }
+        const entityId = rawObjectPath.slice(objectEntityDir.length);
+        return `/objects/${entityId}`;
+      }
+      // Tries to set the ACL policy for the object entity and return the normalized path.
+      async trySetObjectEntityAclPolicy(rawPath, aclPolicy) {
+        const normalizedPath = this.normalizeObjectEntityPath(rawPath);
+        if (!normalizedPath.startsWith("/")) {
+          return normalizedPath;
+        }
+        const objectFile = await this.getObjectEntityFile(normalizedPath);
+        await setObjectAclPolicy(objectFile, aclPolicy);
+        return normalizedPath;
+      }
+      // Checks if the user can access the object entity.
+      async canAccessObjectEntity({
+        userId,
+        objectFile,
+        requestedPermission
+      }) {
+        return canAccessObject({
+          userId,
+          objectFile,
+          requestedPermission: requestedPermission ?? "read" /* READ */
+        });
+      }
+    };
+  }
+});
 
 // server/logger.ts
-init_db();
-init_schema();
 function emit(level, message, meta) {
   const line = {
     ts: (/* @__PURE__ */ new Date()).toISOString(),
@@ -2957,41 +2980,35 @@ async function forwardToSentry(message, meta) {
   } catch {
   }
 }
-var logger = {
-  info(message, meta) {
-    emit("info", message, meta);
-  },
-  warn(message, meta) {
-    emit("warn", message, meta);
-  },
-  error(message, meta) {
-    emit("error", message, meta);
-    void persist("error", message, meta);
-    void forwardToSentry(message, meta);
-  },
-  fatal(message, meta) {
-    emit("fatal", message, meta);
-    void persist("fatal", message, meta);
-    void forwardToSentry(message, meta);
+var logger;
+var init_logger = __esm({
+  "server/logger.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    logger = {
+      info(message, meta) {
+        emit("info", message, meta);
+      },
+      warn(message, meta) {
+        emit("warn", message, meta);
+      },
+      error(message, meta) {
+        emit("error", message, meta);
+        void persist("error", message, meta);
+        void forwardToSentry(message, meta);
+      },
+      fatal(message, meta) {
+        emit("fatal", message, meta);
+        void persist("fatal", message, meta);
+        void forwardToSentry(message, meta);
+      }
+    };
   }
-};
+});
 
 // server/email-service.ts
-var SMTP_HOST = process.env.SMTP_HOST;
-var SMTP_PORT = Number(process.env.SMTP_PORT ?? "587");
-var SMTP_USER = process.env.SMTP_USER;
-var SMTP_PASS = process.env.SMTP_PASS;
-var FROM_EMAIL = process.env.EMAIL_FROM ?? "SplitSheet <no-reply@splitsheet.ca>";
-var transporter = null;
-var emailDeliveryMode = SMTP_HOST && SMTP_USER && SMTP_PASS ? "smtp" : "log";
-if (emailDeliveryMode === "smtp") {
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS }
-  });
-}
+import nodemailer from "nodemailer";
 async function sendEmail(opts) {
   if (emailDeliveryMode === "log" || !transporter) {
     logger.info("email.log_mode_send", {
@@ -3056,8 +3073,32 @@ This code expires in 10 minutes. If you did not request this, ignore this email.
     </div>`;
   return { subject, html, text: text2 };
 }
+var SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, FROM_EMAIL, transporter, emailDeliveryMode;
+var init_email_service = __esm({
+  "server/email-service.ts"() {
+    "use strict";
+    init_logger();
+    SMTP_HOST = process.env.SMTP_HOST;
+    SMTP_PORT = Number(process.env.SMTP_PORT ?? "587");
+    SMTP_USER = process.env.SMTP_USER;
+    SMTP_PASS = process.env.SMTP_PASS;
+    FROM_EMAIL = process.env.EMAIL_FROM ?? "SplitSheet <no-reply@splitsheet.ca>";
+    transporter = null;
+    emailDeliveryMode = SMTP_HOST && SMTP_USER && SMTP_PASS ? "smtp" : "log";
+    if (emailDeliveryMode === "smtp") {
+      transporter = nodemailer.createTransport({
+        host: SMTP_HOST,
+        port: SMTP_PORT,
+        secure: SMTP_PORT === 465,
+        auth: { user: SMTP_USER, pass: SMTP_PASS }
+      });
+    }
+  }
+});
 
 // server/confirmation-routes.ts
+import crypto2 from "crypto";
+import { sql as sql4 } from "drizzle-orm";
 function generateToken() {
   return crypto2.randomBytes(32).toString("hex");
 }
@@ -3067,8 +3108,8 @@ function expiresAt72h() {
 function getIp(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
 }
-function registerConfirmationRoutes(app2) {
-  app2.post(
+function registerConfirmationRoutes(app) {
+  app.post(
     "/api/contracts/:id/generate-confirmations",
     isAuthenticated,
     async (req, res) => {
@@ -3177,7 +3218,7 @@ function registerConfirmationRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/contracts/:id/confirmations",
     isAuthenticated,
     async (req, res) => {
@@ -3265,7 +3306,7 @@ function registerConfirmationRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/contracts/:id/confirmations/:confirmId/mark-sent",
     isAuthenticated,
     async (req, res) => {
@@ -3283,7 +3324,7 @@ function registerConfirmationRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/confirm/:contractId/:token",
     async (req, res) => {
       const { contractId, token } = req.params;
@@ -3354,7 +3395,7 @@ function registerConfirmationRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/confirm/:contractId/:token",
     async (req, res) => {
       const { contractId, token } = req.params;
@@ -3428,21 +3469,40 @@ function registerConfirmationRoutes(app2) {
     }
   );
 }
-
-// server/copilot-routes.ts
-import { z as z3 } from "zod";
+var init_confirmation_routes = __esm({
+  "server/confirmation-routes.ts"() {
+    "use strict";
+    init_db();
+    init_replitAuth();
+    init_email_service();
+    init_storage();
+  }
+});
 
 // server/copilot-knowledge.ts
-var COPILOT_PRICING = [
-  "\u2022 **Starter (Free)** \u2014 $0: 1 project, up to 2 contributors",
-  "\u2022 **Pay-Per-Session** \u2014 $25 CAD/session: up to 5 contributors, full workflow + PDF",
-  "\u2022 **Multi-Creator** \u2014 $50\u201375 CAD/project: up to 10 contributors, quote-based",
-  "\u2022 **Express add-on** \u2014 +$25 CAD: priority processing per session",
-  "\u2022 **Creator Pro** \u2014 $15 CAD/month: unlimited sessions, analytics, AI assistant",
-  "\u2022 **Studio Pro** \u2014 $49 CAD/month: unlimited projects, team workspaces, bulk exports",
-  "\u2022 **Enterprise** \u2014 custom pricing for labels, publishers, and rights organizations"
-].join("\n");
-var COPILOT_SYSTEM_PROMPT = `You are SoundLedger CoPilot, the expert AI assistant embedded inside SplitSheet \u2014 a Canadian music agreement and rights management platform built by SoundLedger Technologies Inc.
+function resolveCopilotPageKey(path4) {
+  if (!path4) return void 0;
+  const keys = ["/", "/clients", "/projects", "/contracts", "/ownership", "/billing", "/analytics"];
+  if (keys.includes(path4)) return path4;
+  for (const key of keys) {
+    if (key !== "/" && path4.startsWith(`${key}/`)) return key;
+  }
+  return path4;
+}
+var COPILOT_PRICING, COPILOT_SYSTEM_PROMPT;
+var init_copilot_knowledge = __esm({
+  "server/copilot-knowledge.ts"() {
+    "use strict";
+    COPILOT_PRICING = [
+      "\u2022 **Starter (Free)** \u2014 $0: 1 project, up to 2 contributors",
+      "\u2022 **Pay-Per-Session** \u2014 $25 CAD/session: up to 5 contributors, full workflow + PDF",
+      "\u2022 **Multi-Creator** \u2014 $50\u201375 CAD/project: up to 10 contributors, quote-based",
+      "\u2022 **Express add-on** \u2014 +$25 CAD: priority processing per session",
+      "\u2022 **Creator Pro** \u2014 $15 CAD/month: unlimited sessions, analytics, AI assistant",
+      "\u2022 **Studio Pro** \u2014 $49 CAD/month: unlimited projects, team workspaces, bulk exports",
+      "\u2022 **Enterprise** \u2014 custom pricing for labels, publishers, and rights organizations"
+    ].join("\n");
+    COPILOT_SYSTEM_PROMPT = `You are SoundLedger CoPilot, the expert AI assistant embedded inside SplitSheet \u2014 a Canadian music agreement and rights management platform built by SoundLedger Technologies Inc.
 
 Your role is to guide music industry operators (independent artists, producers, studios, publishers) through the platform's features and answer music industry questions. You are professional, concise, warm, and deeply knowledgeable.
 
@@ -3471,15 +3531,8 @@ ${COPILOT_PRICING}
 - Quote pricing in CAD using the tiers above
 - Tailor guidance to the page the user is on when provided
 - If you are unsure, say so rather than inventing features or prices`;
-function resolveCopilotPageKey(path4) {
-  if (!path4) return void 0;
-  const keys = ["/", "/clients", "/projects", "/contracts", "/ownership", "/billing", "/analytics"];
-  if (keys.includes(path4)) return path4;
-  for (const key of keys) {
-    if (key !== "/" && path4.startsWith(`${key}/`)) return key;
   }
-  return path4;
-}
+});
 
 // server/copilot-fallback.ts
 function getFallbackResponse(userMessage, currentPage) {
@@ -3647,6 +3700,12 @@ function appendTextAsSSE(res, text2) {
   res.write("data: [DONE]\n\n");
   res.end();
 }
+var init_copilot_fallback = __esm({
+  "server/copilot-fallback.ts"() {
+    "use strict";
+    init_copilot_knowledge();
+  }
+});
 
 // server/claude.service.ts
 import OpenAI from "openai";
@@ -3676,19 +3735,14 @@ async function streamCopilotCompletion(systemContent, messages2) {
     ]
   });
 }
+var init_claude_service = __esm({
+  "server/claude.service.ts"() {
+    "use strict";
+  }
+});
 
 // server/copilot-routes.ts
-var copilotSchema = z3.object({
-  messages: z3.array(
-    z3.object({
-      role: z3.enum(["user", "assistant"]),
-      content: z3.string().min(1).max(8e3)
-    })
-  ).min(1).max(40),
-  currentPage: z3.string().max(200).optional(),
-  pageContext: z3.string().max(200).optional()
-});
-var rateLimits = /* @__PURE__ */ new Map();
+import { z as z3 } from "zod";
 function checkRateLimit(userId) {
   const now = Date.now();
   const entry = rateLimits.get(userId);
@@ -3716,8 +3770,8 @@ ${fallback}` : fallback;
   streamTextAsSSE(res, text2);
   return true;
 }
-function registerCopilotRoutes(app2) {
-  app2.post("/api/copilot", isAuthenticated, async (req, res) => {
+function registerCopilotRoutes(app) {
+  app.post("/api/copilot", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub ?? "anonymous";
     if (!checkRateLimit(userId)) {
       return res.status(429).json({
@@ -3802,7 +3856,7 @@ ${fallback}` : errorIntro;
 ${combined}`);
     }
   });
-  app2.get("/api/copilot/health", isAuthenticated, (_req, res) => {
+  app.get("/api/copilot/health", isAuthenticated, (_req, res) => {
     res.json({
       configured: isCopilotConfigured(),
       model: getCopilotModel(),
@@ -3811,12 +3865,32 @@ ${combined}`);
     });
   });
 }
+var copilotSchema, rateLimits;
+var init_copilot_routes = __esm({
+  "server/copilot-routes.ts"() {
+    "use strict";
+    init_replitAuth();
+    init_copilot_fallback();
+    init_copilot_knowledge();
+    init_claude_service();
+    copilotSchema = z3.object({
+      messages: z3.array(
+        z3.object({
+          role: z3.enum(["user", "assistant"]),
+          content: z3.string().min(1).max(8e3)
+        })
+      ).min(1).max(40),
+      currentPage: z3.string().max(200).optional(),
+      pageContext: z3.string().max(200).optional()
+    });
+    rateLimits = /* @__PURE__ */ new Map();
+  }
+});
 
 // server/service-routes.ts
 import crypto3 from "crypto";
 import { z as z4 } from "zod";
 import { sql as sql5 } from "drizzle-orm";
-init_db();
 function generateToken2() {
   return crypto3.randomBytes(32).toString("hex");
 }
@@ -3898,16 +3972,8 @@ async function buildClientList(userId) {
   }
   return Array.from(clientMap.values());
 }
-var contributorSchema = z4.object({
-  name: z4.string().min(1).max(200),
-  email: z4.string().email().optional().or(z4.literal("")),
-  role: z4.string().min(1).max(100),
-  pro: z4.string().max(50).optional(),
-  ipi: z4.string().max(20).optional(),
-  ownershipPercentage: z4.union([z4.string(), z4.number()])
-});
-function registerServiceRoutes(app2) {
-  app2.get("/api/workflow/status", isAuthenticated, async (req, res) => {
+function registerServiceRoutes(app) {
+  app.get("/api/workflow/status", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const userContracts = await storage.getContracts(userId);
@@ -3942,7 +4008,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to load workflow status" });
     }
   });
-  app2.get("/api/clients", isAuthenticated, async (req, res) => {
+  app.get("/api/clients", isAuthenticated, async (req, res) => {
     try {
       res.json(await buildClientList(req.user.claims.sub));
     } catch (error) {
@@ -3950,7 +4016,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch clients" });
     }
   });
-  app2.get("/api/clients/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/clients/:id", isAuthenticated, async (req, res) => {
     try {
       const clients = await buildClientList(req.user.claims.sub);
       const client2 = clients.find((c) => c.id === req.params.id);
@@ -3963,7 +4029,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch client" });
     }
   });
-  app2.get("/api/clients/:id/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/clients/:id/projects", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const clients = await buildClientList(userId);
@@ -3988,7 +4054,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch client projects" });
     }
   });
-  app2.patch("/api/clients/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/clients/:id", isAuthenticated, async (req, res) => {
     try {
       const { name, email, role, type } = req.body ?? {};
       const updates = {};
@@ -4013,7 +4079,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to update client" });
     }
   });
-  app2.get("/api/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/projects", isAuthenticated, async (req, res) => {
     try {
       const userContracts = await storage.getContracts(req.user.claims.sub);
       const projects = await Promise.all(
@@ -4036,7 +4102,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch projects" });
     }
   });
-  app2.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -4048,7 +4114,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch project" });
     }
   });
-  app2.patch("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/projects/:id", isAuthenticated, async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -4069,7 +4135,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to update project" });
     }
   });
-  app2.get("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -4109,7 +4175,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch contributors" });
     }
   });
-  app2.post("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
     try {
       const parsed = contributorSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -4154,7 +4220,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to add contributor" });
     }
   });
-  app2.patch("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
+  app.patch("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -4183,7 +4249,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to update contributor" });
     }
   });
-  app2.delete("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
+  app.delete("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -4196,7 +4262,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ message: "Failed to remove contributor" });
     }
   });
-  app2.post("/api/projects/:id/send-confirmations", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/send-confirmations", isAuthenticated, async (req, res) => {
     const contractId = req.params.id;
     const userId = req.user?.claims?.sub;
     try {
@@ -4254,7 +4320,7 @@ function registerServiceRoutes(app2) {
       res.status(500).json({ error: "Failed to generate confirmation links" });
     }
   });
-  app2.get("/api/health", (_req, res) => {
+  app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -4262,12 +4328,27 @@ function registerServiceRoutes(app2) {
     });
   });
 }
+var contributorSchema;
+var init_service_routes = __esm({
+  "server/service-routes.ts"() {
+    "use strict";
+    init_replitAuth();
+    init_storage();
+    init_db();
+    contributorSchema = z4.object({
+      name: z4.string().min(1).max(200),
+      email: z4.string().email().optional().or(z4.literal("")),
+      role: z4.string().min(1).max(100),
+      pro: z4.string().max(50).optional(),
+      ipi: z4.string().max(20).optional(),
+      ownershipPercentage: z4.union([z4.string(), z4.number()])
+    });
+  }
+});
 
 // server/organization-routes.ts
 import { z as z5 } from "zod";
 import crypto4 from "crypto";
-init_schema();
-init_security();
 async function generateUniqueSlOrgId() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const shortId = crypto4.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
@@ -4277,7 +4358,6 @@ async function generateUniqueSlOrgId() {
   }
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
-var ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 };
 function hasRole(role, minimum) {
   if (!role || !(role in ROLE_RANK)) return false;
   return ROLE_RANK[role] >= ROLE_RANK[minimum];
@@ -4312,8 +4392,8 @@ function requireOrgRole(minimum) {
     next();
   };
 }
-function registerOrganizationRoutes(app2) {
-  app2.get("/api/organizations", isAuthenticated, async (req, res) => {
+function registerOrganizationRoutes(app) {
+  app.get("/api/organizations", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const orgs = await storage.getOrganizationsForUser(userId);
@@ -4323,7 +4403,7 @@ function registerOrganizationRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch organizations" });
     }
   });
-  app2.post("/api/organizations", isAuthenticated, async (req, res) => {
+  app.post("/api/organizations", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertOrganizationSchema.pick({ name: true, type: true, email: true, website: true, country: true }).extend({ type: z5.enum(ORGANIZATION_TYPES) }).parse(req.body);
@@ -4357,7 +4437,7 @@ function registerOrganizationRoutes(app2) {
       }
     }
   });
-  app2.get(
+  app.get(
     "/api/organizations/:id",
     isAuthenticated,
     requireOrgMember,
@@ -4366,7 +4446,7 @@ function registerOrganizationRoutes(app2) {
       res.json(org);
     }
   );
-  app2.patch(
+  app.patch(
     "/api/organizations/:id",
     isAuthenticated,
     requireOrgMember,
@@ -4386,7 +4466,7 @@ function registerOrganizationRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/organizations/:id/members",
     isAuthenticated,
     requireOrgMember,
@@ -4395,7 +4475,7 @@ function registerOrganizationRoutes(app2) {
       res.json(members);
     }
   );
-  app2.post(
+  app.post(
     "/api/organizations/:id/members",
     isAuthenticated,
     requireOrgMember,
@@ -4434,7 +4514,7 @@ function registerOrganizationRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/organizations/:id/members/:memberId",
     isAuthenticated,
     requireOrgMember,
@@ -4454,7 +4534,7 @@ function registerOrganizationRoutes(app2) {
       }
     }
   );
-  app2.delete(
+  app.delete(
     "/api/organizations/:id/members/:memberId",
     isAuthenticated,
     requireOrgMember,
@@ -4474,7 +4554,7 @@ function registerOrganizationRoutes(app2) {
       res.json({ removed: true });
     }
   );
-  app2.get(
+  app.get(
     "/api/organizations/:id/api-keys",
     isAuthenticated,
     requireOrgMember,
@@ -4484,7 +4564,7 @@ function registerOrganizationRoutes(app2) {
       res.json(keys.map(({ keyHash, ...safe }) => safe));
     }
   );
-  app2.post(
+  app.post(
     "/api/organizations/:id/api-keys",
     isAuthenticated,
     requireOrgMember,
@@ -4525,7 +4605,7 @@ function registerOrganizationRoutes(app2) {
       }
     }
   );
-  app2.delete(
+  app.delete(
     "/api/organizations/:id/api-keys/:keyId",
     isAuthenticated,
     requireOrgMember,
@@ -4545,11 +4625,20 @@ function registerOrganizationRoutes(app2) {
     }
   );
 }
+var ROLE_RANK;
+var init_organization_routes = __esm({
+  "server/organization-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_schema();
+    init_security();
+    ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 };
+  }
+});
 
 // server/message-routes.ts
 import { z as z6 } from "zod";
-init_security();
-var rateLimitStore = /* @__PURE__ */ new Map();
 function messageRateLimit(maxRequests, windowMs) {
   return (req, res, next) => {
     const userId = req.user?.claims?.sub;
@@ -4575,18 +4664,13 @@ function messageRateLimit(maxRequests, windowMs) {
     next();
   };
 }
-var sendMessageSchema = z6.object({
-  receiverId: z6.string().min(1),
-  content: z6.string().min(1).max(5e3),
-  messageType: z6.enum(["text", "image", "file"]).optional().default("text")
-});
 function noStoreMessages(_req, res, next) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
   res.setHeader("Pragma", "no-cache");
   next();
 }
-function registerMessageRoutes(app2) {
-  app2.get(
+function registerMessageRoutes(app) {
+  app.get(
     "/api/conversations",
     isAuthenticated,
     noStoreMessages,
@@ -4601,7 +4685,7 @@ function registerMessageRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/conversations/:userId",
     isAuthenticated,
     noStoreMessages,
@@ -4623,7 +4707,7 @@ function registerMessageRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/messages/unread-count",
     isAuthenticated,
     async (req, res) => {
@@ -4637,7 +4721,7 @@ function registerMessageRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/messages",
     isAuthenticated,
     noStoreMessages,
@@ -4684,7 +4768,7 @@ function registerMessageRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/conversations/:userId/read",
     isAuthenticated,
     async (req, res) => {
@@ -4700,22 +4784,25 @@ function registerMessageRoutes(app2) {
     }
   );
 }
-
-// server/payment-routes.ts
-init_db();
-import express from "express";
-import Stripe3 from "stripe";
-import { z as z7 } from "zod";
-import { sql as sql8 } from "drizzle-orm";
+var rateLimitStore, sendMessageSchema;
+var init_message_routes = __esm({
+  "server/message-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_security();
+    rateLimitStore = /* @__PURE__ */ new Map();
+    sendMessageSchema = z6.object({
+      receiverId: z6.string().min(1),
+      content: z6.string().min(1).max(5e3),
+      messageType: z6.enum(["text", "image", "file"]).optional().default("text")
+    });
+  }
+});
 
 // server/stripe-connect.ts
-init_db();
 import Stripe from "stripe";
 import { sql as sql6 } from "drizzle-orm";
-var stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2025-08-27.basil"
-});
-var APP_URL = process.env.APP_URL ?? "https://splitsheet.ca";
 async function createConnectAccount(req, res) {
   const userId = req.user?.claims?.sub;
   const rows = await db.execute(sql6`
@@ -4824,17 +4911,21 @@ async function getConnectDashboardLink(req, res) {
   const loginLink = await stripe.accounts.createLoginLink(user.stripe_connect_account_id);
   res.json({ url: loginLink.url });
 }
+var stripe, APP_URL;
+var init_stripe_connect = __esm({
+  "server/stripe-connect.ts"() {
+    "use strict";
+    init_db();
+    stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
+      apiVersion: "2025-08-27.basil"
+    });
+    APP_URL = process.env.APP_URL ?? "https://splitsheet.ca";
+  }
+});
 
 // server/payment-service.ts
-init_db();
 import Stripe2 from "stripe";
 import { sql as sql7 } from "drizzle-orm";
-var stripe2 = new Stripe2(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2025-08-27.basil"
-});
-var PLATFORM_FEE_BPS = Number(process.env.PLATFORM_FEE_BPS ?? "250");
-var toCents = (dollars) => Math.round(dollars * 100);
-var fromCents = (cents) => (cents / 100).toFixed(2);
 function calculateSplits(totalCents, collaborators) {
   const total = collaborators.reduce((s, c) => s + c.ownershipPct, 0);
   if (Math.abs(total - 100) > 0.01) {
@@ -5050,8 +5141,6 @@ async function executeSplits(params) {
     payouts
   };
 }
-var MAX_ATTEMPTS = 4;
-var RETRY_DELAYS = [6e4, 3e5, 9e5, 36e5];
 function scheduleRetry(job) {
   if (job.attempt > MAX_ATTEMPTS) {
     log("RETRY_EXHAUSTED", { ...job });
@@ -5100,35 +5189,32 @@ function log(level, data) {
   };
   console.log(JSON.stringify(entry));
 }
+var stripe2, PLATFORM_FEE_BPS, toCents, fromCents, MAX_ATTEMPTS, RETRY_DELAYS;
+var init_payment_service = __esm({
+  "server/payment-service.ts"() {
+    "use strict";
+    init_db();
+    stripe2 = new Stripe2(process.env.STRIPE_SECRET_KEY ?? "", {
+      apiVersion: "2025-08-27.basil"
+    });
+    PLATFORM_FEE_BPS = Number(process.env.PLATFORM_FEE_BPS ?? "250");
+    toCents = (dollars) => Math.round(dollars * 100);
+    fromCents = (cents) => (cents / 100).toFixed(2);
+    MAX_ATTEMPTS = 4;
+    RETRY_DELAYS = [6e4, 3e5, 9e5, 36e5];
+  }
+});
 
 // server/payment-routes.ts
-var stripe3 = new Stripe3(process.env.STRIPE_SECRET_KEY ?? "", {
-  apiVersion: "2025-08-27.basil"
-});
-var createPaymentSchema = z7.object({
-  contractId: z7.string().uuid(),
-  assetId: z7.string().uuid(),
-  source: z7.enum(["streaming", "sync", "performance", "mechanical", "other"]),
-  grossAmount: z7.number().positive().max(1e7),
-  currency: z7.string().length(3).default("CAD"),
-  description: z7.string().min(3).max(500)
-});
-var executeSplitsSchema = z7.object({
-  revenueEventId: z7.string().uuid(),
-  contractId: z7.string().uuid(),
-  paymentIntentId: z7.string().min(1),
-  grossAmount: z7.number().positive(),
-  currency: z7.string().length(3).default("CAD")
-});
-var refundSchema = z7.object({
-  revenueEventId: z7.string().uuid(),
-  reason: z7.enum(["duplicate", "fraudulent", "requested_by_customer"]).optional()
-});
+import express from "express";
+import Stripe3 from "stripe";
+import { z as z7 } from "zod";
+import { sql as sql8 } from "drizzle-orm";
 function uid(req) {
   return req.user?.claims?.sub ?? "";
 }
-function registerPaymentRoutes(app2) {
-  app2.post("/api/connect-account", isAuthenticated, async (req, res) => {
+function registerPaymentRoutes(app) {
+  app.post("/api/connect-account", isAuthenticated, async (req, res) => {
     try {
       await createConnectAccount(req, res);
     } catch (err) {
@@ -5136,7 +5222,7 @@ function registerPaymentRoutes(app2) {
       res.status(500).json({ error: err.message });
     }
   });
-  app2.get("/api/connect-status", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-status", isAuthenticated, async (req, res) => {
     try {
       await getConnectStatus(req, res);
     } catch (err) {
@@ -5144,14 +5230,14 @@ function registerPaymentRoutes(app2) {
       res.status(500).json({ error: err.message });
     }
   });
-  app2.get("/api/connect-dashboard", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-dashboard", isAuthenticated, async (req, res) => {
     try {
       await getConnectDashboardLink(req, res);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
   });
-  app2.post("/api/payments/intent", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/intent", isAuthenticated, async (req, res) => {
     const userId = uid(req);
     try {
       const body = createPaymentSchema.parse(req.body);
@@ -5178,7 +5264,7 @@ function registerPaymentRoutes(app2) {
       res.status(400).json({ error: err.message });
     }
   });
-  app2.post("/api/payments/execute-splits", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/execute-splits", isAuthenticated, async (req, res) => {
     try {
       const body = executeSplitsSchema.parse(req.body);
       const intent = await stripe3.paymentIntents.retrieve(body.paymentIntentId);
@@ -5206,7 +5292,7 @@ function registerPaymentRoutes(app2) {
       res.status(500).json({ error: err.message });
     }
   });
-  app2.get("/api/payments/transactions", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/transactions", isAuthenticated, async (req, res) => {
     const userId = uid(req);
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
@@ -5257,7 +5343,7 @@ function registerPaymentRoutes(app2) {
       initiated: initiated.rows
     });
   });
-  app2.get("/api/payments/balance", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/balance", isAuthenticated, async (req, res) => {
     const userId = uid(req);
     const rows = await db.execute(sql8`
       SELECT
@@ -5295,7 +5381,7 @@ function registerPaymentRoutes(app2) {
       updatedAt: bal.updated_at
     });
   });
-  app2.post("/api/payments/refund", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/refund", isAuthenticated, async (req, res) => {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);
@@ -5370,7 +5456,7 @@ function registerPaymentRoutes(app2) {
       res.status(500).json({ error: err.message });
     }
   });
-  app2.post(
+  app.post(
     "/api/stripe/connect-webhook",
     express.raw({ type: "application/json" }),
     async (req, res) => {
@@ -5503,17 +5589,44 @@ function registerPaymentRoutes(app2) {
     }
   );
 }
+var stripe3, createPaymentSchema, executeSplitsSchema, refundSchema;
+var init_payment_routes = __esm({
+  "server/payment-routes.ts"() {
+    "use strict";
+    init_db();
+    init_replitAuth();
+    init_stripe_connect();
+    init_payment_service();
+    stripe3 = new Stripe3(process.env.STRIPE_SECRET_KEY ?? "", {
+      apiVersion: "2025-08-27.basil"
+    });
+    createPaymentSchema = z7.object({
+      contractId: z7.string().uuid(),
+      assetId: z7.string().uuid(),
+      source: z7.enum(["streaming", "sync", "performance", "mechanical", "other"]),
+      grossAmount: z7.number().positive().max(1e7),
+      currency: z7.string().length(3).default("CAD"),
+      description: z7.string().min(3).max(500)
+    });
+    executeSplitsSchema = z7.object({
+      revenueEventId: z7.string().uuid(),
+      contractId: z7.string().uuid(),
+      paymentIntentId: z7.string().min(1),
+      grossAmount: z7.number().positive(),
+      currency: z7.string().length(3).default("CAD")
+    });
+    refundSchema = z7.object({
+      revenueEventId: z7.string().uuid(),
+      reason: z7.enum(["duplicate", "fraudulent", "requested_by_customer"]).optional()
+    });
+  }
+});
 
 // server/security-routes.ts
-init_db();
 import { z as z8 } from "zod";
 import { sql as sql9 } from "drizzle-orm";
-init_security();
-var splitRateLimit = createRateLimiter(10, 6e4);
-var signRateLimit = createRateLimiter(5, 6e4);
-var apiRateLimit = createRateLimiter(100, 6e4);
-async function registerSecurityRoutes(app2) {
-  app2.post(
+async function registerSecurityRoutes(app) {
+  app.post(
     "/api/splits",
     isAuthenticated,
     splitRateLimit,
@@ -5615,7 +5728,7 @@ async function registerSecurityRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/splits/:versionId/sign",
     isAuthenticated,
     signRateLimit,
@@ -5739,7 +5852,7 @@ async function registerSecurityRoutes(app2) {
       }
     }
   );
-  app2.post("/api/disputes", isAuthenticated, async (req, res) => {
+  app.post("/api/disputes", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     try {
       const result = await openDispute(userId, req.body, req);
@@ -5753,7 +5866,7 @@ async function registerSecurityRoutes(app2) {
       }
     }
   });
-  app2.get("/api/disputes", isAuthenticated, async (req, res) => {
+  app.get("/api/disputes", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const rows = await db.execute(sql9`
       SELECT id, contract_id, dispute_type, status, description,
@@ -5765,7 +5878,7 @@ async function registerSecurityRoutes(app2) {
     `);
     res.json(rows.rows);
   });
-  app2.patch("/api/disputes/:id/resolve", isAuthenticated, async (req, res) => {
+  app.patch("/api/disputes/:id/resolve", isAuthenticated, async (req, res) => {
     const adminId = req.user?.claims?.sub;
     const schema = z8.object({
       resolution: z8.enum(["accepted", "rejected"]),
@@ -5784,7 +5897,7 @@ async function registerSecurityRoutes(app2) {
       }
     }
   });
-  app2.post("/api/api-keys", isAuthenticated, async (req, res) => {
+  app.post("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const schema = z8.object({
       name: z8.string().min(1).max(100),
@@ -5825,7 +5938,7 @@ async function registerSecurityRoutes(app2) {
       }
     }
   });
-  app2.get("/api/api-keys", isAuthenticated, async (req, res) => {
+  app.get("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const rows = await db.execute(sql9`
       SELECT id, key_prefix, name, scopes, rate_limit, is_active,
@@ -5835,7 +5948,7 @@ async function registerSecurityRoutes(app2) {
     `);
     res.json(rows.rows);
   });
-  app2.delete("/api/api-keys/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/api-keys/:id", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     await db.execute(sql9`
       UPDATE api_keys SET is_active = FALSE
@@ -5843,14 +5956,14 @@ async function registerSecurityRoutes(app2) {
     `);
     res.json({ revoked: true });
   });
-  app2.get(
+  app.get(
     "/api/raas/verify/:contractId",
     apiRateLimit,
     apiKeyAuth,
     requireScope("verify_ownership"),
     zkVerifyHandler
   );
-  app2.get(
+  app.get(
     "/api/raas/chain/:contractId",
     apiRateLimit,
     apiKeyAuth,
@@ -5861,7 +5974,7 @@ async function registerSecurityRoutes(app2) {
       res.json(result);
     }
   );
-  app2.get("/api/admin/fraud-events", isAuthenticated, async (_req, res) => {
+  app.get("/api/admin/fraud-events", isAuthenticated, async (_req, res) => {
     const rows = await db.execute(sql9`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe
@@ -5872,7 +5985,7 @@ async function registerSecurityRoutes(app2) {
     `);
     res.json(rows.rows);
   });
-  app2.get("/api/splits/:contractId/history", isAuthenticated, async (req, res) => {
+  app.get("/api/splits/:contractId/history", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const rows = await db.execute(sql9`
       SELECT version_number, content_hash, prev_hash, status,
@@ -5885,7 +5998,7 @@ async function registerSecurityRoutes(app2) {
     `);
     res.json(rows.rows);
   });
-  app2.get("/api/audit-log", isAuthenticated, async (req, res) => {
+  app.get("/api/audit-log", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const rows = await db.execute(sql9`
@@ -5898,23 +6011,22 @@ async function registerSecurityRoutes(app2) {
     res.json(rows.rows);
   });
 }
+var splitRateLimit, signRateLimit, apiRateLimit;
+var init_security_routes = __esm({
+  "server/security-routes.ts"() {
+    "use strict";
+    init_db();
+    init_replitAuth();
+    init_security();
+    splitRateLimit = createRateLimiter(10, 6e4);
+    signRateLimit = createRateLimiter(5, 6e4);
+    apiRateLimit = createRateLimiter(100, 6e4);
+  }
+});
 
 // server/compliance-routes.ts
-init_db();
-init_schema();
 import { z as z9 } from "zod";
 import { eq as eq2 } from "drizzle-orm";
-var CURRENT_TERMS_VERSION = "2026-07-12";
-var GATED_DOC_TYPES = ["tos", "privacy"];
-var TERMS_ALLOWLIST = /* @__PURE__ */ new Set([
-  "/api/auth/user",
-  "/api/login",
-  "/api/logout",
-  "/api/callback",
-  "/api/health",
-  "/api/user/accept-terms",
-  "/api/user/terms-status"
-]);
 function requireTermsAccepted(req, res, next) {
   const path4 = req.path;
   const isPublicLegalDocRoute = req.method === "GET" && path4.startsWith("/api/legal/documents/");
@@ -5959,8 +6071,8 @@ async function checkAcceptance(userId, docType) {
     accepted: isAcceptanceCurrent(acceptance?.version, currentVersion)
   };
 }
-function registerComplianceRoutes(app2) {
-  app2.get("/api/user/terms-status", isAuthenticated, async (req, res) => {
+function registerComplianceRoutes(app) {
+  app.get("/api/user/terms-status", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const [tos, privacy] = await Promise.all(
@@ -5981,7 +6093,7 @@ function registerComplianceRoutes(app2) {
       res.status(500).json({ error: "Failed to load terms status" });
     }
   });
-  app2.post("/api/user/accept-terms", isAuthenticated, async (req, res) => {
+  app.post("/api/user/accept-terms", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     const schema = z9.object({
       docType: z9.enum(GATED_DOC_TYPES).optional(),
@@ -6025,7 +6137,7 @@ function registerComplianceRoutes(app2) {
       }
     }
   });
-  app2.get("/api/user/export", isAuthenticated, async (req, res) => {
+  app.get("/api/user/export", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const [
@@ -6075,7 +6187,7 @@ function registerComplianceRoutes(app2) {
       res.status(500).json({ error: "Failed to generate data export" });
     }
   });
-  app2.post("/api/account/delete", isAuthenticated, async (req, res) => {
+  app.post("/api/account/delete", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     const schema = z9.object({ confirm: z9.literal(true) });
     try {
@@ -6114,34 +6226,38 @@ function registerComplianceRoutes(app2) {
     }
   });
 }
+var CURRENT_TERMS_VERSION, GATED_DOC_TYPES, TERMS_ALLOWLIST;
+var init_compliance_routes = __esm({
+  "server/compliance-routes.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_replitAuth();
+    init_storage();
+    init_logger();
+    CURRENT_TERMS_VERSION = "2026-07-12";
+    GATED_DOC_TYPES = ["tos", "privacy"];
+    TERMS_ALLOWLIST = /* @__PURE__ */ new Set([
+      "/api/auth/user",
+      "/api/login",
+      "/api/logout",
+      "/api/callback",
+      "/api/health",
+      "/api/user/accept-terms",
+      "/api/user/terms-status"
+    ]);
+  }
+});
 
 // server/verification-routes.ts
-init_db();
-init_schema();
 import crypto5 from "crypto";
 import { z as z10 } from "zod";
 import { and as and2, desc as desc2, eq as eq3, gt, isNull } from "drizzle-orm";
-init_security();
-var CODE_TTL_MS = 10 * 60 * 1e3;
-var MAX_ATTEMPTS2 = 5;
-var sendCodeSchema = z10.object({
-  destination: z10.string().min(3).max(200),
-  // email address or phone number
-  channel: z10.enum(["email", "sms"]).default("email"),
-  purpose: z10.string().max(50).default("identity_verification"),
-  legalName: z10.string().max(200).optional(),
-  idType: z10.string().max(40).optional()
-});
-var confirmCodeSchema = z10.object({
-  destination: z10.string().min(3).max(200),
-  code: z10.string().length(6).regex(/^\d{6}$/),
-  purpose: z10.string().max(50).default("identity_verification")
-});
 function generateSixDigitCode() {
   return crypto5.randomInt(0, 1e6).toString().padStart(6, "0");
 }
-function registerVerificationRoutes(app2) {
-  app2.post("/api/verify/send-code", isAuthenticated, async (req, res) => {
+function registerVerificationRoutes(app) {
+  app.post("/api/verify/send-code", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     try {
       const body = sendCodeSchema.parse(req.body);
@@ -6184,7 +6300,7 @@ function registerVerificationRoutes(app2) {
       }
     }
   });
-  app2.post("/api/verify/confirm-code", isAuthenticated, async (req, res) => {
+  app.post("/api/verify/confirm-code", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     try {
       const body = confirmCodeSchema.parse(req.body);
@@ -6237,18 +6353,43 @@ function registerVerificationRoutes(app2) {
       }
     }
   });
-  app2.get("/api/verify/status", isAuthenticated, async (req, res) => {
+  app.get("/api/verify/status", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const [latest] = await db.select().from(userActivity).where(and2(eq3(userActivity.userId, userId), eq3(userActivity.activityType, "identity_verified"))).orderBy(desc2(userActivity.createdAt)).limit(1);
     res.json({ verified: Boolean(latest), verifiedAt: latest?.createdAt ?? null });
   });
 }
+var CODE_TTL_MS, MAX_ATTEMPTS2, sendCodeSchema, confirmCodeSchema;
+var init_verification_routes = __esm({
+  "server/verification-routes.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_replitAuth();
+    init_storage();
+    init_security();
+    init_email_service();
+    CODE_TTL_MS = 10 * 60 * 1e3;
+    MAX_ATTEMPTS2 = 5;
+    sendCodeSchema = z10.object({
+      destination: z10.string().min(3).max(200),
+      // email address or phone number
+      channel: z10.enum(["email", "sms"]).default("email"),
+      purpose: z10.string().max(50).default("identity_verification"),
+      legalName: z10.string().max(200).optional(),
+      idType: z10.string().max(40).optional()
+    });
+    confirmCodeSchema = z10.object({
+      destination: z10.string().min(3).max(200),
+      code: z10.string().length(6).regex(/^\d{6}$/),
+      purpose: z10.string().max(50).default("identity_verification")
+    });
+  }
+});
 
 // server/creator-routes.ts
 import { z as z11 } from "zod";
 import crypto6 from "crypto";
-init_schema();
-init_security();
 async function generateUniqueSlCreatorId() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const shortId = crypto6.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
@@ -6258,8 +6399,8 @@ async function generateUniqueSlCreatorId() {
   }
   return `SL-CREATOR-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
-function registerCreatorRoutes(app2) {
-  app2.get("/api/creators", isAuthenticated, async (req, res) => {
+function registerCreatorRoutes(app) {
+  app.get("/api/creators", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const list = await storage.getCreators(userId);
@@ -6269,7 +6410,7 @@ function registerCreatorRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch creators" });
     }
   });
-  app2.post("/api/creators", isAuthenticated, async (req, res) => {
+  app.post("/api/creators", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertCreatorSchema.parse(req.body);
@@ -6297,7 +6438,7 @@ function registerCreatorRoutes(app2) {
       }
     }
   });
-  app2.get("/api/creators/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/creators/:id", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const creator = await storage.getCreator(req.params.id);
@@ -6315,7 +6456,7 @@ function registerCreatorRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch creator" });
     }
   });
-  app2.patch("/api/creators/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/creators/:id", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const existing = await storage.getCreator(req.params.id);
@@ -6348,7 +6489,7 @@ function registerCreatorRoutes(app2) {
       }
     }
   });
-  app2.delete("/api/creators/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/creators/:id", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const existing = await storage.getCreator(req.params.id);
@@ -6376,13 +6517,20 @@ function registerCreatorRoutes(app2) {
     }
   });
 }
+var init_creator_routes = __esm({
+  "server/creator-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_schema();
+    init_security();
+  }
+});
 
 // server/rights-routes.ts
 import { z as z12 } from "zod";
-init_schema();
-init_security();
-function registerRightsRoutes(app2) {
-  app2.get("/api/rights-organizations", isAuthenticated, async (req, res) => {
+function registerRightsRoutes(app) {
+  app.get("/api/rights-organizations", isAuthenticated, async (req, res) => {
     try {
       const territory = typeof req.query.territory === "string" ? req.query.territory.toUpperCase() : void 0;
       const orgs = await storage.getRightsOrganizations(territory);
@@ -6392,10 +6540,10 @@ function registerRightsRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch rights organizations" });
     }
   });
-  app2.get("/api/territories", isAuthenticated, (_req, res) => {
+  app.get("/api/territories", isAuthenticated, (_req, res) => {
     res.json(TERRITORIES);
   });
-  app2.get("/api/rights-profile", isAuthenticated, async (req, res) => {
+  app.get("/api/rights-profile", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const profile = await storage.getCreatorRightsProfile(userId);
@@ -6405,7 +6553,7 @@ function registerRightsRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch rights profile" });
     }
   });
-  app2.put("/api/rights-profile", isAuthenticated, async (req, res) => {
+  app.put("/api/rights-profile", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertCreatorRightsProfileSchema.extend({ territory: z12.enum(TERRITORIES).optional() }).parse(req.body);
@@ -6431,9 +6579,15 @@ function registerRightsRoutes(app2) {
     }
   });
 }
-
-// server/legal-routes.ts
-import { z as z13 } from "zod";
+var init_rights_routes = __esm({
+  "server/rights-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_schema();
+    init_security();
+  }
+});
 
 // server/adminAuth.ts
 async function isAdmin(req, res, next) {
@@ -6459,17 +6613,21 @@ async function isAdmin(req, res, next) {
     res.status(500).json({ message: "Internal server error" });
   }
 }
+var init_adminAuth = __esm({
+  "server/adminAuth.ts"() {
+    "use strict";
+    init_storage();
+  }
+});
 
 // server/legal-routes.ts
-init_schema();
-init_security();
-var docTypeParamSchema = z13.enum(LEGAL_DOC_TYPES);
+import { z as z13 } from "zod";
 function parseDocType(raw) {
   const result = docTypeParamSchema.safeParse(raw);
   return result.success ? result.data : null;
 }
-function registerLegalRoutes(app2) {
-  app2.get("/api/legal/documents/:docType/latest", async (req, res) => {
+function registerLegalRoutes(app) {
+  app.get("/api/legal/documents/:docType/latest", async (req, res) => {
     const docType = parseDocType(req.params.docType);
     if (!docType) {
       res.status(400).json({ error: `Invalid docType. Must be one of: ${LEGAL_DOC_TYPES.join(", ")}` });
@@ -6493,7 +6651,7 @@ function registerLegalRoutes(app2) {
       res.status(500).json({ error: "Failed to fetch legal document" });
     }
   });
-  app2.get("/api/legal/documents/:docType/history", async (req, res) => {
+  app.get("/api/legal/documents/:docType/history", async (req, res) => {
     const docType = parseDocType(req.params.docType);
     if (!docType) {
       res.status(400).json({ error: `Invalid docType. Must be one of: ${LEGAL_DOC_TYPES.join(", ")}` });
@@ -6514,7 +6672,7 @@ function registerLegalRoutes(app2) {
       res.status(500).json({ error: "Failed to fetch legal document history" });
     }
   });
-  app2.post("/api/legal/documents", isAuthenticated, isAdmin, async (req, res) => {
+  app.post("/api/legal/documents", isAuthenticated, isAdmin, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertLegalDocumentSchema.parse(req.body);
@@ -6546,21 +6704,20 @@ function registerLegalRoutes(app2) {
     }
   });
 }
-
-// server/rights-ledger-routes.ts
-import { z as z14 } from "zod";
-import crypto7 from "crypto";
-init_schema();
-init_security();
+var docTypeParamSchema;
+var init_legal_routes = __esm({
+  "server/legal-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_adminAuth();
+    init_schema();
+    init_security();
+    docTypeParamSchema = z13.enum(LEGAL_DOC_TYPES);
+  }
+});
 
 // server/license-readiness.ts
-var LICENSE_SCORE_WEIGHTS = {
-  ownership: 30,
-  contributors: 25,
-  agreements: 25,
-  metadata: 15,
-  sampleClearance: 5
-};
 function tierForScore(score) {
   if (score >= 100) return "ready";
   if (score >= 75) return "needs_review";
@@ -6614,8 +6771,24 @@ async function recalculateLicenseReadiness(songAssetId) {
     licenseScore
   });
 }
+var LICENSE_SCORE_WEIGHTS;
+var init_license_readiness = __esm({
+  "server/license-readiness.ts"() {
+    "use strict";
+    init_storage();
+    LICENSE_SCORE_WEIGHTS = {
+      ownership: 30,
+      contributors: 25,
+      agreements: 25,
+      metadata: 15,
+      sampleClearance: 5
+    };
+  }
+});
 
 // server/rights-ledger-routes.ts
+import { z as z14 } from "zod";
+import crypto7 from "crypto";
 async function generateUniqueSlSongId() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const shortId = crypto7.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
@@ -6638,8 +6811,8 @@ async function requireAssetOwner(req, res) {
   }
   return asset;
 }
-function registerRightsLedgerRoutes(app2) {
-  app2.post("/api/assets/:id/assign-sl-id", isAuthenticated, async (req, res) => {
+function registerRightsLedgerRoutes(app) {
+  app.post("/api/assets/:id/assign-sl-id", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const asset = await requireAssetOwner(req, res);
@@ -6665,7 +6838,7 @@ function registerRightsLedgerRoutes(app2) {
       res.status(500).json({ message: "Failed to assign SL-SONG id" });
     }
   });
-  app2.get("/api/assets/:id/composition", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id/composition", isAuthenticated, async (req, res) => {
     try {
       const composition = await storage.getCompositionAsset(req.params.id);
       res.json(composition ?? null);
@@ -6673,7 +6846,7 @@ function registerRightsLedgerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch composition rights" });
     }
   });
-  app2.put("/api/assets/:id/composition", isAuthenticated, async (req, res) => {
+  app.put("/api/assets/:id/composition", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const asset = await requireAssetOwner(req, res);
@@ -6701,7 +6874,7 @@ function registerRightsLedgerRoutes(app2) {
       }
     }
   });
-  app2.get("/api/assets/:id/master", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id/master", isAuthenticated, async (req, res) => {
     try {
       const master = await storage.getMasterAsset(req.params.id);
       res.json(master ?? null);
@@ -6709,7 +6882,7 @@ function registerRightsLedgerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch master rights" });
     }
   });
-  app2.put("/api/assets/:id/master", isAuthenticated, async (req, res) => {
+  app.put("/api/assets/:id/master", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const asset = await requireAssetOwner(req, res);
@@ -6737,7 +6910,7 @@ function registerRightsLedgerRoutes(app2) {
       }
     }
   });
-  app2.get("/api/assets/:id/license-readiness", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id/license-readiness", isAuthenticated, async (req, res) => {
     try {
       let readiness = await storage.getLicenseReadiness(req.params.id);
       if (!readiness) {
@@ -6750,7 +6923,7 @@ function registerRightsLedgerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch license readiness" });
     }
   });
-  app2.post(
+  app.post(
     "/api/assets/:id/license-readiness/recalculate",
     isAuthenticated,
     async (req, res) => {
@@ -6766,7 +6939,7 @@ function registerRightsLedgerRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/assets/:id/license-readiness/sample-clearance",
     isAuthenticated,
     async (req, res) => {
@@ -6806,7 +6979,7 @@ function registerRightsLedgerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/assets/:id/rights-history", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id/rights-history", isAuthenticated, async (req, res) => {
     try {
       const [composition, master, ownershipHistory] = await Promise.all([
         storage.getCompositionAsset(req.params.id),
@@ -6826,10 +6999,23 @@ function registerRightsLedgerRoutes(app2) {
     }
   });
 }
+var init_rights_ledger_routes = __esm({
+  "server/rights-ledger-routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_schema();
+    init_security();
+    init_license_readiness();
+  }
+});
 
 // server/routes.ts
-init_security();
-var rateLimitStore2 = /* @__PURE__ */ new Map();
+import express2 from "express";
+import { createServer } from "http";
+import Stripe4 from "stripe";
+import { z as z15 } from "zod";
+import OpenAI2 from "openai";
 function rateLimit(maxRequests, windowMs) {
   return (req, res, next) => {
     const userId = req.user?.claims?.sub;
@@ -6850,27 +7036,6 @@ function rateLimit(maxRequests, windowMs) {
     next();
   };
 }
-var stripe4 = null;
-var stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;
-if (stripeKey) {
-  if (stripeKey.startsWith("sk_")) {
-    stripe4 = new Stripe4(stripeKey, {
-      apiVersion: "2025-08-27.basil"
-    });
-    console.log("Stripe initialized with secret key");
-  } else {
-    console.warn(
-      "Invalid Stripe key - key must start with sk_ for server-side usage. Stripe functionality disabled."
-    );
-  }
-} else {
-  console.warn(
-    "STRIPE_SECRET_KEY not found - Stripe functionality will be disabled"
-  );
-}
-var openai = new OpenAI2({
-  apiKey: process.env.OPENAI_API_KEY
-});
 async function generateAIAnalysis(messages2, negotiation) {
   if (!process.env.OPENAI_API_KEY) {
     console.warn("OpenAI API key not configured - skipping AI analysis");
@@ -6927,12 +7092,12 @@ Please provide your analysis and strategic recommendation.`
     return null;
   }
 }
-async function registerRoutes(app2) {
-  await setupAuth(app2);
-  registerMessageRoutes(app2);
-  registerComplianceRoutes(app2);
-  app2.use(requireTermsAccepted);
-  app2.get("/api/auth/user", isAuthenticated, async (req, res) => {
+async function registerRoutes(app) {
+  await setupAuth(app);
+  registerMessageRoutes(app);
+  registerComplianceRoutes(app);
+  app.use(requireTermsAccepted);
+  app.get("/api/auth/user", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
@@ -6942,7 +7107,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch user" });
     }
   });
-  app2.get("/api/contract-templates", isAuthenticated, async (req, res) => {
+  app.get("/api/contract-templates", isAuthenticated, async (req, res) => {
     try {
       const templates2 = await storage.getContractTemplates();
       res.json(templates2);
@@ -6951,7 +7116,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch contract templates" });
     }
   });
-  app2.get("/api/contract-templates/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/contract-templates/:id", isAuthenticated, async (req, res) => {
     try {
       const template = await storage.getContractTemplate(req.params.id);
       if (!template) {
@@ -6963,7 +7128,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch contract template" });
     }
   });
-  app2.get("/api/contracts", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contracts2 = await storage.getContracts(userId);
@@ -6973,7 +7138,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch contracts" });
     }
   });
-  app2.get("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -6995,7 +7160,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch contract" });
     }
   });
-  app2.post("/api/contracts", isAuthenticated, async (req, res) => {
+  app.post("/api/contracts", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contractData = insertContractSchema.parse({
@@ -7012,7 +7177,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create contract" });
     }
   });
-  app2.patch("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/contracts/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -7039,7 +7204,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update contract" });
     }
   });
-  app2.delete("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/contracts/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -7058,7 +7223,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to delete contract" });
     }
   });
-  app2.get(
+  app.get(
     "/api/contracts/:id/collaborators",
     isAuthenticated,
     async (req, res) => {
@@ -7087,7 +7252,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/contracts/:id/collaborators",
     isAuthenticated,
     async (req, res) => {
@@ -7118,7 +7283,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/contracts/:id/signatures",
     isAuthenticated,
     async (req, res) => {
@@ -7145,7 +7310,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/contracts/:id/signatures",
     isAuthenticated,
     async (req, res) => {
@@ -7183,7 +7348,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/contracts/:id/sign",
     isAuthenticated,
     async (req, res) => {
@@ -7268,7 +7433,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/profile", isAuthenticated, async (req, res) => {
+  app.get("/api/profile", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
@@ -7281,7 +7446,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch profile" });
     }
   });
-  app2.patch("/api/profile", isAuthenticated, async (req, res) => {
+  app.patch("/api/profile", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const updateData = insertUserSchema.partial().parse(req.body);
@@ -7310,7 +7475,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update profile" });
     }
   });
-  app2.put("/api/profile/image", isAuthenticated, async (req, res) => {
+  app.put("/api/profile/image", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const { profileImageUrl } = req.body;
@@ -7335,7 +7500,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update profile image" });
     }
   });
-  app2.get("/objects/:objectPath(*)", isAuthenticated, async (req, res) => {
+  app.get("/objects/:objectPath(*)", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const objectStorageService = new ObjectStorageService();
     try {
@@ -7359,12 +7524,12 @@ async function registerRoutes(app2) {
       return res.sendStatus(500);
     }
   });
-  app2.post("/api/objects/upload", isAuthenticated, async (req, res) => {
+  app.post("/api/objects/upload", isAuthenticated, async (req, res) => {
     const objectStorageService = new ObjectStorageService();
     const uploadURL = await objectStorageService.getObjectEntityUploadURL();
     res.json({ uploadURL });
   });
-  app2.post(
+  app.post(
     "/api/get-or-create-subscription",
     isAuthenticated,
     async (req, res) => {
@@ -7495,7 +7660,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/stripe/webhook",
     express2.raw({ type: "application/json" }),
     async (req, res) => {
@@ -7587,7 +7752,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/stripe/cancel-subscription",
     isAuthenticated,
     async (req, res) => {
@@ -7620,7 +7785,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/stripe/subscription",
     isAuthenticated,
     async (req, res) => {
@@ -7669,7 +7834,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/dashboard/stats", isAuthenticated, async (req, res) => {
+  app.get("/api/dashboard/stats", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contracts2 = await storage.getContracts(userId);
@@ -7691,7 +7856,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch dashboard stats" });
     }
   });
-  app2.get("/api/analytics", isAuthenticated, async (req, res) => {
+  app.get("/api/analytics", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const analyticsData = await storage.getAnalyticsData(userId);
@@ -7701,7 +7866,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch analytics data" });
     }
   });
-  app2.get("/api/analytics/global", isAuthenticated, async (req, res) => {
+  app.get("/api/analytics/global", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
@@ -7716,7 +7881,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch global analytics data" });
     }
   });
-  app2.post("/api/activity", isAuthenticated, async (req, res) => {
+  app.post("/api/activity", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const activityEvent = activityEventSchema.parse(req.body);
@@ -7734,7 +7899,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to track activity" });
     }
   });
-  app2.post("/api/activity/batch", isAuthenticated, async (req, res) => {
+  app.post("/api/activity/batch", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const batchData = batchActivitiesSchema.parse(req.body);
@@ -7748,7 +7913,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to track batch activities" });
     }
   });
-  app2.get("/api/negotiations", isAuthenticated, async (req, res) => {
+  app.get("/api/negotiations", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const negotiations2 = await storage.getNegotiations(userId);
@@ -7758,7 +7923,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch negotiations" });
     }
   });
-  app2.get("/api/negotiations/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/negotiations/:id", isAuthenticated, async (req, res) => {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
@@ -7776,7 +7941,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch negotiation" });
     }
   });
-  app2.post("/api/negotiations", isAuthenticated, async (req, res) => {
+  app.post("/api/negotiations", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const negotiationData = insertNegotiationSchema.parse({
@@ -7793,7 +7958,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create negotiation" });
     }
   });
-  app2.patch("/api/negotiations/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/negotiations/:id", isAuthenticated, async (req, res) => {
     try {
       const negotiationId = req.params.id;
       const userId = req.user.claims.sub;
@@ -7815,7 +7980,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update negotiation" });
     }
   });
-  app2.get(
+  app.get(
     "/api/negotiations/:id/conversations",
     isAuthenticated,
     async (req, res) => {
@@ -7838,7 +8003,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/negotiations/:id/conversations",
     isAuthenticated,
     rateLimit(10, 6e4),
@@ -7897,7 +8062,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/matches/recommendations",
     isAuthenticated,
     async (req, res) => {
@@ -7915,7 +8080,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/matches", isAuthenticated, async (req, res) => {
+  app.get("/api/matches", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const status = req.query.status;
@@ -7926,7 +8091,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to get matches" });
     }
   });
-  app2.post("/api/matches", isAuthenticated, async (req, res) => {
+  app.post("/api/matches", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const matchData = insertUserMatchSchema.parse({
@@ -7954,7 +8119,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create match" });
     }
   });
-  app2.patch("/api/matches/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/matches/:id", isAuthenticated, async (req, res) => {
     try {
       const matchId = req.params.id;
       const { status } = req.body;
@@ -7968,7 +8133,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update match status" });
     }
   });
-  app2.get("/api/conversations", isAuthenticated, async (req, res) => {
+  app.get("/api/conversations", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const conversations = await storage.getUserConversations(userId);
@@ -7978,7 +8143,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to get conversations" });
     }
   });
-  app2.get(
+  app.get(
     "/api/conversations/:userId",
     isAuthenticated,
     async (req, res) => {
@@ -7998,7 +8163,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/messages",
     isAuthenticated,
     rateLimit(30, 6e4),
@@ -8031,7 +8196,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/conversations/:userId/read",
     isAuthenticated,
     async (req, res) => {
@@ -8046,7 +8211,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/notifications", isAuthenticated, async (req, res) => {
+  app.get("/api/notifications", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const unreadOnly = req.query.unread === "true";
@@ -8060,7 +8225,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to get notifications" });
     }
   });
-  app2.patch(
+  app.patch(
     "/api/notifications/:id/read",
     isAuthenticated,
     async (req, res) => {
@@ -8074,7 +8239,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/notifications/read-all",
     isAuthenticated,
     async (req, res) => {
@@ -8088,7 +8253,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/admin/users",
     isAuthenticated,
     isAdmin,
@@ -8105,7 +8270,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.patch(
+  app.patch(
     "/api/admin/users/:id",
     isAuthenticated,
     isAdmin,
@@ -8125,7 +8290,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/admin/activity",
     isAuthenticated,
     isAdmin,
@@ -8139,7 +8304,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/assets", isAuthenticated, async (req, res) => {
+  app.get("/api/assets", isAuthenticated, async (req, res) => {
     try {
       const assets = await storage.getSongAssets(req.user.claims.sub);
       res.json(assets);
@@ -8148,7 +8313,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch assets" });
     }
   });
-  app2.post("/api/assets", isAuthenticated, async (req, res) => {
+  app.post("/api/assets", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const data = { ...req.body, createdBy: userId };
@@ -8162,7 +8327,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to create asset" });
     }
   });
-  app2.get("/api/assets/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id", isAuthenticated, async (req, res) => {
     try {
       const asset = await storage.getSongAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
@@ -8171,7 +8336,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch asset" });
     }
   });
-  app2.patch("/api/assets/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/assets/:id", isAuthenticated, async (req, res) => {
     try {
       const asset = await storage.getSongAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
@@ -8183,7 +8348,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to update asset" });
     }
   });
-  app2.get(
+  app.get(
     "/api/assets/:id/ownership",
     isAuthenticated,
     async (req, res) => {
@@ -8195,7 +8360,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/assets/:id/ownership/named",
     isAuthenticated,
     async (req, res) => {
@@ -8207,7 +8372,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/assets/:id/ownership/history",
     isAuthenticated,
     async (req, res) => {
@@ -8219,7 +8384,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/assets/:id/ownership",
     isAuthenticated,
     async (req, res) => {
@@ -8252,7 +8417,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.put(
+  app.put(
     "/api/assets/:id/ownership",
     isAuthenticated,
     async (req, res) => {
@@ -8302,7 +8467,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/assets/:id/revenue", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id/revenue", isAuthenticated, async (req, res) => {
     try {
       const events = await storage.getRevenueEvents(req.params.id);
       res.json(events);
@@ -8310,7 +8475,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch revenue events" });
     }
   });
-  app2.post(
+  app.post(
     "/api/assets/:id/revenue",
     isAuthenticated,
     async (req, res) => {
@@ -8330,7 +8495,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get(
+  app.get(
     "/api/revenue/:eventId/payouts/preview",
     isAuthenticated,
     async (req, res) => {
@@ -8342,7 +8507,7 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.post(
+  app.post(
     "/api/revenue/:eventId/payouts/execute",
     isAuthenticated,
     async (req, res) => {
@@ -8354,10 +8519,10 @@ async function registerRoutes(app2) {
       }
     }
   );
-  app2.get("/api/releases", isAuthenticated, async (_req, res) => {
+  app.get("/api/releases", isAuthenticated, async (_req, res) => {
     res.json([]);
   });
-  app2.get("/api/revenue-entries", isAuthenticated, async (req, res) => {
+  app.get("/api/revenue-entries", isAuthenticated, async (req, res) => {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
@@ -8377,7 +8542,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: error.message || "Failed to fetch revenue entries" });
     }
   });
-  app2.get("/api/payouts", isAuthenticated, async (req, res) => {
+  app.get("/api/payouts", isAuthenticated, async (req, res) => {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
@@ -8399,7 +8564,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: error.message || "Failed to fetch payouts" });
     }
   });
-  app2.post("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
+  app.post("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -8432,7 +8597,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to generate confirmations" });
     }
   });
-  app2.get("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -8444,7 +8609,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch confirmations" });
     }
   });
-  app2.get("/api/confirmations/:token", async (req, res) => {
+  app.get("/api/confirmations/:token", async (req, res) => {
     try {
       const confirmation = await storage.getConfirmationByToken(req.params.token);
       if (!confirmation) return res.status(404).json({ message: "Invalid or expired link" });
@@ -8471,7 +8636,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch confirmation details" });
     }
   });
-  app2.post("/api/confirmations/:token/submit", async (req, res) => {
+  app.post("/api/confirmations/:token/submit", async (req, res) => {
     try {
       const confirmation = await storage.getConfirmationByToken(req.params.token);
       if (!confirmation) return res.status(404).json({ message: "Invalid link" });
@@ -8497,7 +8662,7 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to submit confirmation" });
     }
   });
-  app2.get("/api/earnings", isAuthenticated, async (req, res) => {
+  app.get("/api/earnings", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const [balance, payouts] = await Promise.all([
@@ -8509,27 +8674,74 @@ async function registerRoutes(app2) {
       res.status(500).json({ message: "Failed to fetch earnings" });
     }
   });
-  registerConfirmationRoutes(app2);
-  registerServiceRoutes(app2);
-  registerOrganizationRoutes(app2);
-  registerCreatorRoutes(app2);
-  registerRightsRoutes(app2);
-  registerRightsLedgerRoutes(app2);
-  registerLegalRoutes(app2);
-  registerCopilotRoutes(app2);
-  registerPaymentRoutes(app2);
-  await registerSecurityRoutes(app2);
-  registerVerificationRoutes(app2);
-  const httpServer = createServer(app2);
+  registerConfirmationRoutes(app);
+  registerServiceRoutes(app);
+  registerOrganizationRoutes(app);
+  registerCreatorRoutes(app);
+  registerRightsRoutes(app);
+  registerRightsLedgerRoutes(app);
+  registerLegalRoutes(app);
+  registerCopilotRoutes(app);
+  registerPaymentRoutes(app);
+  await registerSecurityRoutes(app);
+  registerVerificationRoutes(app);
+  const httpServer = createServer(app);
   return httpServer;
 }
+var rateLimitStore2, stripe4, stripeKey, openai;
+var init_routes = __esm({
+  "server/routes.ts"() {
+    "use strict";
+    init_storage();
+    init_replitAuth();
+    init_schema();
+    init_objectStorage();
+    init_objectAcl();
+    init_schema();
+    init_confirmation_routes();
+    init_copilot_routes();
+    init_service_routes();
+    init_organization_routes();
+    init_message_routes();
+    init_payment_routes();
+    init_security_routes();
+    init_compliance_routes();
+    init_verification_routes();
+    init_creator_routes();
+    init_rights_routes();
+    init_legal_routes();
+    init_adminAuth();
+    init_rights_ledger_routes();
+    init_security();
+    init_license_readiness();
+    rateLimitStore2 = /* @__PURE__ */ new Map();
+    stripe4 = null;
+    stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;
+    if (stripeKey) {
+      if (stripeKey.startsWith("sk_")) {
+        stripe4 = new Stripe4(stripeKey, {
+          apiVersion: "2025-08-27.basil"
+        });
+        console.log("Stripe initialized with secret key");
+      } else {
+        console.warn(
+          "Invalid Stripe key - key must start with sk_ for server-side usage. Stripe functionality disabled."
+        );
+      }
+    } else {
+      console.warn(
+        "STRIPE_SECRET_KEY not found - Stripe functionality will be disabled"
+      );
+    }
+    openai = new OpenAI2({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+  }
+});
 
 // server/chatbotRoutes.ts
 import OpenAI3 from "openai";
 import { promises as fs2 } from "fs";
-var openai2 = new OpenAI3({
-  apiKey: process.env.OPENAI_API_KEY
-});
 async function loadKnowledgeBase() {
   try {
     const knowledgeBaseContent = await fs2.readFile(
@@ -8542,8 +8754,8 @@ async function loadKnowledgeBase() {
     return "";
   }
 }
-function registerChatbotRoutes(app2) {
-  app2.post("/api/chatbot", isAuthenticated, async (req, res) => {
+function registerChatbotRoutes(app) {
+  app.post("/api/chatbot", isAuthenticated, async (req, res) => {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({ message: "OpenAI API key not configured." });
     }
@@ -8576,54 +8788,67 @@ ${knowledgeBase}`
     }
   });
 }
-
-// server/vite.ts
-import express3 from "express";
-import fs3 from "fs";
-import path3 from "path";
-import { createServer as createViteServer, createLogger } from "vite";
+var openai2;
+var init_chatbotRoutes = __esm({
+  "server/chatbotRoutes.ts"() {
+    "use strict";
+    init_replitAuth();
+    openai2 = new OpenAI3({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+  }
+});
 
 // vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path2 from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
-var vite_config_default = defineConfig({
-  plugins: [
-    react(),
-    runtimeErrorOverlay(),
-    ...process.env.NODE_ENV !== "production" && process.env.REPL_ID !== void 0 ? [
-      await import("@replit/vite-plugin-cartographer").then(
-        (m) => m.cartographer()
-      ),
-      await import("@replit/vite-plugin-dev-banner").then(
-        (m) => m.devBanner()
-      )
-    ] : []
-  ],
-  resolve: {
-    alias: {
-      "@": path2.resolve(import.meta.dirname, "client", "src"),
-      "@shared": path2.resolve(import.meta.dirname, "shared"),
-      "@assets": path2.resolve(import.meta.dirname, "attached_assets")
-    }
-  },
-  root: path2.resolve(import.meta.dirname, "client"),
-  build: {
-    outDir: path2.resolve(import.meta.dirname, "dist/public"),
-    emptyOutDir: true
-  },
-  server: {
-    fs: {
-      strict: true,
-      deny: ["**/.*"]
-    }
+var vite_config_default;
+var init_vite_config = __esm({
+  async "vite.config.ts"() {
+    "use strict";
+    vite_config_default = defineConfig({
+      plugins: [
+        react(),
+        runtimeErrorOverlay(),
+        ...process.env.NODE_ENV !== "production" && process.env.REPL_ID !== void 0 ? [
+          await import("@replit/vite-plugin-cartographer").then(
+            (m) => m.cartographer()
+          ),
+          await import("@replit/vite-plugin-dev-banner").then(
+            (m) => m.devBanner()
+          )
+        ] : []
+      ],
+      resolve: {
+        alias: {
+          "@": path2.resolve(import.meta.dirname, "client", "src"),
+          "@shared": path2.resolve(import.meta.dirname, "shared"),
+          "@assets": path2.resolve(import.meta.dirname, "attached_assets")
+        }
+      },
+      root: path2.resolve(import.meta.dirname, "client"),
+      build: {
+        outDir: path2.resolve(import.meta.dirname, "dist/public"),
+        emptyOutDir: true
+      },
+      server: {
+        fs: {
+          strict: true,
+          deny: ["**/.*"]
+        }
+      }
+    });
   }
 });
 
 // server/vite.ts
+import express3 from "express";
+import fs3 from "fs";
+import path3 from "path";
+import { createServer as createViteServer, createLogger } from "vite";
 import { nanoid } from "nanoid";
-var viteLogger = createLogger();
 function log2(message, source = "express") {
   const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -8633,7 +8858,7 @@ function log2(message, source = "express") {
   });
   console.log(`${formattedTime} [${source}] ${message}`);
 }
-async function setupVite(app2, server) {
+async function setupVite(app, server) {
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
@@ -8652,8 +8877,8 @@ async function setupVite(app2, server) {
     server: serverOptions,
     appType: "custom"
   });
-  app2.use(vite.middlewares);
-  app2.use("*", async (req, res, next) => {
+  app.use(vite.middlewares);
+  app.use("*", async (req, res, next) => {
     const url = req.originalUrl;
     try {
       const clientTemplate = path3.resolve(
@@ -8675,7 +8900,7 @@ async function setupVite(app2, server) {
     }
   });
 }
-function serveStatic(app2, options = {}) {
+function serveStatic(app, options = {}) {
   const candidates = [
     path3.resolve(import.meta.dirname, "public"),
     path3.resolve(import.meta.dirname, "..", "dist", "public"),
@@ -8690,101 +8915,21 @@ function serveStatic(app2, options = {}) {
     }
     throw new Error(message);
   }
-  app2.use(express3.static(distPath));
-  app2.use("*", (_req, res) => {
+  app.use(express3.static(distPath));
+  app.use("*", (_req, res) => {
     res.sendFile(path3.resolve(distPath, "index.html"));
   });
 }
+var viteLogger;
+var init_vite = __esm({
+  async "server/vite.ts"() {
+    "use strict";
+    await init_vite_config();
+    viteLogger = createLogger();
+  }
+});
 
 // server/seedData.ts
-init_db();
-init_schema();
-var templates = [
-  {
-    name: "Split Sheet Agreement",
-    type: "split-sheet",
-    description: "Define ownership percentages and revenue splits for collaborative music projects.",
-    template: {
-      fields: [
-        { name: "title", label: "Song Title", type: "text", required: true },
-        { name: "releaseDate", label: "Release Date", type: "date", required: false },
-        { name: "collaborators", label: "Collaborators", type: "array", required: true },
-        { name: "performanceRoyalties", label: "Performance Royalties", type: "select", required: true },
-        { name: "mechanicalRoyalties", label: "Mechanical Royalties", type: "select", required: true },
-        { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-      ],
-      legalClauses: [
-        "All parties agree to the ownership percentages as specified herein.",
-        "Revenue splits shall be distributed according to the agreed percentages.",
-        "Publishing rights shall be administered according to ownership shares.",
-        "This agreement shall be governed by the laws of [State/Country]."
-      ]
-    }
-  },
-  {
-    name: "Performance Agreement",
-    type: "performance",
-    description: "Secure bookings with venues, festivals, and event organizers.",
-    template: {
-      fields: [
-        { name: "title", label: "Event Title", type: "text", required: true },
-        { name: "venue", label: "Venue", type: "text", required: true },
-        { name: "eventDate", label: "Event Date", type: "datetime", required: true },
-        { name: "performanceFee", label: "Performance Fee", type: "number", required: true },
-        { name: "technicalRequirements", label: "Technical Requirements", type: "textarea", required: false },
-        { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-      ],
-      legalClauses: [
-        "Artist agrees to perform at the specified venue on the agreed date and time.",
-        "Venue agrees to provide adequate sound system and technical support.",
-        "Payment shall be made within 30 days of performance completion.",
-        "Force majeure clause applies to unforeseen circumstances preventing performance."
-      ]
-    }
-  },
-  {
-    name: "Producer Agreement",
-    type: "producer",
-    description: "Establish terms for beat licensing, production credits, and royalties.",
-    template: {
-      fields: [
-        { name: "title", label: "Track Title", type: "text", required: true },
-        { name: "producerName", label: "Producer Name", type: "text", required: true },
-        { name: "beatPrice", label: "Beat Price", type: "number", required: true },
-        { name: "royaltyPercentage", label: "Royalty Percentage", type: "number", required: true },
-        { name: "creditRequirement", label: "Credit Requirement", type: "text", required: true },
-        { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-      ],
-      legalClauses: [
-        "Producer grants exclusive/non-exclusive rights to the beat as specified.",
-        "Artist agrees to provide proper production credits as specified.",
-        "Royalty payments shall be made according to the agreed percentage.",
-        "Producer retains ownership of the underlying musical composition."
-      ]
-    }
-  },
-  {
-    name: "Management Agreement",
-    type: "management",
-    description: "Define roles and responsibilities with your artist manager or booking agent.",
-    template: {
-      fields: [
-        { name: "title", label: "Agreement Title", type: "text", required: true },
-        { name: "managerName", label: "Manager Name", type: "text", required: true },
-        { name: "commissionRate", label: "Commission Rate", type: "number", required: true },
-        { name: "contractDuration", label: "Contract Duration", type: "text", required: true },
-        { name: "responsibilities", label: "Manager Responsibilities", type: "textarea", required: true },
-        { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-      ],
-      legalClauses: [
-        "Manager agrees to provide professional representation and career guidance.",
-        "Artist agrees to pay the specified commission rate on gross earnings.",
-        "Either party may terminate this agreement with 30 days written notice.",
-        "Manager shall act in the best interests of the artist at all times."
-      ]
-    }
-  }
-];
 async function seedContractTemplates() {
   try {
     console.log("Seeding contract templates...");
@@ -8801,13 +8946,105 @@ async function seedContractTemplates() {
     console.error("Error seeding contract templates:", error);
   }
 }
+var templates;
+var init_seedData = __esm({
+  "server/seedData.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    templates = [
+      {
+        name: "Split Sheet Agreement",
+        type: "split-sheet",
+        description: "Define ownership percentages and revenue splits for collaborative music projects.",
+        template: {
+          fields: [
+            { name: "title", label: "Song Title", type: "text", required: true },
+            { name: "releaseDate", label: "Release Date", type: "date", required: false },
+            { name: "collaborators", label: "Collaborators", type: "array", required: true },
+            { name: "performanceRoyalties", label: "Performance Royalties", type: "select", required: true },
+            { name: "mechanicalRoyalties", label: "Mechanical Royalties", type: "select", required: true },
+            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
+          ],
+          legalClauses: [
+            "All parties agree to the ownership percentages as specified herein.",
+            "Revenue splits shall be distributed according to the agreed percentages.",
+            "Publishing rights shall be administered according to ownership shares.",
+            "This agreement shall be governed by the laws of [State/Country]."
+          ]
+        }
+      },
+      {
+        name: "Performance Agreement",
+        type: "performance",
+        description: "Secure bookings with venues, festivals, and event organizers.",
+        template: {
+          fields: [
+            { name: "title", label: "Event Title", type: "text", required: true },
+            { name: "venue", label: "Venue", type: "text", required: true },
+            { name: "eventDate", label: "Event Date", type: "datetime", required: true },
+            { name: "performanceFee", label: "Performance Fee", type: "number", required: true },
+            { name: "technicalRequirements", label: "Technical Requirements", type: "textarea", required: false },
+            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
+          ],
+          legalClauses: [
+            "Artist agrees to perform at the specified venue on the agreed date and time.",
+            "Venue agrees to provide adequate sound system and technical support.",
+            "Payment shall be made within 30 days of performance completion.",
+            "Force majeure clause applies to unforeseen circumstances preventing performance."
+          ]
+        }
+      },
+      {
+        name: "Producer Agreement",
+        type: "producer",
+        description: "Establish terms for beat licensing, production credits, and royalties.",
+        template: {
+          fields: [
+            { name: "title", label: "Track Title", type: "text", required: true },
+            { name: "producerName", label: "Producer Name", type: "text", required: true },
+            { name: "beatPrice", label: "Beat Price", type: "number", required: true },
+            { name: "royaltyPercentage", label: "Royalty Percentage", type: "number", required: true },
+            { name: "creditRequirement", label: "Credit Requirement", type: "text", required: true },
+            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
+          ],
+          legalClauses: [
+            "Producer grants exclusive/non-exclusive rights to the beat as specified.",
+            "Artist agrees to provide proper production credits as specified.",
+            "Royalty payments shall be made according to the agreed percentage.",
+            "Producer retains ownership of the underlying musical composition."
+          ]
+        }
+      },
+      {
+        name: "Management Agreement",
+        type: "management",
+        description: "Define roles and responsibilities with your artist manager or booking agent.",
+        template: {
+          fields: [
+            { name: "title", label: "Agreement Title", type: "text", required: true },
+            { name: "managerName", label: "Manager Name", type: "text", required: true },
+            { name: "commissionRate", label: "Commission Rate", type: "number", required: true },
+            { name: "contractDuration", label: "Contract Duration", type: "text", required: true },
+            { name: "responsibilities", label: "Manager Responsibilities", type: "textarea", required: true },
+            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
+          ],
+          legalClauses: [
+            "Manager agrees to provide professional representation and career guidance.",
+            "Artist agrees to pay the specified commission rate on gross earnings.",
+            "Either party may terminate this agreement with 30 days written notice.",
+            "Manager shall act in the best interests of the artist at all times."
+          ]
+        }
+      }
+    ];
+  }
+});
 
 // server/transport-security.ts
-init_security();
-var IS_PRODUCTION = process.env.NODE_ENV === "production";
-function configureTrustProxy(app2) {
+function configureTrustProxy(app) {
   if (IS_PRODUCTION) {
-    app2.set("trust proxy", 1);
+    app.set("trust proxy", 1);
   }
 }
 function requireHttps(req, res, next) {
@@ -8830,20 +9067,24 @@ function hstsHeader(_req, res, next) {
   }
   next();
 }
-function applyTransportSecurity(app2) {
-  configureTrustProxy(app2);
-  app2.use(hstsHeader);
-  app2.use(securityHeaders);
+function applyTransportSecurity(app) {
+  configureTrustProxy(app);
+  app.use(hstsHeader);
+  app.use(securityHeaders);
   if (IS_PRODUCTION) {
-    app2.use(requireHttps);
+    app.use(requireHttps);
   }
 }
-
-// server/app.ts
-init_security();
+var IS_PRODUCTION;
+var init_transport_security = __esm({
+  "server/transport-security.ts"() {
+    "use strict";
+    init_security();
+    IS_PRODUCTION = process.env.NODE_ENV === "production";
+  }
+});
 
 // server/db-migrations.ts
-init_db();
 import { sql as sql10 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
   await db.execute(sql10`
@@ -9156,94 +9397,6 @@ async function runCoreSchemaMigrations() {
     WHERE NOT EXISTS (SELECT 1 FROM rights_organizations LIMIT 1);
   `);
 }
-var SEED_TOS_MARKDOWN = `SoundLedger Technologies Inc. \u2013 SplitSheet Product \xB7 Governing Law: Ontario, Canada
-
-## 1. Acceptance of Terms
-By accessing or using SplitSheet ("Platform"), you agree to these Terms. If you do not agree, do not use the Platform.
-
-## 2. Platform Liability
-SplitSheet acts solely as a platform to facilitate agreements and is **not a party to any agreement between users**. We are not responsible for disputes, performance, or enforcement of user-created agreements.
-
-## 3. User Responsibility
-Users are solely responsible for the **accuracy, legality, and enforceability** of the agreements they create.
-
-## 4. As-Is Disclaimer
-The Platform and all documents are provided **"as-is" without guarantees or warranties**, express or implied.
-
-## 5. No Legal Advice
-SplitSheet is **not a law firm** and does not provide legal advice. All templates, documents, and tools are provided for general informational purposes only and may not be suitable for every situation.
-
-Users are strongly encouraged to seek **independent legal advice** from a qualified lawyer before entering into any agreement.
-
-## 6. Intellectual Property
-All content, logos, and trademarks on SplitSheet are the **exclusive property of SoundLedger Technologies Inc.**
-
-## 7. Dispute Resolution
-Disputes arising from use of the Platform will be resolved in the following order:
-- Mutual negotiation
-- Mediation
-- Arbitration (costs shared equally)
-
-## 8. Eligibility
-- Must be 18+ or age of majority in your jurisdiction
-- Must have authority to enter binding agreements
-
-## 9. User Accounts & Content
-- Maintain account security
-- You own all uploaded content
-- You grant SplitSheet a limited license to operate the platform
-
-## 10. Payments & Subscriptions
-- Fees may apply; payments are non-refundable unless required by law
-- Pricing may change with notice
-
-## 11. Termination
-Accounts may be suspended or terminated for violating terms, fraudulent activity, or abuse.
-
-## 12. Limitation of Liability
-SplitSheet is **not liable for indirect or consequential damages**, and total liability is limited to fees paid in the last 12 months.
-
-## 13. Changes
-We may update these Terms; continued use constitutes acceptance.`;
-var SEED_PRIVACY_MARKDOWN = `SoundLedger Technologies Inc. \u2013 SplitSheet Product \xB7 GDPR & Canadian Privacy Law Aligned
-
-## 1. Information We Collect
-- **Account info:** name, email, username
-- **Contract data:** royalty splits, ownership percentages, agreement terms
-- **Usage data:** device info, IP address, interaction data
-
-## 2. How We Use Information
-- Operate the platform
-- Store agreements
-- Improve user experience
-- Ensure security
-
-## 3. Data Sharing
-We **do NOT sell user data**. We may share with cloud providers, payment processors, or legal authorities if required.
-
-## 4. Data Storage & Security
-- Stored securely with encryption
-- Access controls and secure authentication
-
-## 5. Your Rights (Canada / GDPR)
-You have the right to access, correct, or request deletion of your data.
-
-## 6. Data Retention
-Retained while your account is active and as required for legal compliance.
-
-## 7. Platform Liability
-SplitSheet is **not responsible for the content or legality** of user-created agreements.
-
-## 8. Children
-Platform is not for users under 18.
-
-## 9. Dispute Resolution
-Privacy-related disputes follow: negotiation \u2192 mediation \u2192 arbitration (costs shared equally).
-
-## 10. Changes
-Policy updates may occur; continued use constitutes acceptance.`;
-var SEED_LEGAL_VERSION = "2026-07-12";
-var SEED_LEGAL_EFFECTIVE_DATE = "2026-07-12";
 async function runLegalDocumentMigrations() {
   await db.execute(sql10`
     CREATE TABLE IF NOT EXISTS legal_documents (
@@ -9479,6 +9632,101 @@ async function runSecurityEngineMigrations() {
   `);
   await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
 }
+var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
+var init_db_migrations = __esm({
+  "server/db-migrations.ts"() {
+    "use strict";
+    init_db();
+    SEED_TOS_MARKDOWN = `SoundLedger Technologies Inc. \u2013 SplitSheet Product \xB7 Governing Law: Ontario, Canada
+
+## 1. Acceptance of Terms
+By accessing or using SplitSheet ("Platform"), you agree to these Terms. If you do not agree, do not use the Platform.
+
+## 2. Platform Liability
+SplitSheet acts solely as a platform to facilitate agreements and is **not a party to any agreement between users**. We are not responsible for disputes, performance, or enforcement of user-created agreements.
+
+## 3. User Responsibility
+Users are solely responsible for the **accuracy, legality, and enforceability** of the agreements they create.
+
+## 4. As-Is Disclaimer
+The Platform and all documents are provided **"as-is" without guarantees or warranties**, express or implied.
+
+## 5. No Legal Advice
+SplitSheet is **not a law firm** and does not provide legal advice. All templates, documents, and tools are provided for general informational purposes only and may not be suitable for every situation.
+
+Users are strongly encouraged to seek **independent legal advice** from a qualified lawyer before entering into any agreement.
+
+## 6. Intellectual Property
+All content, logos, and trademarks on SplitSheet are the **exclusive property of SoundLedger Technologies Inc.**
+
+## 7. Dispute Resolution
+Disputes arising from use of the Platform will be resolved in the following order:
+- Mutual negotiation
+- Mediation
+- Arbitration (costs shared equally)
+
+## 8. Eligibility
+- Must be 18+ or age of majority in your jurisdiction
+- Must have authority to enter binding agreements
+
+## 9. User Accounts & Content
+- Maintain account security
+- You own all uploaded content
+- You grant SplitSheet a limited license to operate the platform
+
+## 10. Payments & Subscriptions
+- Fees may apply; payments are non-refundable unless required by law
+- Pricing may change with notice
+
+## 11. Termination
+Accounts may be suspended or terminated for violating terms, fraudulent activity, or abuse.
+
+## 12. Limitation of Liability
+SplitSheet is **not liable for indirect or consequential damages**, and total liability is limited to fees paid in the last 12 months.
+
+## 13. Changes
+We may update these Terms; continued use constitutes acceptance.`;
+    SEED_PRIVACY_MARKDOWN = `SoundLedger Technologies Inc. \u2013 SplitSheet Product \xB7 GDPR & Canadian Privacy Law Aligned
+
+## 1. Information We Collect
+- **Account info:** name, email, username
+- **Contract data:** royalty splits, ownership percentages, agreement terms
+- **Usage data:** device info, IP address, interaction data
+
+## 2. How We Use Information
+- Operate the platform
+- Store agreements
+- Improve user experience
+- Ensure security
+
+## 3. Data Sharing
+We **do NOT sell user data**. We may share with cloud providers, payment processors, or legal authorities if required.
+
+## 4. Data Storage & Security
+- Stored securely with encryption
+- Access controls and secure authentication
+
+## 5. Your Rights (Canada / GDPR)
+You have the right to access, correct, or request deletion of your data.
+
+## 6. Data Retention
+Retained while your account is active and as required for legal compliance.
+
+## 7. Platform Liability
+SplitSheet is **not responsible for the content or legality** of user-created agreements.
+
+## 8. Children
+Platform is not for users under 18.
+
+## 9. Dispute Resolution
+Privacy-related disputes follow: negotiation \u2192 mediation \u2192 arbitration (costs shared equally).
+
+## 10. Changes
+Policy updates may occur; continued use constitutes acceptance.`;
+    SEED_LEGAL_VERSION = "2026-07-12";
+    SEED_LEGAL_EFFECTIVE_DATE = "2026-07-12";
+  }
+});
 
 // server/boot-check.ts
 function assertRuntimeEnv() {
@@ -9489,7 +9737,7 @@ function assertRuntimeEnv() {
   if (!hasDb) missing.push("DATABASE_URL (or NEON_DATABASE_URL)");
   if (!process.env.SESSION_SECRET) missing.push("SESSION_SECRET");
   const isProd = process.env.NODE_ENV === "production" || isVercelRuntime();
-  const useLocalAuth2 = process.env.AUTH_PROVIDER === "local";
+  const useLocalAuth2 = useLocalAuthProvider();
   if (isProd) {
     if (process.env.LOCAL_DEV === "true") {
       throw new Error(
@@ -9512,13 +9760,19 @@ function assertRuntimeEnv() {
     );
   }
 }
+var init_boot_check = __esm({
+  "server/boot-check.ts"() {
+    "use strict";
+    init_runtime();
+  }
+});
 
 // server/app.ts
-var cached = null;
-var STRIPE_WEBHOOK_PATHS = /* @__PURE__ */ new Set([
-  "/api/stripe/webhook",
-  "/api/stripe/connect-webhook"
-]);
+var app_exports = {};
+__export(app_exports, {
+  getApp: () => getApp
+});
+import express4 from "express";
 function isStripeWebhookPath(req) {
   return STRIPE_WEBHOOK_PATHS.has(req.path);
 }
@@ -9530,8 +9784,8 @@ async function runBootMigrations() {
 }
 async function buildApp() {
   assertRuntimeEnv();
-  const app2 = express4();
-  applyTransportSecurity(app2);
+  const app = express4();
+  applyTransportSecurity(app);
   console.log("Environment loaded");
   console.log(
     "OpenAI API (CoPilot):",
@@ -9541,17 +9795,17 @@ async function buildApp() {
     "Message encryption:",
     process.env.FIELD_ENCRYPTION_SECRET || process.env.SESSION_SECRET ? "AES-256-GCM at rest" : "Dev key \u2014 set FIELD_ENCRYPTION_SECRET for production"
   );
-  app2.use((req, res, next) => {
+  app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();
     return express4.json({ limit: "1mb" })(req, res, next);
   });
-  app2.use((req, res, next) => {
+  app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();
     return express4.urlencoded({ extended: false })(req, res, next);
   });
-  app2.use(sanitizeMiddleware);
-  app2.use("/api", createPgRateLimiter(300, 6e4, "global-api"));
-  app2.use((req, res, next) => {
+  app.use(sanitizeMiddleware);
+  app.use("/api", createPgRateLimiter(300, 6e4, "global-api"));
+  app.use((req, res, next) => {
     const start = Date.now();
     const path4 = req.path;
     let capturedJsonResponse = void 0;
@@ -9599,9 +9853,9 @@ async function buildApp() {
   if (!skipMigrations) {
     await seedContractTemplates();
   }
-  const server = await registerRoutes(app2);
-  registerChatbotRoutes(app2);
-  app2.use((err, req, res, _next) => {
+  const server = await registerRoutes(app);
+  registerChatbotRoutes(app);
+  app.use((err, req, res, _next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
     logger.error("request.unhandled_error", {
@@ -9615,12 +9869,12 @@ async function buildApp() {
       res.status(status).json({ message });
     }
   });
-  if (!isVercelRuntime() && app2.get("env") === "development") {
-    await setupVite(app2, server);
+  if (!isVercelRuntime() && app.get("env") === "development") {
+    await setupVite(app, server);
   } else {
-    serveStatic(app2, { optional: isVercelRuntime() });
+    serveStatic(app, { optional: isVercelRuntime() });
   }
-  return { app: app2, server };
+  return { app, server };
 }
 function getApp() {
   if (!cached) {
@@ -9631,31 +9885,81 @@ function getApp() {
   }
   return cached;
 }
+var cached, STRIPE_WEBHOOK_PATHS;
+var init_app = __esm({
+  async "server/app.ts"() {
+    "use strict";
+    init_loadEnv();
+    init_routes();
+    init_chatbotRoutes();
+    await init_vite();
+    init_seedData();
+    init_transport_security();
+    init_security();
+    init_db_migrations();
+    init_logger();
+    init_runtime();
+    init_boot_check();
+    cached = null;
+    STRIPE_WEBHOOK_PATHS = /* @__PURE__ */ new Set([
+      "/api/stripe/webhook",
+      "/api/stripe/connect-webhook"
+    ]);
+  }
+});
 
 // server/vercel-entry.ts
+import express5 from "express";
 function bootFailureApp(err) {
   const message = err instanceof Error ? err.message : "Application failed to start";
   console.error("[vercel-boot] boot failed:", message);
   if (err instanceof Error && err.stack) {
     console.error(err.stack);
   }
-  const app2 = express5();
-  app2.use((_req, res) => {
+  const app = express5();
+  app.use((_req, res) => {
     res.status(503).json({
       error: "SERVICE_UNAVAILABLE",
       message,
-      hint: "Set Production env: DATABASE_URL/NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Redeploy."
+      hint: "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Then Redeploy."
     });
   });
-  return app2;
+  return app;
 }
-var app;
-try {
-  ({ app } = await getApp());
-} catch (err) {
-  app = bootFailureApp(err);
+var bridge = express5();
+var realApp = null;
+var bootPromise = null;
+async function ensureApp() {
+  if (realApp) return realApp;
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      try {
+        const { getApp: getApp2 } = await init_app().then(() => app_exports);
+        const { app } = await getApp2();
+        realApp = app;
+        return app;
+      } catch (err) {
+        realApp = bootFailureApp(err);
+        return realApp;
+      }
+    })();
+  }
+  return bootPromise;
 }
-var vercel_entry_default = app;
+bridge.use(async (req, res, next) => {
+  try {
+    const app = await ensureApp();
+    app(req, res, next);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(503).json({
+        error: "SERVICE_UNAVAILABLE",
+        message: err instanceof Error ? err.message : "Boot failed"
+      });
+    }
+  }
+});
+var vercel_entry_default = bridge;
 export {
   vercel_entry_default as default
 };
