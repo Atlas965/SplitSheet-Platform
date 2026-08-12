@@ -12,7 +12,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
-import OperatorLayout from "@/components/OperatorLayout";
 
 interface MessagePartner {
   id: string;
@@ -332,26 +331,24 @@ export default function MessagesPage() {
   };
 
   return (
-    <OperatorLayout>
-      <div className="max-w-7xl mx-auto p-6">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Messages</h1>
-          <p className="text-muted-foreground mt-2 flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" />
-            Secure operator messaging — TLS in transit, AES-256-GCM at rest
-          </p>
+    <div className="max-w-7xl mx-auto p-6">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">Messages</h1>
+        <p className="text-muted-foreground mt-2 flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4" />
+          Secure operator messaging — TLS in transit, AES-256-GCM at rest
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[700px]">
+        <div className={cn("md:col-span-1", selectedConversation && "hidden md:block")}>
+          <ConversationList />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[700px]">
-          <div className={cn("md:col-span-1", selectedConversation && "hidden md:block")}>
-            <ConversationList />
-          </div>
-
-          <div className={cn("md:col-span-2", !selectedConversation && "hidden md:block")}>
-            <MessageView />
-          </div>
+        <div className={cn("md:col-span-2", !selectedConversation && "hidden md:block")}>
+          <MessageView />
         </div>
       </div>
-    </OperatorLayout>
+    </div>
   );
 }

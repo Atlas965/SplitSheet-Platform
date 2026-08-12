@@ -5,7 +5,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
-import Logo from "@/components/Logo";
 import ContractForm from "@/components/ContractForm";
 
 // All valid contract types the form supports
@@ -25,7 +24,7 @@ const CONTRACT_TITLES: Record<ContractType, string> = {
 
 export default function ContractFormPage() {
   const { toast } = useToast();
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const { type } = useParams<{ type: string }>();
   const [, setLocation] = useLocation();
 
@@ -132,50 +131,19 @@ export default function ContractFormPage() {
     );
   }
 
-  const userInitial =
-    (user as any)?.firstName?.[0] ??
-    (user as any)?.email?.[0]?.toUpperCase() ??
-    "U";
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Link href="/">
-                <Logo />
-              </Link>
-              <Link href="/" className="text-xl font-bold text-primary hover:opacity-80 transition-opacity">
-                SplitSheet
-              </Link>
-              <span className="text-muted-foreground/50 hidden sm:inline">›</span>
-              <span className="text-sm text-muted-foreground hidden sm:inline">
-                {CONTRACT_TITLES[type]}
-              </span>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <Link
-                href="/templates"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors hidden sm:inline"
-              >
-                ← Templates
-              </Link>
-              <div
-                className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm"
-                title={(user as any)?.email ?? "Account"}
-              >
-                {userInitial}
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-
+    <div className="bg-background">
       {/* Form body */}
       <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="mb-4">
+          <Link
+            href="/templates"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            ← Templates
+          </Link>
+          <h1 className="text-2xl font-bold mt-2">{CONTRACT_TITLES[type]}</h1>
+        </div>
         <div className="bg-card rounded-xl border border-border overflow-hidden">
 
           {/* Form header */}

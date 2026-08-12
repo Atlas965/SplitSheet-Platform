@@ -4,22 +4,17 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import Logo from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import Footer from "@/components/Footer";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  LogOut, User, CreditCard, CheckCircle2, AlertCircle,
+  CreditCard, CheckCircle2, AlertCircle,
   FileText, Users, HardDrive, Plus, Download, ArrowRight,
-  Loader2, XCircle, RefreshCw, LayoutDashboard, Layers, Lock,
+  Loader2, XCircle, RefreshCw, Layers, Lock,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -481,12 +476,6 @@ export default function Billing() {
   const nextBillingStr = subscriptionData?.nextBillingDate ? fmt(subscriptionData.nextBillingDate) : null;
   const periodStartStr = subscriptionData?.currentPeriodStart ? fmtShort(subscriptionData.currentPeriodStart) : null;
 
-  const userInitial = (user as any)?.firstName?.[0] ?? (user as any)?.email?.[0]?.toUpperCase() ?? "U";
-  const userName =
-    (user as any)?.firstName
-      ? `${(user as any).firstName} ${(user as any).lastName ?? ""}`.trim()
-      : (user as any)?.email ?? "My Account";
-
   const refreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/stripe/subscription"] });
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
@@ -495,86 +484,7 @@ export default function Billing() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-
-      {/* Top nav */}
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Link href="/"><Logo /></Link>
-              <Link href="/" className="text-xl font-bold text-primary hover:opacity-80 transition-opacity">
-                SplitSheet
-              </Link>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm hover:opacity-90 transition-opacity"
-                  title={userName}
-                >
-                  {userInitial}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuLabel className="font-normal">
-                  <p className="text-sm font-semibold truncate">{userName}</p>
-                  {(user as any)?.email && (
-                    <p className="text-xs text-muted-foreground truncate">{(user as any).email}</p>
-                  )}
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/" className="flex items-center w-full cursor-pointer">
-                    <LayoutDashboard className="mr-2 h-4 w-4" /> Dashboard
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/profile" className="flex items-center w-full cursor-pointer">
-                    <User className="mr-2 h-4 w-4" /> Profile
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive cursor-pointer"
-                  onClick={() => { window.location.href = "/api/logout"; }}
-                >
-                  <LogOut className="mr-2 h-4 w-4" /> Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      </nav>
-
-      {/* Secondary tabs */}
-      <div className="bg-card border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <nav className="flex space-x-1 overflow-x-auto">
-            {[
-              { href: "/",          label: "Overview",  icon: "fa-home" },
-              { href: "/contracts", label: "Contracts", icon: "fa-file-contract" },
-              { href: "/profile",   label: "Profile",   icon: "fa-user" },
-              { href: "/templates", label: "Templates", icon: "fa-layer-group" },
-              { href: "/billing",   label: "Billing",   icon: "fa-credit-card", active: true },
-            ].map((tab) => (
-              <Link
-                key={tab.href}
-                href={tab.href}
-                className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
-                  tab.active
-                    ? "border-accent text-accent"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                }`}
-              >
-                <i className={`fas ${tab.icon} text-xs`} />
-                {tab.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-      </div>
-
+    <div className="bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-foreground">Billing &amp; Subscription</h1>

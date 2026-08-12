@@ -2,13 +2,11 @@ import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import Logo from "@/components/Logo";
 import { Music2, Search, Plus, CheckCircle2, Clock, FileEdit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import Footer from "@/components/Footer";
-import UserAvatar from "@/components/UserAvatar";
 
 interface Project {
   id: string;
@@ -70,20 +68,7 @@ export default function Projects() {
   const draft   = projects.filter((c) => c.status === "draft").length;
 
   return (
-    <div className="min-h-screen bg-background">
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
-          <div className="flex items-center gap-3">
-            <Link href="/"><Logo /></Link>
-            <Link href="/" className="text-xl font-bold text-primary">SplitSheet</Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Dashboard</Link>
-            <UserAvatar />
-          </div>
-        </div>
-      </nav>
-
+    <div className="bg-background">
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">

@@ -28,6 +28,7 @@
   --chart-4: hsl(147.1429, 78.5047%, 41.9608%);
   --chart-5: hsl(341.4894, 75.2000%, 50.9804%);
   --sidebar: hsl(0, 0%, 100%);
+  --sidebar-background: hsl(0, 0%, 100%);
   --sidebar-foreground: hsl(210, 40%, 8%);
   --sidebar-primary: hsl(210, 100%, 60%);
   --sidebar-primary-foreground: hsl(0, 0%, 98%);
@@ -77,6 +78,7 @@
   --chart-4: hsl(147.1429, 78.5047%, 51.9608%);
   --chart-5: hsl(341.4894, 75.2000%, 60.9804%);
   --sidebar: hsl(210, 40%, 8%);
+  --sidebar-background: hsl(210, 40%, 8%);
   --sidebar-foreground: hsl(210, 40%, 92%);
   --sidebar-primary: hsl(210, 100%, 70%);
   --sidebar-primary-foreground: hsl(210, 40%, 4%);

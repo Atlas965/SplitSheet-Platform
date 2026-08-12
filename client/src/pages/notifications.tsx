@@ -1,11 +1,9 @@
 import { useEffect } from "react";
-import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
-import Logo from "@/components/Logo";
 import Footer from "@/components/Footer";
 
 import {
@@ -51,7 +49,7 @@ function notifIcon(type: string) {
 }
 
 export default function NotificationsPage() {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const { toast } = useToast();
 
   useEffect(() => {
@@ -107,42 +105,8 @@ export default function NotificationsPage() {
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
-  const userInitial =
-    (user as any)?.firstName?.[0] ||
-    (user as any)?.email?.[0]?.toUpperCase() ||
-    "U";
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* NAVBAR */}
-      <nav className="bg-card border-b border-border sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
-          <div className="flex items-center gap-3">
-            <Link href="/">
-              <Logo />
-            </Link>
-
-            <Link href="/">
-              <span className="text-xl font-bold text-primary cursor-pointer">
-                SplitSheet
-              </span>
-            </Link>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link href="/">
-              <span className="text-sm text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
-                ← Dashboard
-              </span>
-            </Link>
-
-            <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center text-white font-semibold text-sm">
-              {userInitial}
-            </div>
-          </div>
-        </div>
-      </nav>
-
+    <div className="bg-background">
       {/* MAIN */}
       <div className="max-w-3xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">

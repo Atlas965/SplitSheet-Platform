@@ -3,16 +3,11 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { isUnauthorizedError } from "@/lib/authUtils";
-import Logo from "@/components/Logo";
 import StatCard from "@/components/StatCard";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { ChevronDown, Home, User, FileText, Mail, Users, Search, BarChart, Layers, CreditCard, Plus, Bell, Menu, Trash2, BookOpen, HelpCircle, FolderOpen, Building2, Mic2 } from "lucide-react";
+import { Plus, Trash2, Users, FolderOpen, FileText } from "lucide-react";
 import WorkflowBanner from "@/components/WorkflowBanner";
-import { resetOnboarding } from "@/components/OnboardingWalkthrough";
-import UserAvatar from "@/components/UserAvatar";
 
 interface DashboardStats {
   totalContracts: number;
@@ -34,7 +29,6 @@ export default function Dashboard() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
 
-  // Redirect to home if not authenticated
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       toast({
@@ -45,7 +39,6 @@ export default function Dashboard() {
       setTimeout(() => {
         window.location.href = "/api/login";
       }, 500);
-      return;
     }
   }, [isAuthenticated, isLoading, toast]);
 
@@ -87,178 +80,10 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-50 supports-[backdrop-filter]:bg-card/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Logo />
-              <span className="text-xl font-bold text-primary tracking-tight">SplitSheet</span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button className="text-muted-foreground hover:text-foreground" data-testid="nav-notifications">
-                <Bell className="h-4 w-4" />
-              </button>
-              <UserAvatar />
-            </div>
-          </div>
-        </div>
-      </nav>
-
+    <div className="bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <WorkflowBanner />
 
-        {/* Navigation Dropdown Menu */}
-        <div className="mb-8">
-          <div className="border-b border-border pb-4">
-            <nav className="relative">
-              {/* Main Navigation Dropdown */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  {/* Primary Action - Dashboard */}
-                  <Link href="/" className="nav-item nav-active" data-testid="tab-overview">
-                    <Home className="mr-2 h-4 w-4" />Dashboard
-                  </Link>
-
-                  {/* Navigation Dropdown - Accessible */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="nav-item flex items-center space-x-2" data-testid="nav-dropdown-trigger">
-                        <Menu className="mr-1 h-4 w-4" />
-                        <span>Navigation</span>
-                        <ChevronDown className="ml-1 h-3 w-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="w-64" align="start" data-testid="nav-dropdown-menu">
-                      {/* Highest Precedence - Core Functions */}
-                      <DropdownMenuLabel>Core Functions</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-profile">
-                        <Link href="/profile" className="flex items-center w-full">
-                          <User className="mr-3 h-4 w-4" />
-                          <span>Profile</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-clients">
-                        <Link href="/clients" className="flex items-center w-full">
-                          <Users className="mr-3 h-4 w-4" />
-                          <span>Clients</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-projects">
-                        <Link href="/projects" className="flex items-center w-full">
-                          <FolderOpen className="mr-3 h-4 w-4" />
-                          <span>Projects</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-organizations">
-                        <Link href="/organizations" className="flex items-center w-full">
-                          <Building2 className="mr-3 h-4 w-4" />
-                          <span>Organizations</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-creators">
-                        <Link href="/creators" className="flex items-center w-full">
-                          <Mic2 className="mr-3 h-4 w-4" />
-                          <span>Creators</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-contracts">
-                        <Link href="/contracts" className="flex items-center w-full">
-                          <FileText className="mr-3 h-4 w-4" />
-                          <span>Contracts</span>
-                        </Link>
-                      </DropdownMenuItem>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Medium-High Precedence - Communication */}
-                      <DropdownMenuLabel>Communication</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-messages">
-                        <Link href="/messages" className="flex items-center w-full">
-                          <Mail className="mr-3 h-4 w-4" />
-                          <span>Messages</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-matches">
-                        <Link href="/matches" className="flex items-center w-full">
-                          <Users className="mr-3 h-4 w-4" />
-                          <span>Connections</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-search">
-                        <Link href="/search" className="flex items-center w-full">
-                          <Search className="mr-3 h-4 w-4" />
-                          <span>Search</span>
-                        </Link>
-                      </DropdownMenuItem>
-
-                      <DropdownMenuSeparator />
-
-                      {/* Lower Precedence - Tools & Admin */}
-                      <DropdownMenuLabel>Tools & Analytics</DropdownMenuLabel>
-                      <DropdownMenuItem asChild data-testid="dropdown-ownership">
-                        <Link href="/ownership" className="flex items-center w-full">
-                          <BookOpen className="mr-3 h-4 w-4" />
-                          <span>Rights Ledger</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-analytics">
-                        <Link href="/analytics" className="flex items-center w-full">
-                          <BarChart className="mr-3 h-4 w-4" />
-                          <span>Analytics</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-templates">
-                        <Link href="/templates" className="flex items-center w-full">
-                          <Layers className="mr-3 h-4 w-4" />
-                          <span>Templates</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild data-testid="dropdown-billing">
-                        <Link href="/billing" className="flex items-center w-full">
-                          <CreditCard className="mr-3 h-4 w-4" />
-                          <span>Billing</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="cursor-pointer"
-                        onClick={() => resetOnboarding()}
-                        data-testid="dropdown-restart-tour"
-                      >
-                        <HelpCircle className="mr-3 h-4 w-4" />
-                        <span>Restart Walkthrough</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-
-                {/* Quick Actions */}
-                <div className="flex items-center space-x-3">
-                  <Button asChild className="btn-primary btn-sm" data-testid="btn-new-contract">
-                    <Link href="/contract/new">
-                      <Plus className="mr-1 h-3 w-3" />
-                      New Contract
-                    </Link>
-                  </Button>
-                  <Button variant="ghost" size="sm" asChild data-testid="quick-messages">
-                    <Link href="/messages">
-                      <Mail className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                  <Button variant="ghost" size="sm" asChild data-testid="quick-notifications">
-                    <Link href="/notifications">
-                      <Bell className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </nav>
-          </div>
-        </div>
-
-        {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <StatCard
             title="Total Contracts"
@@ -294,9 +119,7 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Recent Activity & Quick Actions */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Recent Activity */}
           <div className="lg:col-span-2 bg-card p-6 rounded-xl border border-border">
             <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
             <div className="space-y-4" data-testid="recent-activity">
@@ -308,7 +131,7 @@ export default function Dashboard() {
                 contracts.slice(0, 3).map((contract) => (
                   <div key={contract.id} className="flex items-center space-x-4 p-4 bg-muted rounded-lg group hover:bg-muted/80 transition-colors">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      contract.status === 'signed' ? 'bg-green-100' : 
+                      contract.status === 'signed' ? 'bg-green-100' :
                       contract.status === 'pending' ? 'bg-yellow-100' : 'bg-blue-100'
                     }`}>
                       <i className={`fas ${
@@ -319,8 +142,8 @@ export default function Dashboard() {
                     <div className="flex-1">
                       <p className="font-medium">{contract.title}</p>
                       <p className="text-muted-foreground text-sm">
-                        {contract.status === 'signed' ? 'Signed' : 
-                         contract.status === 'pending' ? 'Pending signatures' : 'Created'} • 
+                        {contract.status === 'signed' ? 'Signed' :
+                         contract.status === 'pending' ? 'Pending signatures' : 'Created'} •
                         {new Date(contract.updatedAt).toLocaleDateString()}
                       </p>
                     </div>
@@ -344,7 +167,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Quick Actions */}
           <div className="bg-card p-6 rounded-xl border border-border" data-tour="quick-actions">
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
             <div className="space-y-3">
