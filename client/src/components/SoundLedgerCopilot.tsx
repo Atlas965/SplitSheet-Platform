@@ -153,7 +153,7 @@ export default function SoundLedgerCopilot() {
       const greeting: Message = {
         id:        generateId(),
         role:      "assistant",
-        content:   `👋 Hey! I'm **SoundLedger CoPilot** — your AI guide for SplitSheet.\n\nI can walk you through the platform, explain music rights concepts, and help you get the most out of every feature. What would you like to know?`,
+        content:   `Hey — I'm **SoundLedger CoPilot**, your product guide for SplitSheet.\n\nI can explain the **Templates** library (all 56 workflow templates), walk you through projects, confirmations, billing, and the Rights Ledger.\n\nI'm **not a lawyer** and SplitSheet is **not a law firm** — I help with platform workflow and documentation, not legal advice.\n\nAsk me things like: “What is a Producer Agreement template for?” or “When should I use a Sync License?”`,
         timestamp: new Date(),
         isGreeting: true,
       };
