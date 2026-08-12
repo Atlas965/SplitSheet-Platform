@@ -29,7 +29,7 @@ import {
 import {
   Music2, Plus, Trash2, Send, CheckCircle2, Clock, AlertCircle,
   Copy, MoreVertical, Users, ChevronLeft, Pencil, Archive,
-  ExternalLink,
+  ExternalLink, FileText,
 } from "lucide-react";
 
 interface Project {
@@ -104,6 +104,20 @@ export default function ProjectDetail() {
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
     enabled: isAuthenticated,
+  });
+
+  const { data: recommendationData } = useQuery<{
+    recommendations: Array<{
+      template: string;
+      priority: string;
+      required: boolean;
+      reason: string;
+      riskLevel: string;
+      templateRecord?: { name?: string; type?: string } | null;
+    }>;
+  }>({
+    queryKey: [`/api/projects/${id}/recommended-agreements`],
+    enabled: !!id && isAuthenticated,
   });
 
   const clientMap = clients.reduce((acc, c) => ({ ...acc, [c.id]: c }), {} as Record<string, Client>);
@@ -415,6 +429,38 @@ export default function ProjectDetail() {
 
           {/* Actions + Confirmation Links */}
           <div className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FileText className="h-4 w-4" /> Recommended Agreements
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(recommendationData?.recommendations || []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Add contributors and roles to receive agreement recommendations.
+                  </p>
+                ) : (
+                  recommendationData!.recommendations.map((rec) => (
+                    <div key={rec.template} className="border border-border rounded-lg p-3 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">
+                          {rec.templateRecord?.name || rec.template}
+                        </p>
+                        <Badge variant={rec.required ? "default" : "secondary"}>
+                          {rec.priority}{rec.required ? " · required" : ""}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{rec.reason}</p>
+                      <Button asChild size="sm" variant="outline" className="mt-1">
+                        <Link href={`/contract/${rec.template}`}>Create</Link>
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+
             {/* Send Confirmations */}
             <Card>
               <CardHeader className="pb-3">

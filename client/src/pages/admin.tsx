@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Users, Activity, MessageSquare, Settings, Search, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
+import { Users, Activity, MessageSquare, Settings, Search, AlertTriangle, CheckCircle, XCircle, FileText } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -281,6 +281,105 @@ export default function AdminPage() {
     </div>
   );
 
+  const TemplateManagement = () => {
+    const { data: templates = [], isLoading: loadingTemplates, refetch } = useQuery({
+      queryKey: ["/api/admin/templates"],
+      enabled: isAdmin,
+    });
+
+    const activateMutation = useMutation({
+      mutationFn: (id: string) => apiRequest("POST", `/api/admin/templates/${id}/activate`),
+      onSuccess: () => {
+        toast({ title: "Template activated" });
+        refetch();
+      },
+    });
+
+    const archiveMutation = useMutation({
+      mutationFn: (id: string) => apiRequest("POST", `/api/admin/templates/${id}/archive`),
+      onSuccess: () => {
+        toast({ title: "Template archived" });
+        refetch();
+      },
+    });
+
+    const versionMutation = useMutation({
+      mutationFn: (id: string) => apiRequest("POST", `/api/admin/templates/${id}/version`, { bump: "minor" }),
+      onSuccess: () => {
+        toast({ title: "New template version created (draft)" });
+        refetch();
+      },
+    });
+
+    const setLegalMutation = useMutation({
+      mutationFn: ({ id, legalReviewStatus }: { id: string; legalReviewStatus: string }) =>
+        apiRequest("PATCH", `/api/admin/templates/${id}`, { legalReviewStatus }),
+      onSuccess: () => {
+        toast({ title: "Legal review status updated" });
+        refetch();
+      },
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">Agreement Template Management</h3>
+            <p className="text-sm text-muted-foreground">
+              Activate, archive, version, and set legal-review status. Changes are audit-logged.
+            </p>
+          </div>
+          <Badge variant="secondary">{(templates as any[]).length} templates</Badge>
+        </div>
+        <Card>
+          <CardContent className="pt-6 overflow-x-auto">
+            {loadingTemplates ? (
+              <p className="text-sm text-muted-foreground">Loading templates…</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Legal</TableHead>
+                    <TableHead>Version</TableHead>
+                    <TableHead>Risk</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(templates as any[]).map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="font-medium">{t.name}</TableCell>
+                      <TableCell>{t.category}</TableCell>
+                      <TableCell><Badge variant="outline">{t.status}</Badge></TableCell>
+                      <TableCell className="text-xs">{t.legalReviewStatus}</TableCell>
+                      <TableCell>v{t.version}</TableCell>
+                      <TableCell>{t.riskLevel}</TableCell>
+                      <TableCell className="text-right space-x-1 whitespace-nowrap">
+                        <Button size="sm" variant="outline" onClick={() => activateMutation.mutate(t.id)}>Activate</Button>
+                        <Button size="sm" variant="outline" onClick={() => versionMutation.mutate(t.id)}>Version</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setLegalMutation.mutate({ id: t.id, legalReviewStatus: "INTERNAL_REVIEW" })}
+                        >
+                          Legal
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => archiveMutation.mutate(t.id)}>Archive</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-7xl mx-auto p-6">
       <div className="mb-8">
@@ -291,7 +390,7 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">
             <Settings className="h-4 w-4 mr-2" />
             Overview
@@ -299,6 +398,10 @@ export default function AdminPage() {
           <TabsTrigger value="users">
             <Users className="h-4 w-4 mr-2" />
             Users
+          </TabsTrigger>
+          <TabsTrigger value="templates">
+            <FileText className="h-4 w-4 mr-2" />
+            Templates
           </TabsTrigger>
           <TabsTrigger value="monitoring">
             <Activity className="h-4 w-4 mr-2" />
@@ -386,6 +489,10 @@ export default function AdminPage() {
 
         <TabsContent value="users" className="mt-6">
           <UserManagement />
+        </TabsContent>
+
+        <TabsContent value="templates" className="mt-6">
+          <TemplateManagement />
         </TabsContent>
 
         <TabsContent value="monitoring" className="mt-6">

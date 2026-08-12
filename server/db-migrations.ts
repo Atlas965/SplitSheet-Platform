@@ -722,4 +722,67 @@ export async function runSecurityEngineMigrations(): Promise<void> {
     );
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+
+  // ── Entertainment Agreement Template Library extensions ───────────────────
+  await db.execute(sql`
+    ALTER TABLE contract_templates
+      ADD COLUMN IF NOT EXISTS slug varchar,
+      ADD COLUMN IF NOT EXISTS category varchar,
+      ADD COLUMN IF NOT EXISTS subcategory varchar,
+      ADD COLUMN IF NOT EXISTS industry varchar DEFAULT 'music',
+      ADD COLUMN IF NOT EXISTS agreement_type varchar,
+      ADD COLUMN IF NOT EXISTS version varchar DEFAULT '1.0',
+      ADD COLUMN IF NOT EXISTS status varchar DEFAULT 'draft',
+      ADD COLUMN IF NOT EXISTS jurisdiction varchar,
+      ADD COLUMN IF NOT EXISTS legal_review_status varchar DEFAULT 'NOT_REVIEWED',
+      ADD COLUMN IF NOT EXISTS legal_review_date timestamp,
+      ADD COLUMN IF NOT EXISTS rights_categories jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS required_parties jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS optional_parties jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS risk_level varchar DEFAULT 'medium',
+      ADD COLUMN IF NOT EXISTS workflow_type varchar,
+      ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS parent_template_id varchar;
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+
+  await db.execute(sql`
+    ALTER TABLE contracts
+      ADD COLUMN IF NOT EXISTS template_version varchar;
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS template_audit_log (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      template_id varchar REFERENCES contract_templates(id),
+      actor_id    varchar REFERENCES users(id),
+      action      varchar NOT NULL,
+      before      jsonb,
+      after       jsonb,
+      created_at  timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS license_records (
+      id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id     varchar REFERENCES contracts(id),
+      asset_id        varchar REFERENCES song_assets(id),
+      license_type    varchar NOT NULL,
+      licensor_name   varchar,
+      licensee_name   varchar,
+      territory       varchar,
+      term            varchar,
+      exclusivity     varchar,
+      rights_granted  jsonb DEFAULT '[]'::jsonb,
+      fee             decimal(12, 2),
+      metadata        jsonb,
+      version         integer DEFAULT 1,
+      created_by      varchar REFERENCES users(id),
+      created_at      timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
 }

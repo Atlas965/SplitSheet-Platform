@@ -77,7 +77,17 @@ import {
   type LegalDocType,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, sql, count, gte, lt, max } from "drizzle-orm";
+import { eq, desc, and, or, sql, count, gte, lt, max, ilike } from "drizzle-orm";
+
+export type TemplateListFilters = {
+  category?: string;
+  status?: string;
+  riskLevel?: string;
+  jurisdiction?: string;
+  rights?: string;
+  search?: string;
+  includeInactive?: boolean;
+};
 import { encryptMessageContent, decryptMessageContent } from "./message-crypto";
 
 export interface IStorage {
@@ -89,9 +99,12 @@ export interface IStorage {
   updateUserStripeInfo(userId: string, stripeCustomerId: string, stripeSubscriptionId: string): Promise<User>;
 
   // Contract template operations
-  getContractTemplates(): Promise<ContractTemplate[]>;
+  getContractTemplates(filters?: TemplateListFilters): Promise<ContractTemplate[]>;
   getContractTemplate(id: string): Promise<ContractTemplate | undefined>;
+  getContractTemplateByType(type: string): Promise<ContractTemplate | undefined>;
   createContractTemplate(template: InsertContractTemplate): Promise<ContractTemplate>;
+  updateContractTemplate(id: string, updates: Partial<ContractTemplate>): Promise<ContractTemplate>;
+  listAllContractTemplates(filters?: TemplateListFilters): Promise<ContractTemplate[]>;
 
   // Contract operations
   getContracts(userId: string): Promise<Contract[]>;
@@ -298,12 +311,63 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Contract template operations
-  async getContractTemplates(): Promise<ContractTemplate[]> {
-    return await db
-      .select()
-      .from(contractTemplates)
-      .where(eq(contractTemplates.isActive, true))
-      .orderBy(contractTemplates.name);
+  async getContractTemplates(filters: TemplateListFilters = {}): Promise<ContractTemplate[]> {
+    return this.listContractTemplatesInternal({
+      ...filters,
+      includeInactive: false,
+      productionOnly: true,
+    });
+  }
+
+  async listAllContractTemplates(filters: TemplateListFilters = {}): Promise<ContractTemplate[]> {
+    return this.listContractTemplatesInternal({ ...filters, includeInactive: true });
+  }
+
+  private async listContractTemplatesInternal(
+    filters: TemplateListFilters & { productionOnly?: boolean } = {},
+  ): Promise<ContractTemplate[]> {
+    const conditions = [];
+
+    if (filters.productionOnly) {
+      // Operator library: active + internal/legal review (draftable) + approved
+      conditions.push(
+        or(
+          eq(contractTemplates.status, "active"),
+          eq(contractTemplates.status, "approved"),
+          eq(contractTemplates.status, "internal_review"),
+          eq(contractTemplates.status, "legal_review"),
+          and(eq(contractTemplates.isActive, true), sql`${contractTemplates.status} IS NULL`),
+        ),
+      );
+    } else if (!filters.includeInactive) {
+      conditions.push(eq(contractTemplates.isActive, true));
+    }
+
+    if (filters.category) conditions.push(eq(contractTemplates.category, filters.category));
+    if (filters.status) conditions.push(eq(contractTemplates.status, filters.status));
+    if (filters.riskLevel) conditions.push(eq(contractTemplates.riskLevel, filters.riskLevel));
+    if (filters.jurisdiction) conditions.push(eq(contractTemplates.jurisdiction, filters.jurisdiction));
+    if (filters.search) {
+      const q = `%${filters.search}%`;
+      conditions.push(
+        or(
+          ilike(contractTemplates.name, q),
+          ilike(contractTemplates.description, q),
+          ilike(contractTemplates.type, q),
+        ),
+      );
+    }
+    if (filters.rights) {
+      conditions.push(
+        sql`${contractTemplates.rightsCategories}::jsonb ? ${filters.rights}`,
+      );
+    }
+
+    const query = db.select().from(contractTemplates);
+    if (conditions.length > 0) {
+      return await query.where(and(...conditions)).orderBy(contractTemplates.category, contractTemplates.name);
+    }
+    return await query.orderBy(contractTemplates.category, contractTemplates.name);
   }
 
   async getContractTemplate(id: string): Promise<ContractTemplate | undefined> {
@@ -314,12 +378,40 @@ export class DatabaseStorage implements IStorage {
     return template;
   }
 
+  async getContractTemplateByType(type: string): Promise<ContractTemplate | undefined> {
+    const rows = await db
+      .select()
+      .from(contractTemplates)
+      .where(or(eq(contractTemplates.type, type), eq(contractTemplates.slug, type)))
+      .orderBy(desc(contractTemplates.updatedAt));
+
+    if (rows.length === 0) return undefined;
+    const preferred =
+      rows.find((r) => r.status === "active" || r.status === "approved") ||
+      rows.find((r) => r.status === "internal_review" || r.status === "legal_review") ||
+      rows.find((r) => r.isActive) ||
+      rows[0];
+    return preferred;
+  }
+
   async createContractTemplate(template: InsertContractTemplate): Promise<ContractTemplate> {
     const [newTemplate] = await db
       .insert(contractTemplates)
       .values(template)
       .returning();
     return newTemplate;
+  }
+
+  async updateContractTemplate(id: string, updates: Partial<ContractTemplate>): Promise<ContractTemplate> {
+    const [updated] = await db
+      .update(contractTemplates)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(contractTemplates.id, id))
+      .returning();
+    return updated;
   }
 
   // Contract operations

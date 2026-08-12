@@ -39,6 +39,9 @@ import { registerVerificationRoutes } from "./verification-routes";
 import { registerCreatorRoutes } from "./creator-routes";
 import { registerRightsRoutes } from "./rights-routes";
 import { registerLegalRoutes } from "./legal-routes";
+import { registerTemplateRoutes } from "./template-routes";
+import { syncAgreementToRightsLedger } from "./agreement-ledger";
+import { isDraftableStatus, validateTemplateFieldValues } from "@shared/agreement-catalog";
 import { isAdmin } from "./adminAuth";
 import { registerRightsLedgerRoutes } from "./rights-ledger-routes";
 import { auditLog } from "./security";
@@ -241,7 +244,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Contract template routes
   app.get("/api/contract-templates", isAuthenticated, async (req, res) => {
     try {
-      const templates = await storage.getContractTemplates();
+      const templates = await storage.getContractTemplates({
+        category: req.query.category as string | undefined,
+        status: req.query.status as string | undefined,
+        riskLevel: req.query.riskLevel as string | undefined,
+        jurisdiction: req.query.jurisdiction as string | undefined,
+        rights: req.query.rights as string | undefined,
+        search: req.query.search as string | undefined,
+      });
       res.json(templates);
     } catch (error) {
       console.error("Error fetching contract templates:", error);
@@ -303,9 +313,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/contracts", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+
+      // Resolve template by id or type and snapshot version for auditability
+      let templateId = req.body.templateId as string | undefined;
+      let templateVersion = req.body.templateVersion as string | undefined;
+      let template = templateId
+        ? await storage.getContractTemplate(templateId)
+        : await storage.getContractTemplateByType(req.body.type);
+
+      if (template) {
+        if (
+          !isDraftableStatus(template.status) &&
+          !(template.isActive && (template.status == null || template.status === ""))
+        ) {
+          return res.status(400).json({
+            message: "Template is not available for new agreements",
+            status: template.status,
+          });
+        }
+        templateId = template.id;
+        templateVersion = template.version || "1.0";
+
+        const fields = ((template.template as any)?.fields ?? []) as any[];
+        if (fields.length > 0 && req.body.data && req.body.status !== "draft") {
+          const validation = validateTemplateFieldValues(fields, req.body.data);
+          if (!validation.ok) {
+            return res.status(400).json({
+              message: "Template field validation failed",
+              errors: validation.errors,
+            });
+          }
+        }
+      }
+
       const contractData = insertContractSchema.parse({
         ...req.body,
+        templateId: templateId ?? req.body.templateId ?? null,
+        templateVersion: templateVersion ?? null,
         createdBy: userId,
+        metadata: {
+          ...(req.body.metadata || {}),
+          createdFrom: req.body.metadata?.createdFrom || "template",
+          templateType: req.body.type,
+          templateVersion: templateVersion ?? null,
+        },
       });
 
       const contract = await storage.createContract(contractData);
@@ -2197,6 +2248,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         if (allConfirmed) {
           await storage.updateContract(confirmation.contractId, { status: 'signed' });
+          // Non-blocking Rights Ledger sync for ownership/license agreements
+          try {
+            await syncAgreementToRightsLedger(confirmation.contractId);
+          } catch (syncErr) {
+            console.error("Rights ledger sync after confirmation failed:", syncErr);
+          }
         }
       }
 
@@ -2237,6 +2294,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Legal document versioning + acceptance (counsel-editable ToS/Privacy/DPA text)
   registerLegalRoutes(app);
+
+  // Entertainment Agreement Template Library + recommendations + ledger sync
+  registerTemplateRoutes(app);
 
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);

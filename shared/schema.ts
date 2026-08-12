@@ -55,16 +55,46 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Contract templates
+// Contract templates — Entertainment Agreement Template Library
 export const contractTemplates = pgTable("contract_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name").notNull(),
-  type: varchar("type").notNull(), // split-sheet, performance, producer, management
+  type: varchar("type").notNull(), // stable slug key (also used as contracts.type)
+  slug: varchar("slug"),
   description: text("description"),
-  template: jsonb("template").notNull(), // JSON structure of the template
+  category: varchar("category"),
+  subcategory: varchar("subcategory"),
+  industry: varchar("industry").default("music"),
+  agreementType: varchar("agreement_type"),
+  version: varchar("version").default("1.0"),
+  /** draft | internal_review | legal_review | approved | active | deprecated | archived */
+  status: varchar("status").default("draft"),
+  jurisdiction: varchar("jurisdiction"),
+  /** NOT_REVIEWED | INTERNAL_REVIEW | COUNSEL_REVIEW | COUNSEL_APPROVED | REQUIRES_UPDATE | DEPRECATED */
+  legalReviewStatus: varchar("legal_review_status").default("NOT_REVIEWED"),
+  legalReviewDate: timestamp("legal_review_date"),
+  rightsCategories: jsonb("rights_categories").$type<string[]>().default([]),
+  requiredParties: jsonb("required_parties").$type<string[]>().default([]),
+  optionalParties: jsonb("optional_parties").$type<string[]>().default([]),
+  riskLevel: varchar("risk_level").default("medium"),
+  workflowType: varchar("workflow_type"),
+  supportedTransactions: jsonb("supported_transactions").$type<string[]>().default([]),
+  parentTemplateId: varchar("parent_template_id"),
+  template: jsonb("template").notNull(), // field engine config + sections + placeholder clauses
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Audit log for administrative template changes */
+export const templateAuditLog = pgTable("template_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  templateId: varchar("template_id").references(() => contractTemplates.id),
+  actorId: varchar("actor_id").references(() => users.id),
+  action: varchar("action").notNull(), // create | update | version | activate | archive | duplicate | legal_review
+  before: jsonb("before"),
+  after: jsonb("after"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Contracts
@@ -74,6 +104,8 @@ export const contracts = pgTable("contracts", {
   type: varchar("type").notNull(),
   status: varchar("status").default("draft"), // draft, pending, signed, cancelled
   templateId: varchar("template_id").references(() => contractTemplates.id),
+  /** Snapshot of template version at creation time */
+  templateVersion: varchar("template_version"),
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   data: jsonb("data").notNull(), // Contract form data
   metadata: jsonb("metadata"), // Additional metadata
@@ -217,6 +249,25 @@ export const songAssets = pgTable("song_assets", {
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** License records created from completed license agreements (append-friendly via version) */
+export const licenseRecords = pgTable("license_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").references(() => contracts.id),
+  assetId: varchar("asset_id").references(() => songAssets.id),
+  licenseType: varchar("license_type").notNull(),
+  licensorName: varchar("licensor_name"),
+  licenseeName: varchar("licensee_name"),
+  territory: varchar("territory"),
+  term: varchar("term"),
+  exclusivity: varchar("exclusivity"),
+  rightsGranted: jsonb("rights_granted").$type<string[]>().default([]),
+  fee: decimal("fee", { precision: 12, scale: 2 }),
+  metadata: jsonb("metadata"),
+  version: integer("version").default(1),
+  createdBy: varchar("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Ownership records — append-only ledger, never overwrite, only append
@@ -715,6 +766,8 @@ export type UpsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type ContractTemplate = typeof contractTemplates.$inferSelect;
 export type InsertContractTemplate = z.infer<typeof insertContractTemplateSchema>;
+export type TemplateAuditLog = typeof templateAuditLog.$inferSelect;
+export type LicenseRecord = typeof licenseRecords.$inferSelect;
 export type Contract = typeof contracts.$inferSelect;
 export type InsertContract = z.infer<typeof insertContractSchema>;
 export type ContractCollaborator = typeof contractCollaborators.$inferSelect;
