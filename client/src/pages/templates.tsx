@@ -123,9 +123,11 @@ export default function Templates() {
     <div className="bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6">
-          <h2 className="text-2xl font-bold mb-2">Entertainment Agreement Template Library</h2>
+          <h2 className="text-2xl font-bold mb-2">Entertainment Agreement Templates Library</h2>
           <p className="text-muted-foreground max-w-3xl">
-            Structured music agreement templates mapped to parties, rights, ownership, compensation, and workflow.
+            Structured workflow templates for song creation, ownership, producer relationships,
+            master rights, and licensing. Browse by category, rights, risk, and status, then
+            create an agreement from a template.
           </p>
           <p className="mt-3 text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-3">
             {meta?.disclaimer || LEGAL_DISCLAIMER}
@@ -196,7 +198,7 @@ export default function Templates() {
           </span>
           {isAdmin && (
             <Button asChild variant="outline" size="sm" className="ml-auto">
-              <Link href="/admin">Admin template management</Link>
+              <Link href="/admin">Manage agreement templates</Link>
             </Button>
           )}
         </div>

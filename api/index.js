@@ -30,10 +30,10 @@ function loadEnv() {
     for (const line of contents.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq4 = trimmed.indexOf("=");
-      if (eq4 === -1) continue;
-      const key = trimmed.slice(0, eq4).trim();
-      let value = trimmed.slice(eq4 + 1).trim();
+      const eq7 = trimmed.indexOf("=");
+      if (eq7 === -1) continue;
+      const key = trimmed.slice(0, eq7).trim();
+      let value = trimmed.slice(eq7 + 1).trim();
       if (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'")) {
         value = value.slice(1, -1);
       }
@@ -115,6 +115,7 @@ __export(schema_exports, {
   legalDocuments: () => legalDocuments,
   licenseReadiness: () => licenseReadiness,
   licenseReadinessRelations: () => licenseReadinessRelations,
+  licenseRecords: () => licenseRecords,
   masterAssets: () => masterAssets,
   masterAssetsRelations: () => masterAssetsRelations,
   messages: () => messages,
@@ -137,12 +138,18 @@ __export(schema_exports, {
   sessions: () => sessions,
   songAssets: () => songAssets,
   splitConfirmations: () => splitConfirmations,
+  templateAuditLog: () => templateAuditLog,
   userActivity: () => userActivity,
   userBalances: () => userBalances,
   userMatches: () => userMatches,
   users: () => users,
   usersRelations: () => usersRelations,
-  verificationCodes: () => verificationCodes
+  verificationCodes: () => verificationCodes,
+  voicePendingActions: () => voicePendingActions,
+  voiceProvenance: () => voiceProvenance,
+  voiceSessions: () => voiceSessions,
+  voiceTurns: () => voiceTurns,
+  voiceUserMemory: () => voiceUserMemory
 });
 import { sql } from "drizzle-orm";
 import {
@@ -160,7 +167,7 @@ import {
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-var sessions, users, contractTemplates, contracts, contractCollaborators, contractSignatures, userActivity, profileViews, negotiations, negotiationConversations, userMatches, messages, notifications, confirmations, songAssets, ownershipRecords, revenueEvents, payoutRecords, userBalances, splitConfirmations, organizations, organizationMembers, organizationApiKeys, ORGANIZATION_TYPES, ORGANIZATION_ROLES, TERRITORIES, OWNERSHIP_RIGHT_TYPES, rightsOrganizations, creators, creatorRightsProfiles, compositionAssets, masterAssets, licenseReadiness, paymentEvents, errorLogs, rateLimitBuckets, verificationCodes, LEGAL_DOC_TYPES, legalDocuments, legalAcceptances, usersRelations, contractsRelations, contractCollaboratorsRelations, contractSignaturesRelations, organizationsRelations, organizationMembersRelations, organizationApiKeysRelations, confirmationsRelations, creatorsRelations, creatorRightsProfilesRelations, compositionAssetsRelations, masterAssetsRelations, licenseReadinessRelations, insertUserSchema, insertContractTemplateSchema, insertContractSchema, insertContractCollaboratorSchema, insertContractSignatureSchema, insertUserActivitySchema, insertProfileViewSchema, insertNegotiationSchema, insertNegotiationConversationSchema, insertUserMatchSchema, insertMessageSchema, insertNotificationSchema, insertConfirmationSchema, insertSongAssetSchema, insertOwnershipRecordSchema, insertRevenueEventSchema, insertPayoutRecordSchema, insertUserBalanceSchema, insertSplitConfirmationSchema, insertPaymentEventSchema, insertErrorLogSchema, insertVerificationCodeSchema, insertOrganizationSchema, insertOrganizationMemberSchema, insertOrganizationApiKeySchema, insertRightsOrganizationSchema, insertCreatorSchema, insertCreatorRightsProfileSchema, insertCompositionAssetSchema, insertMasterAssetSchema, insertLicenseReadinessSchema, insertLegalDocumentSchema, insertLegalAcceptanceSchema, activityEventSchema, batchActivitiesSchema;
+var sessions, users, contractTemplates, templateAuditLog, voiceSessions, voiceTurns, voicePendingActions, voiceProvenance, voiceUserMemory, contracts, contractCollaborators, contractSignatures, userActivity, profileViews, negotiations, negotiationConversations, userMatches, messages, notifications, confirmations, songAssets, licenseRecords, ownershipRecords, revenueEvents, payoutRecords, userBalances, splitConfirmations, organizations, organizationMembers, organizationApiKeys, ORGANIZATION_TYPES, ORGANIZATION_ROLES, TERRITORIES, OWNERSHIP_RIGHT_TYPES, rightsOrganizations, creators, creatorRightsProfiles, compositionAssets, masterAssets, licenseReadiness, paymentEvents, errorLogs, rateLimitBuckets, verificationCodes, LEGAL_DOC_TYPES, legalDocuments, legalAcceptances, usersRelations, contractsRelations, contractCollaboratorsRelations, contractSignaturesRelations, organizationsRelations, organizationMembersRelations, organizationApiKeysRelations, confirmationsRelations, creatorsRelations, creatorRightsProfilesRelations, compositionAssetsRelations, masterAssetsRelations, licenseReadinessRelations, insertUserSchema, insertContractTemplateSchema, insertContractSchema, insertContractCollaboratorSchema, insertContractSignatureSchema, insertUserActivitySchema, insertProfileViewSchema, insertNegotiationSchema, insertNegotiationConversationSchema, insertUserMatchSchema, insertMessageSchema, insertNotificationSchema, insertConfirmationSchema, insertSongAssetSchema, insertOwnershipRecordSchema, insertRevenueEventSchema, insertPayoutRecordSchema, insertUserBalanceSchema, insertSplitConfirmationSchema, insertPaymentEventSchema, insertErrorLogSchema, insertVerificationCodeSchema, insertOrganizationSchema, insertOrganizationMemberSchema, insertOrganizationApiKeySchema, insertRightsOrganizationSchema, insertCreatorSchema, insertCreatorRightsProfileSchema, insertCompositionAssetSchema, insertMasterAssetSchema, insertLicenseReadinessSchema, insertLegalDocumentSchema, insertLegalAcceptanceSchema, activityEventSchema, batchActivitiesSchema;
 var init_schema = __esm({
   "shared/schema.ts"() {
     "use strict";
@@ -206,11 +213,118 @@ var init_schema = __esm({
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       name: varchar("name").notNull(),
       type: varchar("type").notNull(),
-      // split-sheet, performance, producer, management
+      // stable slug key (also used as contracts.type)
+      slug: varchar("slug"),
       description: text("description"),
+      category: varchar("category"),
+      subcategory: varchar("subcategory"),
+      industry: varchar("industry").default("music"),
+      agreementType: varchar("agreement_type"),
+      version: varchar("version").default("1.0"),
+      /** draft | internal_review | legal_review | approved | active | deprecated | archived */
+      status: varchar("status").default("draft"),
+      jurisdiction: varchar("jurisdiction"),
+      /** NOT_REVIEWED | INTERNAL_REVIEW | COUNSEL_REVIEW | COUNSEL_APPROVED | REQUIRES_UPDATE | DEPRECATED */
+      legalReviewStatus: varchar("legal_review_status").default("NOT_REVIEWED"),
+      legalReviewDate: timestamp("legal_review_date"),
+      rightsCategories: jsonb("rights_categories").$type().default([]),
+      requiredParties: jsonb("required_parties").$type().default([]),
+      optionalParties: jsonb("optional_parties").$type().default([]),
+      riskLevel: varchar("risk_level").default("medium"),
+      workflowType: varchar("workflow_type"),
+      supportedTransactions: jsonb("supported_transactions").$type().default([]),
+      parentTemplateId: varchar("parent_template_id"),
       template: jsonb("template").notNull(),
-      // JSON structure of the template
+      // field engine config + sections + placeholder clauses
       isActive: boolean("is_active").default(true),
+      createdAt: timestamp("created_at").defaultNow(),
+      updatedAt: timestamp("updated_at").defaultNow()
+    });
+    templateAuditLog = pgTable("template_audit_log", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      templateId: varchar("template_id").references(() => contractTemplates.id),
+      actorId: varchar("actor_id").references(() => users.id),
+      action: varchar("action").notNull(),
+      // create | update | version | activate | archive | duplicate | legal_review
+      before: jsonb("before"),
+      after: jsonb("after"),
+      createdAt: timestamp("created_at").defaultNow()
+    });
+    voiceSessions = pgTable("voice_sessions", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      userId: varchar("user_id").references(() => users.id).notNull(),
+      organizationId: varchar("organization_id"),
+      status: varchar("status").default("active"),
+      // active | closed | expired
+      pageContext: varchar("page_context"),
+      projectId: varchar("project_id"),
+      contractId: varchar("contract_id"),
+      locale: varchar("locale").default("en-CA"),
+      metadata: jsonb("metadata"),
+      expiresAt: timestamp("expires_at"),
+      closedAt: timestamp("closed_at"),
+      createdAt: timestamp("created_at").defaultNow(),
+      updatedAt: timestamp("updated_at").defaultNow()
+    });
+    voiceTurns = pgTable("voice_turns", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      sessionId: varchar("session_id").references(() => voiceSessions.id).notNull(),
+      userId: varchar("user_id").references(() => users.id).notNull(),
+      role: varchar("role").notNull(),
+      // user | assistant | system
+      transcript: text("transcript"),
+      transcriptConfidence: decimal("transcript_confidence", { precision: 5, scale: 4 }),
+      intent: varchar("intent"),
+      intentConfidence: decimal("intent_confidence", { precision: 5, scale: 4 }),
+      entities: jsonb("entities"),
+      validation: jsonb("validation"),
+      responseText: text("response_text"),
+      riskLevel: varchar("risk_level"),
+      requiresConfirmation: boolean("requires_confirmation").default(false),
+      audioRetentionUntil: timestamp("audio_retention_until"),
+      createdAt: timestamp("created_at").defaultNow()
+    });
+    voicePendingActions = pgTable("voice_pending_actions", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      sessionId: varchar("session_id").references(() => voiceSessions.id).notNull(),
+      turnId: varchar("turn_id").references(() => voiceTurns.id),
+      userId: varchar("user_id").references(() => users.id).notNull(),
+      actionType: varchar("action_type").notNull(),
+      payload: jsonb("payload").notNull(),
+      status: varchar("status").default("pending"),
+      // pending | confirmed | rejected | expired | executed | failed
+      confidence: decimal("confidence", { precision: 5, scale: 4 }),
+      expiresAt: timestamp("expires_at"),
+      confirmedAt: timestamp("confirmed_at"),
+      executedAt: timestamp("executed_at"),
+      result: jsonb("result"),
+      createdAt: timestamp("created_at").defaultNow()
+    });
+    voiceProvenance = pgTable("voice_provenance", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      sessionId: varchar("session_id").references(() => voiceSessions.id),
+      turnId: varchar("turn_id").references(() => voiceTurns.id),
+      userId: varchar("user_id").references(() => users.id).notNull(),
+      source: varchar("source").notNull(),
+      // voice | text | system
+      fieldPath: varchar("field_path").notNull(),
+      extractedValue: jsonb("extracted_value"),
+      confidence: decimal("confidence", { precision: 5, scale: 4 }),
+      confirmationStatus: varchar("confirmation_status"),
+      // none | pending | confirmed | rejected
+      resultRef: varchar("result_ref"),
+      // contract id, asset id, etc.
+      createdAt: timestamp("created_at").defaultNow()
+    });
+    voiceUserMemory = pgTable("voice_user_memory", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      userId: varchar("user_id").references(() => users.id).notNull(),
+      key: varchar("key").notNull(),
+      value: jsonb("value").notNull(),
+      category: varchar("category").default("preference"),
+      // preference | collaborator | workflow | terminology
+      authorized: boolean("authorized").default(true),
+      expiresAt: timestamp("expires_at"),
       createdAt: timestamp("created_at").defaultNow(),
       updatedAt: timestamp("updated_at").defaultNow()
     });
@@ -221,6 +335,8 @@ var init_schema = __esm({
       status: varchar("status").default("draft"),
       // draft, pending, signed, cancelled
       templateId: varchar("template_id").references(() => contractTemplates.id),
+      /** Snapshot of template version at creation time */
+      templateVersion: varchar("template_version"),
       createdBy: varchar("created_by").references(() => users.id).notNull(),
       data: jsonb("data").notNull(),
       // Contract form data
@@ -356,6 +472,23 @@ var init_schema = __esm({
       metadata: jsonb("metadata"),
       createdAt: timestamp("created_at").defaultNow(),
       updatedAt: timestamp("updated_at").defaultNow()
+    });
+    licenseRecords = pgTable("license_records", {
+      id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+      contractId: varchar("contract_id").references(() => contracts.id),
+      assetId: varchar("asset_id").references(() => songAssets.id),
+      licenseType: varchar("license_type").notNull(),
+      licensorName: varchar("licensor_name"),
+      licenseeName: varchar("licensee_name"),
+      territory: varchar("territory"),
+      term: varchar("term"),
+      exclusivity: varchar("exclusivity"),
+      rightsGranted: jsonb("rights_granted").$type().default([]),
+      fee: decimal("fee", { precision: 12, scale: 2 }),
+      metadata: jsonb("metadata"),
+      version: integer("version").default(1),
+      createdBy: varchar("created_by").references(() => users.id),
+      createdAt: timestamp("created_at").defaultNow()
     });
     ownershipRecords = pgTable("ownership_records", {
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1565,7 +1698,7 @@ var init_message_crypto = __esm({
 });
 
 // server/storage.ts
-import { eq, desc, and, or, sql as sql3, count, gte, lt, max } from "drizzle-orm";
+import { eq, desc, and, or, sql as sql3, count, gte, lt, max, ilike } from "drizzle-orm";
 var DatabaseStorage, storage;
 var init_storage = __esm({
   "server/storage.ts"() {
@@ -1609,16 +1742,73 @@ var init_storage = __esm({
         return user;
       }
       // Contract template operations
-      async getContractTemplates() {
-        return await db.select().from(contractTemplates).where(eq(contractTemplates.isActive, true)).orderBy(contractTemplates.name);
+      async getContractTemplates(filters = {}) {
+        return this.listContractTemplatesInternal({
+          ...filters,
+          includeInactive: false,
+          productionOnly: true
+        });
+      }
+      async listAllContractTemplates(filters = {}) {
+        return this.listContractTemplatesInternal({ ...filters, includeInactive: true });
+      }
+      async listContractTemplatesInternal(filters = {}) {
+        const conditions = [];
+        if (filters.productionOnly) {
+          conditions.push(
+            or(
+              eq(contractTemplates.status, "active"),
+              eq(contractTemplates.status, "approved")
+            )
+          );
+        } else if (!filters.includeInactive) {
+          conditions.push(eq(contractTemplates.isActive, true));
+        }
+        if (filters.category) conditions.push(eq(contractTemplates.category, filters.category));
+        if (filters.status) conditions.push(eq(contractTemplates.status, filters.status));
+        if (filters.riskLevel) conditions.push(eq(contractTemplates.riskLevel, filters.riskLevel));
+        if (filters.jurisdiction) conditions.push(eq(contractTemplates.jurisdiction, filters.jurisdiction));
+        if (filters.search) {
+          const q = `%${filters.search}%`;
+          conditions.push(
+            or(
+              ilike(contractTemplates.name, q),
+              ilike(contractTemplates.description, q),
+              ilike(contractTemplates.type, q)
+            )
+          );
+        }
+        if (filters.rights) {
+          conditions.push(
+            sql3`${contractTemplates.rightsCategories}::jsonb ? ${filters.rights}`
+          );
+        }
+        const query = db.select().from(contractTemplates);
+        if (conditions.length > 0) {
+          return await query.where(and(...conditions)).orderBy(contractTemplates.category, contractTemplates.name);
+        }
+        return await query.orderBy(contractTemplates.category, contractTemplates.name);
       }
       async getContractTemplate(id) {
         const [template] = await db.select().from(contractTemplates).where(eq(contractTemplates.id, id));
         return template;
       }
+      async getContractTemplateByType(type) {
+        const rows = await db.select().from(contractTemplates).where(or(eq(contractTemplates.type, type), eq(contractTemplates.slug, type))).orderBy(desc(contractTemplates.updatedAt));
+        if (rows.length === 0) return void 0;
+        const preferred = rows.find((r) => r.status === "active" || r.status === "approved") || rows.find((r) => r.status === "internal_review" || r.status === "legal_review") || rows.find((r) => r.isActive) || rows[0];
+        return preferred;
+      }
       async createContractTemplate(template) {
         const [newTemplate] = await db.insert(contractTemplates).values(template).returning();
         return newTemplate;
+      }
+      async updateContractTemplate(id, updates) {
+        const [updated] = await db.update(contractTemplates).set({
+          ...updates,
+          updatedAt: /* @__PURE__ */ new Date()
+        }).where(eq(contractTemplates.id, id)).returning();
+        return updated;
       }
       // Contract operations
       async getContracts(userId) {
@@ -3479,20 +3669,1332 @@ var init_confirmation_routes = __esm({
   }
 });
 
+// shared/agreement-catalog.ts
+function base(partial) {
+  const fields = partial.fields ?? [];
+  const sections = Array.from(
+    new Set(fields.map((f) => f.section).filter(Boolean))
+  );
+  return {
+    version: "1.0",
+    industry: "music",
+    jurisdiction: "CA",
+    legalReviewStatus: "NOT_REVIEWED",
+    sections,
+    optionalParties: [],
+    supportedTransactions: [],
+    workflowType: "standard-agreement",
+    ...partial,
+    fields
+  };
+}
+function withCommon(fields) {
+  return [
+    ...fields,
+    F.territory(),
+    F.term(),
+    F.exclusivity(),
+    F.additionalTerms(),
+    F.signature()
+  ];
+}
+function buildTemplateJson(seed) {
+  return {
+    version: seed.version,
+    sections: seed.sections.map((id) => CORE_SECTIONS.find((s) => s.id === id) ?? { id, title: id }),
+    fields: seed.fields,
+    legalClauses: PLACEHOLDER_CLAUSES,
+    disclaimer: LEGAL_DISCLAIMER,
+    fieldEngine: true
+  };
+}
+function catalogToDbRow(seed) {
+  return {
+    name: seed.name,
+    type: seed.type,
+    slug: seed.slug,
+    description: seed.description,
+    category: seed.category,
+    subcategory: seed.subcategory ?? null,
+    industry: seed.industry,
+    agreementType: seed.agreementType,
+    version: seed.version,
+    status: seed.status,
+    jurisdiction: seed.jurisdiction,
+    legalReviewStatus: seed.legalReviewStatus,
+    rightsCategories: seed.rightsCategories,
+    requiredParties: seed.requiredParties,
+    optionalParties: seed.optionalParties,
+    riskLevel: seed.riskLevel,
+    workflowType: seed.workflowType,
+    supportedTransactions: seed.supportedTransactions,
+    isActive: seed.status === "active",
+    template: buildTemplateJson(seed)
+  };
+}
+function isCreatableStatus(status) {
+  return status === "active" || status === "approved";
+}
+function isDraftableStatus(status) {
+  return isCreatableStatus(status) || status === "internal_review" || status === "legal_review";
+}
+function recommendAgreements(input) {
+  const recs = [];
+  const roles = (input.roles ?? []).map((r) => r.toLowerCase());
+  const hasRole2 = (...names) => names.some((n) => roles.some((r) => r.includes(n)));
+  const push = (r) => {
+    if (!recs.some((x) => x.template === r.template)) recs.push(r);
+  };
+  if ((input.songwriterCount ?? 0) >= 2 || hasRole2("writer", "songwriter", "composer")) {
+    push({
+      template: "split-sheet",
+      priority: "high",
+      required: true,
+      reason: "Project includes multiple songwriters or composition contributors requiring documented ownership splits.",
+      riskLevel: "medium"
+    });
+    push({
+      template: "co-writing",
+      priority: "medium",
+      required: false,
+      reason: "Co-writing terms clarify credit and ownership before or alongside the split sheet.",
+      riskLevel: "medium"
+    });
+  }
+  if (input.hasProducer || hasRole2("producer")) {
+    push({
+      template: "producer",
+      priority: "high",
+      required: true,
+      reason: "Project includes an external producer receiving compensation or royalty participation.",
+      riskLevel: "medium"
+    });
+    push({
+      template: "producer-royalty",
+      priority: "medium",
+      required: false,
+      reason: "Consider a dedicated producer royalty participation agreement when backend points are negotiated separately.",
+      riskLevel: "high"
+    });
+  }
+  if (input.hasExternalBeat || hasRole2("beatmaker", "beat")) {
+    push({
+      template: "producer",
+      priority: "high",
+      required: true,
+      reason: "External beat / instrumental detected \u2014 document production license and credit terms.",
+      riskLevel: "medium"
+    });
+  }
+  if (input.hasMaster || hasRole2("label", "engineer")) {
+    push({
+      template: "master-ownership",
+      priority: "high",
+      required: true,
+      reason: "Project references a master recording \u2014 clarify master ownership before release or license.",
+      riskLevel: "high"
+    });
+    push({
+      template: "master-license",
+      priority: "medium",
+      required: false,
+      reason: "If a third party will exploit the master, document a master license (exclusivity via fields).",
+      riskLevel: "high"
+    });
+  }
+  if (hasRole2("featured", "feature")) {
+    push({
+      template: "featured-artist",
+      priority: "high",
+      required: true,
+      reason: "Featured artist participation should be documented before release.",
+      riskLevel: "medium"
+    });
+  }
+  if (hasRole2("session", "musician", "instrument")) {
+    push({
+      template: "session-musician",
+      priority: "medium",
+      required: false,
+      reason: "Session musicians are present \u2014 capture fee and neighboring-rights acknowledgements.",
+      riskLevel: "low"
+    });
+  }
+  if (hasRole2("vocal", "singer")) {
+    push({
+      template: "vocalist",
+      priority: "medium",
+      required: false,
+      reason: "Vocalist services should be documented with fee and optional points.",
+      riskLevel: "low"
+    });
+  }
+  if (input.hasSyncUse || hasRole2("sync", "film", "tv", "ad", "game", "podcast")) {
+    push({
+      template: "sync-license",
+      priority: "high",
+      required: true,
+      reason: "Audiovisual / sync use case detected \u2014 composition and/or master sync terms are recommended.",
+      riskLevel: "high"
+    });
+    push({
+      template: "master-use-license",
+      priority: "medium",
+      required: false,
+      reason: "If the master is licensed separately for the use, document a master-use license.",
+      riskLevel: "high"
+    });
+  }
+  if (hasRole2("commission", "work for hire", "wfh", "brand")) {
+    push({
+      template: "work-for-hire-music",
+      priority: "high",
+      required: true,
+      reason: "Commissioned / assignment intent detected \u2014 use the WFH workflow with counsel gate.",
+      riskLevel: "high"
+    });
+  }
+  if (recs.length === 0) {
+    push({
+      template: "split-sheet",
+      priority: "medium",
+      required: false,
+      reason: "Baseline MVP recommendation: document composition ownership early.",
+      riskLevel: "medium"
+    });
+  }
+  return recs.sort((a, b) => {
+    const order = { high: 0, medium: 1, low: 2 };
+    return order[a.priority] - order[b.priority];
+  });
+}
+function validateOwnershipPercents(values) {
+  const total = values.reduce((sum, v) => sum + Number(v.percentage ?? 0), 0);
+  if (Math.abs(total - 100) > 0.01) {
+    return { ok: false, total, message: `Ownership must total 100%. Current total: ${total.toFixed(2)}%` };
+  }
+  return { ok: true, total };
+}
+function validateTemplateFieldValues(fields, data) {
+  const errors = [];
+  for (const field of fields) {
+    if (!field.required) continue;
+    const val = data[field.name];
+    if (val === void 0 || val === null || val === "" || Array.isArray(val) && val.length === 0) {
+      errors.push(`${field.label} is required`);
+    }
+  }
+  const ownership = data.ownershipSplit ?? data.collaborators;
+  if (Array.isArray(ownership) && ownership.length > 0) {
+    const check = validateOwnershipPercents(
+      ownership.map((row) => ({
+        percentage: row.ownershipPercentage ?? row.percentage ?? row.share
+      }))
+    );
+    if (!check.ok && check.message) errors.push(check.message);
+  }
+  const royaltyFields = fields.filter((f) => f.type === "royalty" || f.type === "percentage");
+  for (const rf of royaltyFields) {
+    const n = Number(data[rf.name]);
+    if (data[rf.name] !== void 0 && data[rf.name] !== "" && (Number.isNaN(n) || n < 0 || n > 100)) {
+      errors.push(`${rf.label} must be a percentage between 0 and 100`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+var TEMPLATE_STATUSES, LEGAL_REVIEW_STATUSES, RISK_LEVELS, TEMPLATE_CATEGORIES, RIGHTS_TAXONOMY, PARTY_TYPES, CORE_SECTIONS, F, LEGAL_DISCLAIMER, PLACEHOLDER_CLAUSES, CATALOG_TEMPLATES;
+var init_agreement_catalog = __esm({
+  "shared/agreement-catalog.ts"() {
+    "use strict";
+    TEMPLATE_STATUSES = [
+      "draft",
+      "internal_review",
+      "legal_review",
+      "approved",
+      "active",
+      "deprecated",
+      "archived"
+    ];
+    LEGAL_REVIEW_STATUSES = [
+      "NOT_REVIEWED",
+      "INTERNAL_REVIEW",
+      "COUNSEL_REVIEW",
+      "COUNSEL_APPROVED",
+      "REQUIRES_UPDATE",
+      "DEPRECATED"
+    ];
+    RISK_LEVELS = ["low", "medium", "high", "critical"];
+    TEMPLATE_CATEGORIES = [
+      { id: "song-creation", label: "Song Creation", industry: "music" },
+      { id: "master-rights", label: "Master Rights", industry: "music" },
+      { id: "publishing", label: "Publishing", industry: "music" },
+      { id: "artist-label", label: "Artist & Label", industry: "music" },
+      { id: "licensing", label: "Licensing", industry: "music" },
+      { id: "live-touring", label: "Live & Touring", industry: "music" },
+      // Reserved future categories (architecture only — no templates yet)
+      { id: "film", label: "Film", industry: "film", reserved: true },
+      { id: "television", label: "Television", industry: "television", reserved: true },
+      { id: "gaming", label: "Gaming", industry: "gaming", reserved: true },
+      { id: "podcast", label: "Podcast", industry: "podcast", reserved: true },
+      { id: "creator-economy", label: "Creator Economy", industry: "creator", reserved: true },
+      { id: "advertising", label: "Advertising", industry: "advertising", reserved: true },
+      { id: "sports-live", label: "Sports & Live Entertainment", industry: "sports", reserved: true },
+      { id: "financing", label: "Financing", industry: "finance", reserved: true },
+      { id: "catalog-acquisition", label: "Catalog Acquisition", industry: "catalog", reserved: true }
+    ];
+    RIGHTS_TAXONOMY = [
+      "COMPOSITION",
+      "MASTER",
+      "PUBLISHING",
+      "MECHANICAL",
+      "PERFORMANCE",
+      "SYNCHRONIZATION",
+      "NEIGHBORING_RIGHTS",
+      "NAME_IMAGE_LIKENESS",
+      "MERCHANDISING",
+      "DISTRIBUTION",
+      "LICENSE",
+      "OWNERSHIP",
+      "ROYALTY",
+      "REVENUE_SHARE",
+      "SERVICES"
+    ];
+    PARTY_TYPES = [
+      "Artist",
+      "Producer",
+      "Songwriter",
+      "Co-Writer",
+      "Publisher",
+      "Label",
+      "Distributor",
+      "Manager",
+      "Booking Agent",
+      "Venue",
+      "Promoter",
+      "Studio",
+      "Session Musician",
+      "Remixer",
+      "Brand",
+      "Advertiser",
+      "Licensee",
+      "Licensor",
+      "Content Creator",
+      "Film Producer",
+      "Television Producer",
+      "Investor",
+      "Rights Holder",
+      "Vocalist",
+      "Featured Artist"
+    ];
+    CORE_SECTIONS = [
+      { id: "parties", title: "Parties" },
+      { id: "transaction", title: "Transaction Details" },
+      { id: "services", title: "Services & Deliverables" },
+      { id: "compensation", title: "Compensation" },
+      { id: "rights", title: "Rights" },
+      { id: "ownership", title: "Ownership" },
+      { id: "royalties", title: "Royalties" },
+      { id: "territory_term", title: "Territory & Term" },
+      { id: "exclusivity", title: "Exclusivity" },
+      { id: "credit", title: "Credit" },
+      { id: "representations", title: "Representations" },
+      { id: "confidentiality", title: "Confidentiality" },
+      { id: "termination", title: "Termination" },
+      { id: "signatures", title: "Signatures" },
+      { id: "additional", title: "Additional Terms" }
+    ];
+    F = {
+      title: (label = "Agreement Title") => ({
+        name: "title",
+        label,
+        type: "text",
+        required: true,
+        section: "transaction"
+      }),
+      songTitle: () => ({
+        name: "songTitle",
+        label: "Song / Composition Title",
+        type: "text",
+        required: true,
+        section: "transaction"
+      }),
+      recordingTitle: () => ({
+        name: "recordingTitle",
+        label: "Recording / Master Title",
+        type: "text",
+        required: true,
+        section: "transaction"
+      }),
+      effectiveDate: () => ({
+        name: "effectiveDate",
+        label: "Effective Date",
+        type: "date",
+        required: true,
+        section: "transaction"
+      }),
+      territory: () => ({
+        name: "territory",
+        label: "Territory",
+        type: "territory",
+        required: true,
+        section: "territory_term",
+        options: ["Worldwide", "CA", "US", "UK", "EU", "AU", "Other"]
+      }),
+      term: () => ({
+        name: "term",
+        label: "Term",
+        type: "term",
+        required: true,
+        section: "territory_term",
+        placeholder: "e.g. 2 years / perpetual / life of copyright"
+      }),
+      exclusivity: () => ({
+        name: "exclusivity",
+        label: "Exclusivity",
+        type: "select",
+        required: true,
+        section: "exclusivity",
+        options: ["Exclusive", "Non-Exclusive", "Semi-Exclusive"]
+      }),
+      ownershipSplit: () => ({
+        name: "ownershipSplit",
+        label: "Ownership Split",
+        type: "ownership_split",
+        required: true,
+        section: "ownership",
+        helpText: "Ownership percentages must total 100%."
+      }),
+      royaltyPct: (name = "royaltyPercentage", label = "Royalty %") => ({
+        name,
+        label,
+        type: "royalty",
+        required: true,
+        section: "royalties"
+      }),
+      fee: (name = "fee", label = "Fee") => ({
+        name,
+        label,
+        type: "currency",
+        required: true,
+        section: "compensation"
+      }),
+      credit: () => ({
+        name: "credit",
+        label: "Credit Requirement",
+        type: "text",
+        required: false,
+        section: "credit"
+      }),
+      additionalTerms: () => ({
+        name: "additionalTerms",
+        label: "Additional Terms",
+        type: "textarea",
+        required: false,
+        section: "additional"
+      }),
+      party: (name, label, required = true) => ({
+        name,
+        label,
+        type: "party",
+        required,
+        section: "parties"
+      }),
+      rightsSelection: () => ({
+        name: "rightsGranted",
+        label: "Rights Granted",
+        type: "rights_selection",
+        required: true,
+        section: "rights"
+      }),
+      deliverables: () => ({
+        name: "deliverables",
+        label: "Deliverables",
+        type: "textarea",
+        required: true,
+        section: "services"
+      }),
+      signature: () => ({
+        name: "signatureAck",
+        label: "Signature Acknowledgement",
+        type: "checkbox",
+        required: true,
+        section: "signatures",
+        helpText: "Parties will execute via SplitSheet confirmation / e-signature workflow."
+      })
+    };
+    LEGAL_DISCLAIMER = "Template provided for workflow and documentation purposes. Legal suitability depends on jurisdiction and transaction. Consult qualified counsel where appropriate. SplitSheet is not a law firm and does not provide legal advice.";
+    PLACEHOLDER_CLAUSES = [
+      "[WORKFLOW PLACEHOLDER] Parties and roles as identified in this agreement.",
+      "[WORKFLOW PLACEHOLDER] Rights, ownership, and compensation as configured in the transaction fields.",
+      "[WORKFLOW PLACEHOLDER] Territory, term, and exclusivity as specified herein.",
+      LEGAL_DISCLAIMER
+    ];
+    CATALOG_TEMPLATES = [
+      // ── A. Song Creation & Ownership ─────────────────────────────────────────
+      base({
+        name: "Split Sheet",
+        type: "split-sheet",
+        slug: "split-sheet",
+        category: "song-creation",
+        subcategory: "ownership",
+        description: "Document composition ownership percentages and collaborator roles for a song.",
+        agreementType: "ownership_split",
+        status: "active",
+        legacy: true,
+        rightsCategories: ["COMPOSITION", "OWNERSHIP", "PUBLISHING", "ROYALTY"],
+        requiredParties: ["Songwriter"],
+        optionalParties: ["Producer", "Co-Writer", "Publisher"],
+        riskLevel: "medium",
+        workflowType: "split-confirmation",
+        supportedTransactions: ["song_creation", "composition_ownership"],
+        fields: [
+          F.title("Song Title"),
+          { name: "releaseDate", label: "Release Date", type: "date", required: false, section: "transaction" },
+          { name: "collaborators", label: "Collaborators", type: "array", required: true, section: "ownership" },
+          { name: "performanceRoyalties", label: "Performance Royalties", type: "select", required: true, section: "royalties", options: ["PRO default", "Custom"] },
+          { name: "mechanicalRoyalties", label: "Mechanical Royalties", type: "select", required: true, section: "royalties", options: ["Standard", "Custom"] },
+          F.additionalTerms()
+        ]
+      }),
+      base({
+        name: "Co-Writing Agreement",
+        type: "co-writing",
+        slug: "co-writing",
+        category: "song-creation",
+        description: "Define co-writing roles, ownership, and credit between songwriters.",
+        agreementType: "collaboration",
+        status: "internal_review",
+        rightsCategories: ["COMPOSITION", "OWNERSHIP", "PUBLISHING"],
+        requiredParties: ["Songwriter", "Co-Writer"],
+        riskLevel: "medium",
+        supportedTransactions: ["co_write"],
+        fields: withCommon([
+          F.title(),
+          F.songTitle(),
+          F.party("songwriter", "Songwriter"),
+          F.party("coWriter", "Co-Writer"),
+          F.ownershipSplit(),
+          F.credit(),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Songwriter Collaboration Agreement",
+        type: "songwriter-collaboration",
+        slug: "songwriter-collaboration",
+        category: "song-creation",
+        description: "Multi-party songwriter collaboration covering splits, credit, and administration.",
+        agreementType: "collaboration",
+        status: "internal_review",
+        rightsCategories: ["COMPOSITION", "OWNERSHIP", "PUBLISHING", "MECHANICAL"],
+        requiredParties: ["Songwriter"],
+        optionalParties: ["Publisher"],
+        riskLevel: "medium",
+        fields: withCommon([
+          F.title(),
+          F.songTitle(),
+          F.ownershipSplit(),
+          F.party("administrator", "Publishing Administrator", false),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Producer Agreement",
+        type: "producer",
+        slug: "producer",
+        category: "song-creation",
+        description: "Establish production services, fees, credits, and royalty participation.",
+        agreementType: "services_royalty",
+        status: "active",
+        legacy: true,
+        rightsCategories: ["MASTER", "ROYALTY", "SERVICES"],
+        requiredParties: ["Artist", "Producer"],
+        riskLevel: "medium",
+        fields: [
+          F.title("Track Title"),
+          { name: "producerName", label: "Producer Name", type: "text", required: true, section: "parties" },
+          { name: "beatPrice", label: "Beat / Production Fee", type: "number", required: true, section: "compensation" },
+          { name: "royaltyPercentage", label: "Royalty Percentage", type: "number", required: true, section: "royalties" },
+          { name: "creditRequirement", label: "Credit Requirement", type: "text", required: true, section: "credit" },
+          F.additionalTerms()
+        ]
+      }),
+      base({
+        name: "Producer Royalty Participation Agreement",
+        type: "producer-royalty",
+        slug: "producer-royalty",
+        category: "song-creation",
+        description: "Document producer backend royalty points without full production services terms.",
+        agreementType: "royalty",
+        status: "internal_review",
+        rightsCategories: ["MASTER", "ROYALTY", "REVENUE_SHARE"],
+        requiredParties: ["Artist", "Producer"],
+        riskLevel: "high",
+        fields: withCommon([
+          F.title(),
+          F.recordingTitle(),
+          F.party("artist", "Artist"),
+          F.party("producer", "Producer"),
+          F.royaltyPct("producerRoyalty", "Producer Royalty %"),
+          F.fee("advance", "Advance (if any)"),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Session Musician Agreement",
+        type: "session-musician",
+        slug: "session-musician",
+        category: "song-creation",
+        description: "Session performance services, fees, and neighboring rights acknowledgements.",
+        agreementType: "services",
+        status: "internal_review",
+        rightsCategories: ["SERVICES", "NEIGHBORING_RIGHTS", "MASTER"],
+        requiredParties: ["Artist", "Session Musician"],
+        riskLevel: "low",
+        fields: withCommon([
+          F.title(),
+          F.recordingTitle(),
+          F.party("sessionMusician", "Session Musician"),
+          F.fee("sessionFee", "Session Fee"),
+          F.deliverables(),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Featured Artist Agreement",
+        type: "featured-artist",
+        slug: "featured-artist",
+        category: "song-creation",
+        description: "Feature appearance, fee/royalty, credit, and master participation terms.",
+        agreementType: "feature",
+        status: "internal_review",
+        rightsCategories: ["MASTER", "ROYALTY", "NAME_IMAGE_LIKENESS"],
+        requiredParties: ["Artist", "Featured Artist"],
+        riskLevel: "medium",
+        fields: withCommon([
+          F.title(),
+          F.recordingTitle(),
+          F.party("primaryArtist", "Primary Artist"),
+          F.party("featuredArtist", "Featured Artist"),
+          F.fee("featureFee", "Feature Fee"),
+          F.royaltyPct(),
+          F.credit(),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Vocalist Agreement",
+        type: "vocalist",
+        slug: "vocalist",
+        category: "song-creation",
+        description: "Vocal performance services, delivery, credit, and optional royalty participation.",
+        agreementType: "services",
+        status: "internal_review",
+        rightsCategories: ["SERVICES", "MASTER", "ROYALTY"],
+        requiredParties: ["Artist", "Vocalist"],
+        riskLevel: "low",
+        fields: withCommon([
+          F.title(),
+          F.recordingTitle(),
+          F.party("vocalist", "Vocalist"),
+          F.fee("vocalFee", "Vocal Fee"),
+          F.royaltyPct("vocalRoyalty", "Royalty % (optional)"),
+          F.deliverables(),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Work-for-Hire Music Agreement",
+        type: "work-for-hire-music",
+        slug: "work-for-hire-music",
+        category: "song-creation",
+        description: "Commissioned music services with work-for-hire / assignment workflow fields.",
+        agreementType: "work_for_hire",
+        status: "internal_review",
+        rightsCategories: ["COMPOSITION", "MASTER", "OWNERSHIP", "SERVICES"],
+        requiredParties: ["Rights Holder", "Songwriter"],
+        riskLevel: "high",
+        fields: withCommon([
+          F.title(),
+          F.party("commissioningParty", "Commissioning Party"),
+          F.party("creator", "Creator"),
+          F.fee("commissionFee", "Commission Fee"),
+          F.rightsSelection(),
+          F.deliverables(),
+          F.effectiveDate()
+        ])
+      }),
+      base({
+        name: "Remixer Agreement",
+        type: "remixer",
+        slug: "remixer",
+        category: "song-creation",
+        description: "Remix services, stem delivery, credit, and remix master rights.",
+        agreementType: "remix",
+        status: "internal_review",
+        rightsCategories: ["MASTER", "LICENSE", "ROYALTY", "SERVICES"],
+        requiredParties: ["Artist", "Remixer"],
+        riskLevel: "medium",
+        fields: withCommon([
+          F.title(),
+          F.recordingTitle(),
+          F.party("remixer", "Remixer"),
+          F.fee("remixFee", "Remix Fee"),
+          F.royaltyPct("remixRoyalty", "Remix Royalty %"),
+          F.deliverables(),
+          F.effectiveDate()
+        ])
+      }),
+      // ── B. Master Recordings ─────────────────────────────────────────────────
+      ...[
+        ["Master Recording Ownership Agreement", "master-ownership", "Document ownership of a sound recording master.", ["MASTER", "OWNERSHIP"], ["Artist", "Label"], "high"],
+        ["Master Rights Assignment", "master-assignment", "Assign master rights from assignor to assignee with consideration fields.", ["MASTER", "OWNERSHIP"], ["Rights Holder", "Label"], "critical"],
+        ["Master License Agreement", "master-license", "License a master for specified uses, term, and territory.", ["MASTER", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Exclusive Master License", "exclusive-master-license", "Exclusive master license with territory, term, and royalty terms.", ["MASTER", "LICENSE", "ROYALTY"], ["Licensor", "Licensee"], "high"],
+        ["Non-Exclusive Master License", "non-exclusive-master-license", "Non-exclusive master license for defined uses.", ["MASTER", "LICENSE"], ["Licensor", "Licensee"], "medium"],
+        ["Master Use / Recording License", "master-use-license", "Master use license for third-party exploitation of a recording.", ["MASTER", "LICENSE", "SYNCHRONIZATION"], ["Licensor", "Licensee"], "high"],
+        ["Recording Studio Agreement", "recording-studio", "Studio booking, rates, and session deliverables.", ["SERVICES", "MASTER"], ["Studio", "Artist"], "low"],
+        ["Recording Services Agreement", "recording-services", "Recording engineering / production services and delivery.", ["SERVICES", "MASTER"], ["Studio", "Artist"], "low"]
+      ].map(
+        ([name, slug, description, rights, parties, risk]) => base({
+          name,
+          type: slug,
+          slug,
+          category: "master-rights",
+          description,
+          agreementType: "master",
+          status: "internal_review",
+          rightsCategories: rights,
+          requiredParties: parties,
+          riskLevel: risk,
+          fields: withCommon([
+            F.title(),
+            F.recordingTitle(),
+            F.party("partyA", parties[0]),
+            F.party("partyB", parties[1]),
+            F.fee(),
+            F.rightsSelection(),
+            ...slug.includes("ownership") || slug.includes("assignment") ? [F.ownershipSplit()] : [F.royaltyPct()],
+            F.effectiveDate()
+          ])
+        })
+      ),
+      // ── C. Publishing ────────────────────────────────────────────────────────
+      ...[
+        ["Music Publishing Agreement", "music-publishing", "Publisher / writer publishing terms and administration.", ["PUBLISHING", "COMPOSITION", "ROYALTY"], ["Songwriter", "Publisher"], "critical"],
+        ["Co-Publishing Agreement", "co-publishing", "Shared publishing ownership between writer and publisher.", ["PUBLISHING", "OWNERSHIP", "ROYALTY"], ["Songwriter", "Publisher"], "high"],
+        ["Publishing Administration Agreement", "publishing-admin", "Administration of publishing without full ownership transfer.", ["PUBLISHING", "PERFORMANCE", "MECHANICAL", "ROYALTY"], ["Songwriter", "Publisher"], "high"],
+        ["Sub-Publishing Agreement", "sub-publishing", "Territory sub-publishing appointment.", ["PUBLISHING", "LICENSE"], ["Publisher", "Publisher"], "high"],
+        ["Publishing Assignment", "publishing-assignment", "Assignment of publishing interest workflow fields.", ["PUBLISHING", "OWNERSHIP"], ["Songwriter", "Publisher"], "critical"],
+        ["Copyright Assignment", "copyright-assignment", "Assignment of copyright interest workflow fields.", ["COMPOSITION", "OWNERSHIP"], ["Songwriter", "Rights Holder"], "critical"],
+        ["Mechanical License", "mechanical-license", "Mechanical reproduction license for compositions.", ["MECHANICAL", "COMPOSITION", "LICENSE"], ["Licensor", "Licensee"], "medium"],
+        ["Synchronization License", "synchronization-license", "Composition sync license for audiovisual use.", ["SYNCHRONIZATION", "COMPOSITION", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Performance Rights License", "performance-rights-license", "Public performance license documentation fields.", ["PERFORMANCE", "COMPOSITION", "LICENSE"], ["Licensor", "Licensee"], "medium"],
+        ["Catalogue Administration Agreement", "catalogue-admin", "Administration of an existing publishing catalogue.", ["PUBLISHING", "PERFORMANCE", "MECHANICAL", "ROYALTY"], ["Rights Holder", "Publisher"], "high"]
+      ].map(
+        ([name, slug, description, rights, parties, risk]) => base({
+          name,
+          type: slug,
+          slug,
+          category: "publishing",
+          description,
+          agreementType: "publishing",
+          status: "internal_review",
+          rightsCategories: rights,
+          requiredParties: parties,
+          riskLevel: risk,
+          fields: withCommon([
+            F.title(),
+            F.songTitle(),
+            F.party("partyA", parties[0]),
+            F.party("partyB", parties[1]),
+            F.rightsSelection(),
+            F.royaltyPct("adminShare", "Admin / Royalty Share %"),
+            F.fee("consideration", "Consideration"),
+            F.effectiveDate()
+          ])
+        })
+      ),
+      // ── D. Artist / Label ────────────────────────────────────────────────────
+      base({
+        name: "Artist Management Agreement",
+        type: "management",
+        slug: "management",
+        category: "artist-label",
+        description: "Define management representation, commission, and responsibilities.",
+        agreementType: "management",
+        status: "active",
+        legacy: true,
+        rightsCategories: ["SERVICES", "REVENUE_SHARE"],
+        requiredParties: ["Artist", "Manager"],
+        riskLevel: "high",
+        fields: [
+          F.title(),
+          { name: "managerName", label: "Manager Name", type: "text", required: true, section: "parties" },
+          { name: "commissionRate", label: "Commission Rate", type: "number", required: true, section: "compensation" },
+          { name: "contractDuration", label: "Contract Duration", type: "text", required: true, section: "territory_term" },
+          { name: "responsibilities", label: "Manager Responsibilities", type: "textarea", required: true, section: "services" },
+          F.additionalTerms()
+        ]
+      }),
+      ...[
+        ["Recording Artist Agreement", "recording-artist", "Artist recording commitment and label services outline.", ["MASTER", "ROYALTY", "SERVICES"], ["Artist", "Label"], "critical"],
+        ["Label Services Agreement", "label-services", "\xC0-la-carte label services without exclusive recording deal.", ["SERVICES", "DISTRIBUTION", "MASTER"], ["Artist", "Label"], "high"],
+        ["Distribution Agreement", "distribution", "Physical/digital distribution appointment.", ["DISTRIBUTION", "MASTER"], ["Artist", "Distributor"], "high"],
+        ["Digital Distribution Agreement", "digital-distribution", "Digital DSP distribution terms and revenue share.", ["DISTRIBUTION", "MASTER", "REVENUE_SHARE"], ["Artist", "Distributor"], "medium"],
+        ["Artist Services Agreement", "artist-services", "General artist services engagement.", ["SERVICES"], ["Artist", "Label"], "medium"],
+        ["Artist Development Agreement", "artist-development", "Development funding, services, and option fields.", ["SERVICES", "MASTER", "ROYALTY"], ["Artist", "Label"], "high"],
+        ["Marketing Services Agreement", "marketing-services", "Marketing campaign services and deliverables.", ["SERVICES"], ["Artist", "Brand"], "low"],
+        ["Publicity Agreement", "publicity", "Publicity / PR services engagement.", ["SERVICES", "NAME_IMAGE_LIKENESS"], ["Artist", "Brand"], "low"],
+        ["Merchandising Agreement", "merchandising", "Merchandise rights and revenue participation.", ["MERCHANDISING", "NAME_IMAGE_LIKENESS", "REVENUE_SHARE"], ["Artist", "Brand"], "medium"]
+      ].map(
+        ([name, slug, description, rights, parties, risk]) => base({
+          name,
+          type: slug,
+          slug,
+          category: "artist-label",
+          description,
+          agreementType: "artist_label",
+          status: "internal_review",
+          rightsCategories: rights,
+          requiredParties: parties,
+          riskLevel: risk,
+          fields: withCommon([
+            F.title(),
+            F.party("partyA", parties[0]),
+            F.party("partyB", parties[1]),
+            F.fee(),
+            F.royaltyPct("revenueShare", "Revenue Share %"),
+            F.deliverables(),
+            F.effectiveDate()
+          ])
+        })
+      ),
+      // ── E. Licensing ─────────────────────────────────────────────────────────
+      ...[
+        ["Sync License", "sync-license", "General synchronization license covering composition and/or master.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Master Sync License", "master-sync-license", "Sync license limited to the master recording.", ["SYNCHRONIZATION", "MASTER", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Composition Sync License", "composition-sync-license", "Sync license limited to the underlying composition.", ["SYNCHRONIZATION", "COMPOSITION", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Film Music License", "film-music-license", "Music license for theatrical / film use.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Film Producer"], "high"],
+        ["Television Music License", "television-music-license", "Music license for television programming.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Television Producer"], "high"],
+        ["Advertising Music License", "advertising-music-license", "Music license for advertising / commercial use.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Advertiser"], "critical"],
+        ["Video Game Music License", "video-game-music-license", "Music license for interactive / game use.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Licensee"], "high"],
+        ["Podcast Music License", "podcast-music-license", "Music license for podcast episodes.", ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"], ["Licensor", "Content Creator"], "medium"],
+        ["Creator / YouTube Music License", "creator-youtube-music-license", "Music license for online creator / YouTube use.", ["LICENSE", "COMPOSITION", "MASTER"], ["Licensor", "Content Creator"], "medium"],
+        ["Social Media Music License", "social-media-music-license", "Music license for social platform content.", ["LICENSE", "COMPOSITION", "MASTER"], ["Licensor", "Content Creator"], "medium"]
+      ].map(
+        ([name, slug, description, rights, parties, risk]) => base({
+          name,
+          type: slug,
+          slug,
+          category: "licensing",
+          description,
+          agreementType: "license",
+          status: "internal_review",
+          rightsCategories: rights,
+          requiredParties: parties,
+          riskLevel: risk,
+          fields: withCommon([
+            F.title(),
+            F.songTitle(),
+            F.recordingTitle(),
+            F.party("licensor", parties[0]),
+            F.party("licensee", parties[1]),
+            F.rightsSelection(),
+            F.fee("licenseFee", "License Fee"),
+            { name: "media", label: "Media / Usage", type: "textarea", required: true, section: "transaction" },
+            F.effectiveDate()
+          ])
+        })
+      ),
+      // ── F. Live / Touring ────────────────────────────────────────────────────
+      base({
+        name: "Artist Performance Agreement",
+        type: "performance",
+        slug: "performance",
+        category: "live-touring",
+        description: "Secure artist performance bookings with venues and organizers.",
+        agreementType: "live_performance",
+        status: "active",
+        legacy: true,
+        rightsCategories: ["SERVICES", "PERFORMANCE", "NAME_IMAGE_LIKENESS"],
+        requiredParties: ["Artist", "Venue"],
+        optionalParties: ["Promoter"],
+        riskLevel: "medium",
+        fields: [
+          F.title("Event Title"),
+          { name: "venue", label: "Venue", type: "text", required: true, section: "parties" },
+          { name: "eventDate", label: "Event Date", type: "datetime", required: true, section: "transaction" },
+          { name: "performanceFee", label: "Performance Fee", type: "number", required: true, section: "compensation" },
+          { name: "technicalRequirements", label: "Technical Requirements", type: "textarea", required: false, section: "services" },
+          F.additionalTerms()
+        ]
+      }),
+      ...[
+        ["Live Performance Agreement", "live-performance", "General live performance engagement terms.", ["SERVICES", "PERFORMANCE"], ["Artist", "Promoter"], "medium"],
+        ["Venue Agreement", "venue-agreement", "Venue hire / house agreement for a performance.", ["SERVICES"], ["Artist", "Venue"], "medium"],
+        ["Promoter Agreement", "promoter-agreement", "Promoter engagement and settlement terms.", ["SERVICES", "REVENUE_SHARE"], ["Artist", "Promoter"], "high"],
+        ["Booking Agreement", "booking-agreement", "Booking agent appointment and commission.", ["SERVICES", "REVENUE_SHARE"], ["Artist", "Booking Agent"], "medium"],
+        ["Tour Agreement", "tour-agreement", "Multi-date tour services and settlement.", ["SERVICES", "REVENUE_SHARE"], ["Artist", "Promoter"], "high"],
+        ["Festival Performance Agreement", "festival-performance", "Festival appearance fee, slot, and rider fields.", ["SERVICES", "PERFORMANCE"], ["Artist", "Promoter"], "medium"],
+        ["Sponsorship Agreement", "sponsorship", "Brand sponsorship of artist / tour / event.", ["SERVICES", "NAME_IMAGE_LIKENESS"], ["Artist", "Brand"], "medium"]
+      ].map(
+        ([name, slug, description, rights, parties, risk]) => base({
+          name,
+          type: slug,
+          slug,
+          category: "live-touring",
+          description,
+          agreementType: "live",
+          status: "internal_review",
+          rightsCategories: rights,
+          requiredParties: parties,
+          riskLevel: risk,
+          fields: withCommon([
+            F.title(),
+            F.party("partyA", parties[0]),
+            F.party("partyB", parties[1]),
+            { name: "eventDate", label: "Event / Start Date", type: "date", required: true, section: "transaction" },
+            F.fee("fee", "Fee / Guarantee"),
+            F.deliverables(),
+            F.effectiveDate()
+          ])
+        })
+      )
+    ];
+  }
+});
+
+// shared/agreement-mvp.ts
+function isMvpTemplateType(type) {
+  return MVP_TEMPLATE_TYPES.includes(type);
+}
+function mvpStatusForType(type) {
+  if (isMvpTemplateType(type)) return "active";
+  if (HIGH_RISK_HOLD_TEMPLATES.some((t) => t.type === type && t.type !== "work-for-hire-music")) {
+    return "draft";
+  }
+  return "draft";
+}
+function mvpLegalReviewForType(type) {
+  if (isMvpTemplateType(type)) return "INTERNAL_REVIEW";
+  return "NOT_REVIEWED";
+}
+var MVP_TEMPLATE_SPECS, PHASE2_WAIT_TEMPLATES, HIGH_RISK_HOLD_TEMPLATES, MVP_TEMPLATE_TYPES;
+var init_agreement_mvp = __esm({
+  "shared/agreement-mvp.ts"() {
+    "use strict";
+    MVP_TEMPLATE_SPECS = [
+      {
+        type: "split-sheet",
+        name: "Split Sheet",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Independent artists", "Producers", "Studios", "Songwriters"],
+        requiredParties: ["Songwriter / contributor (2+)"],
+        transaction: "Document composition (and related) ownership splits for a song",
+        rightsAffected: ["COMPOSITION", "OWNERSHIP", "PUBLISHING", "ROYALTY"],
+        ownershipInfo: "Per-contributor composition % totaling 100%",
+        compensationInfo: "PRO/mechanical routing; no fee required",
+        territory: "Default CA / configurable",
+        term: "Life of copyright / as agreed",
+        exclusivity: "N/A (ownership record)",
+        requiredMetadata: ["songTitle", "effectiveDate", "jurisdiction", "templateVersion"],
+        requiredFields: ["title", "collaborators/ownershipSplit", "roles", "PRO/IPI optional"],
+        dependencies: ["Confirmation workflow", "100% validation", "Rights Ledger sync"],
+        riskLevel: "medium",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: false,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["contributors", "roles", "compositionOwnership%", "pros", "songId"],
+        analyticsValue: ["ownership verification", "catalog analytics", "royalty forecasting inputs"],
+        rightsGraphContribution: "Song \u2192 Contributors \u2192 Roles \u2192 Composition ownership"
+      },
+      {
+        type: "co-writing",
+        name: "Co-Writing Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Songwriters", "Publishers (light)"],
+        requiredParties: ["Songwriter", "Co-Writer"],
+        transaction: "Define co-write relationship, credit, and ownership before/at creation",
+        rightsAffected: ["COMPOSITION", "OWNERSHIP", "PUBLISHING"],
+        ownershipInfo: "Writer shares totaling 100%",
+        compensationInfo: "Optional advance; royalty via ownership",
+        territory: "Configurable",
+        term: "Per composition / catalogue window",
+        exclusivity: "Usually non-exclusive co-write",
+        requiredMetadata: ["songTitle", "writers", "credit", "effectiveDate"],
+        requiredFields: ["parties", "ownershipSplit", "credit", "territory", "term"],
+        dependencies: ["Often precedes or accompanies Split Sheet"],
+        riskLevel: "medium",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["writers", "ownership%", "credit", "term", "territory"],
+        analyticsValue: ["collaboration graph", "ownership verification"],
+        rightsGraphContribution: "Contributors \u2192 Composition ownership \u2192 Credit"
+      },
+      {
+        type: "producer",
+        name: "Producer Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Artists", "Producers", "Studios"],
+        requiredParties: ["Artist", "Producer"],
+        transaction: "Production services, fee, credit, and optional royalty points",
+        rightsAffected: ["MASTER", "ROYALTY", "SERVICES"],
+        ownershipInfo: "Optional master points; clarify vs composition",
+        compensationInfo: "Fee + royalty % + recoupment flags",
+        territory: "Configurable",
+        term: "Per track / delivery-based",
+        exclusivity: "Exclusive or non-exclusive production",
+        requiredMetadata: ["recordingTitle", "fee", "royalty%", "credit"],
+        requiredFields: ["artist", "producer", "fee", "royaltyPercentage", "credit", "deliverables"],
+        dependencies: ["May link to Master Ownership + Split Sheet"],
+        riskLevel: "medium",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["fee", "royalty%", "credit", "masterParticipation", "territory"],
+        analyticsValue: ["contractual economics", "royalty forecasting", "risk analysis"],
+        rightsGraphContribution: "Services \u2192 Master economics \u2192 Royalty config"
+      },
+      {
+        type: "featured-artist",
+        name: "Featured Artist Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Artists", "Labels (indie)", "Managers"],
+        requiredParties: ["Primary Artist", "Featured Artist"],
+        transaction: "Feature appearance, fee/royalty, credit, NIL usage for promo",
+        rightsAffected: ["MASTER", "ROYALTY", "NAME_IMAGE_LIKENESS"],
+        ownershipInfo: "Usually no composition; optional master points",
+        compensationInfo: "Feature fee and/or royalty points",
+        territory: "Configurable",
+        term: "Per recording + promo window",
+        exclusivity: "Typically non-exclusive feature",
+        requiredMetadata: ["recordingTitle", "featureFee", "royalty%", "credit"],
+        requiredFields: ["parties", "fee", "royalty", "credit", "territory", "term"],
+        dependencies: ["Master ownership clarity recommended"],
+        riskLevel: "medium",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["fee", "royalty%", "credit", "nilScope", "term"],
+        analyticsValue: ["feature economics", "catalog collaboration graph"],
+        rightsGraphContribution: "Parties \u2192 Master royalty \u2192 Credit / NIL"
+      },
+      {
+        type: "session-musician",
+        name: "Session Musician Agreement",
+        priority: "Should Have",
+        phase: "mvp",
+        primaryUsers: ["Artists", "Producers", "Studios"],
+        requiredParties: ["Artist / hiring party", "Session Musician"],
+        transaction: "Session performance for fee; neighboring-rights acknowledgement",
+        rightsAffected: ["SERVICES", "NEIGHBORING_RIGHTS", "MASTER"],
+        ownershipInfo: "Usually work-for-hire / no ownership unless stated",
+        compensationInfo: "Session fee; rare royalty",
+        territory: "Recording territory",
+        term: "Session / delivery",
+        exclusivity: "Non-exclusive services",
+        requiredMetadata: ["recordingTitle", "sessionFee", "instrument/role"],
+        requiredFields: ["parties", "fee", "deliverables", "rightsGranted"],
+        dependencies: ["Clarify vs Work-for-Hire when assignment claimed"],
+        riskLevel: "low",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: false,
+        generationMode: "automated_draft",
+        structuredExtract: ["fee", "role", "neighboringRightsAck", "assignmentFlag"],
+        analyticsValue: ["cost basis of masters", "risk flags if unpaid sessions"],
+        rightsGraphContribution: "Services \u2192 Master deliverables (no default ownership)"
+      },
+      {
+        type: "vocalist",
+        name: "Vocalist Agreement",
+        priority: "Should Have",
+        phase: "mvp",
+        primaryUsers: ["Artists", "Producers"],
+        requiredParties: ["Artist / hiring party", "Vocalist"],
+        transaction: "Vocal performance services + optional points",
+        rightsAffected: ["SERVICES", "MASTER", "ROYALTY"],
+        ownershipInfo: "Optional master/composition points if negotiated",
+        compensationInfo: "Vocal fee \xB1 royalty %",
+        territory: "Configurable",
+        term: "Per recording",
+        exclusivity: "Usually non-exclusive",
+        requiredMetadata: ["recordingTitle", "vocalFee", "royalty%"],
+        requiredFields: ["parties", "fee", "royalty", "deliverables", "credit"],
+        dependencies: ["Split Sheet if composition claim"],
+        riskLevel: "low",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: false,
+        generationMode: "automated_draft",
+        structuredExtract: ["fee", "royalty%", "credit", "ownershipClaimFlag"],
+        analyticsValue: ["session cost + royalty liability"],
+        rightsGraphContribution: "Services \u2192 optional Royalty / Ownership edges"
+      },
+      {
+        type: "work-for-hire-music",
+        name: "Work-for-Hire Music Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Brands", "Studios", "Commissioning parties", "Creators"],
+        requiredParties: ["Commissioning Party", "Creator"],
+        transaction: "Commissioned music with assignment / WFH intent fields",
+        rightsAffected: ["COMPOSITION", "MASTER", "OWNERSHIP", "SERVICES"],
+        ownershipInfo: "Intended full assignment to commissioner (jurisdiction-sensitive)",
+        compensationInfo: "Commission fee; usually no ongoing royalty",
+        territory: "Often worldwide",
+        term: "Perpetual / assignment",
+        exclusivity: "Exclusive ownership transfer intent",
+        requiredMetadata: ["commissionFee", "rightsGranted", "deliverables", "jurisdiction"],
+        requiredFields: ["parties", "fee", "rightsSelection", "ownership/assignment flags", "territory", "term"],
+        dependencies: ["Counsel gate strongly recommended before execution"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "counsel_required",
+        structuredExtract: ["assignmentFlag", "fee", "rightsGranted", "territory", "term"],
+        analyticsValue: ["ownership verification", "chain-of-title risk", "due diligence"],
+        rightsGraphContribution: "Services \u2192 Ownership transfer edge (high-risk)"
+      },
+      {
+        type: "master-ownership",
+        name: "Master Recording Ownership Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Artists", "Labels", "Producers", "Investors"],
+        requiredParties: ["Artist / Rights Holder", "Label / Co-owner"],
+        transaction: "Document who owns the sound recording master",
+        rightsAffected: ["MASTER", "OWNERSHIP"],
+        ownershipInfo: "Master % totaling 100%",
+        compensationInfo: "Optional buyout / consideration",
+        territory: "Configurable (often worldwide)",
+        term: "Life of copyright / perpetual",
+        exclusivity: "Ownership (not license)",
+        requiredMetadata: ["recordingTitle", "ISRC optional", "ownershipSplit"],
+        requiredFields: ["parties", "ownershipSplit", "territory", "term", "consideration"],
+        dependencies: ["Pairs with Split Sheet for full song graph"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["masterOwnership%", "ISRC", "parties", "territory"],
+        analyticsValue: ["asset valuation", "ownership verification", "catalog acquisition DD"],
+        rightsGraphContribution: "Song \u2192 Master ownership nodes"
+      },
+      {
+        type: "master-license",
+        name: "Master License Agreement",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Rights holders", "Licensees", "Distributors", "Sync buyers"],
+        requiredParties: ["Licensor", "Licensee"],
+        transaction: "License master for defined uses (exclusivity via field, not separate templates)",
+        rightsAffected: ["MASTER", "LICENSE", "ROYALTY"],
+        ownershipInfo: "Licensor retains ownership; licensee gets usage rights",
+        compensationInfo: "License fee \xB1 royalty / revenue share",
+        territory: "Required",
+        term: "Required",
+        exclusivity: "Exclusive | Non-Exclusive | Semi-Exclusive (field)",
+        requiredMetadata: ["media/use", "fee", "territory", "term", "exclusivity"],
+        requiredFields: ["parties", "rightsGranted", "fee", "territory", "term", "exclusivity"],
+        dependencies: ["Master ownership should be established first"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["licenseType", "exclusivity", "territory", "term", "fee", "royalty%"],
+        analyticsValue: ["licensing activity", "revenue forecasting", "catalog analytics"],
+        rightsGraphContribution: "Master \u2192 License edges (territory/term/exclusivity)"
+      },
+      {
+        type: "master-use-license",
+        name: "Master Use / Recording License",
+        priority: "Should Have",
+        phase: "mvp",
+        primaryUsers: ["Sync agents", "Film/TV/ad buyers", "Rights holders"],
+        requiredParties: ["Licensor", "Licensee"],
+        transaction: "Master use for audiovisual / defined exploitation",
+        rightsAffected: ["MASTER", "LICENSE", "SYNCHRONIZATION"],
+        ownershipInfo: "No ownership transfer",
+        compensationInfo: "Master use fee \xB1 backend",
+        territory: "Required",
+        term: "Required + media options",
+        exclusivity: "Usually non-exclusive per media",
+        requiredMetadata: ["project/media", "fee", "territory", "term", "options"],
+        requiredFields: ["parties", "media", "fee", "territory", "term", "rightsGranted"],
+        dependencies: ["Often paired with Composition Sync / Sync License"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["media", "fee", "territory", "term", "options"],
+        analyticsValue: ["sync revenue", "licensing velocity", "valuation comps"],
+        rightsGraphContribution: "Master \u2192 Sync/use license edges"
+      },
+      {
+        type: "sync-license",
+        name: "Synchronization License",
+        priority: "Must Have",
+        phase: "mvp",
+        primaryUsers: ["Publishers", "Labels", "Sync agents", "Brands/film/TV"],
+        requiredParties: ["Licensor", "Licensee"],
+        transaction: "Sync composition and/or master for AV use (MVP unified sync scaffold)",
+        rightsAffected: ["SYNCHRONIZATION", "COMPOSITION", "MASTER", "LICENSE"],
+        ownershipInfo: "No transfer; licensed use only",
+        compensationInfo: "Sync fee \xB1 most-favored / options",
+        territory: "Required",
+        term: "Required",
+        exclusivity: "Per campaign/media",
+        requiredMetadata: ["songTitle", "recordingTitle", "media", "fee", "territory", "term"],
+        requiredFields: ["parties", "media", "rightsGranted", "fee", "territory", "term", "exclusivity"],
+        dependencies: ["Chain of title for composition + master"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["media", "fee", "compositionLicensed", "masterLicensed", "territory", "term"],
+        analyticsValue: ["licensing activity", "sync comps", "catalog monetization"],
+        rightsGraphContribution: "Composition/Master \u2192 Sync license edges"
+      },
+      {
+        type: "producer-royalty",
+        name: "Producer Royalty Participation Agreement",
+        priority: "Should Have",
+        phase: "mvp",
+        primaryUsers: ["Producers", "Artists", "Labels"],
+        requiredParties: ["Artist / payor", "Producer"],
+        transaction: "Backend producer points without full services agreement",
+        rightsAffected: ["MASTER", "ROYALTY", "REVENUE_SHARE"],
+        ownershipInfo: "Points \u2260 ownership unless stated",
+        compensationInfo: "Royalty % + advance/recoupment",
+        territory: "Configurable",
+        term: "Life of recording / as agreed",
+        exclusivity: "N/A or limited",
+        requiredMetadata: ["recordingTitle", "producerRoyalty%", "advance"],
+        requiredFields: ["parties", "royaltyPercentage", "advance", "recoupment flags"],
+        dependencies: ["Often accompanies Producer Agreement"],
+        riskLevel: "high",
+        jurisdictionReviewRequired: true,
+        lawyerReviewBeforeExecution: true,
+        generationMode: "controlled_workflow",
+        structuredExtract: ["royalty%", "advance", "recoupment", "base (PPD/net)"],
+        analyticsValue: ["royalty forecasting", "contractual economics", "risk analysis"],
+        rightsGraphContribution: "Royalty config node linked to Master"
+      }
+    ];
+    PHASE2_WAIT_TEMPLATES = [
+      {
+        type: "composition-sync-license",
+        name: "Composition Sync License",
+        reason: "Specialize after unified Sync License proves data model; avoid duplicate sync UX in MVP."
+      },
+      {
+        type: "non-exclusive-master-license",
+        name: "Non-Exclusive Master License",
+        reason: "Covered by Master License exclusivity field; separate template adds confusion without new data."
+      },
+      {
+        type: "recording-services",
+        name: "Recording Services Agreement",
+        reason: "Lower urgency vs ownership/license loop; Session + Producer cover most studio needs."
+      },
+      {
+        type: "songwriter-collaboration",
+        name: "Songwriter Collaboration Agreement",
+        reason: "Overlaps Co-Writing; add when multi-party writer deals demand richer admin terms."
+      },
+      {
+        type: "remixer",
+        name: "Remixer Agreement",
+        reason: "Important niche; not required to prove core ownership\u2192license\u2192ledger loop."
+      },
+      {
+        type: "publishing-admin",
+        name: "Publishing Administration Agreement",
+        reason: "Publishing suite is Phase 2 rights-management expansion."
+      },
+      {
+        type: "music-publishing",
+        name: "Music Publishing Agreement",
+        reason: "High commercial + legal complexity; defer until counsel package ready."
+      },
+      {
+        type: "digital-distribution",
+        name: "Digital Distribution Agreement",
+        reason: "Distribution economics matter later; not needed for first rights-record loop."
+      },
+      {
+        type: "performance",
+        name: "Artist Performance Agreement",
+        reason: "Live vertical is separate GTM motion from song/master rights MVP."
+      },
+      {
+        type: "management",
+        name: "Artist Management Agreement",
+        reason: "Fiduciary/commission sensitivity; not part of song asset graph MVP."
+      }
+    ];
+    HIGH_RISK_HOLD_TEMPLATES = [
+      { type: "master-assignment", name: "Master Rights Assignment", reason: "Chain-of-title / permanent transfer" },
+      { type: "copyright-assignment", name: "Copyright Assignment", reason: "Copyright statute + moral rights issues" },
+      { type: "publishing-assignment", name: "Publishing Assignment", reason: "Long-term economic transfer" },
+      { type: "music-publishing", name: "Music Publishing Agreement", reason: "Complex term/territory/reversion" },
+      { type: "recording-artist", name: "Recording Artist Agreement", reason: "Multi-option label deal complexity" },
+      { type: "exclusive-master-license", name: "Exclusive Master License", reason: "Near-assignment economics" },
+      { type: "advertising-music-license", name: "Advertising Music License", reason: "Brand/media liability + exclusivity" },
+      { type: "management", name: "Artist Management Agreement", reason: "Fiduciary duties / commission disputes" },
+      { type: "work-for-hire-music", name: "Work-for-Hire Music Agreement", reason: "Jurisdiction-sensitive WFH doctrine \u2014 in MVP but counsel_required mode" },
+      { type: "co-publishing", name: "Co-Publishing Agreement", reason: "Shared publishing ownership complexity" }
+    ];
+    MVP_TEMPLATE_TYPES = MVP_TEMPLATE_SPECS.map((t) => t.type);
+  }
+});
+
 // server/copilot-knowledge.ts
+function buildTemplateCatalogBrief() {
+  const lines = [`### Active create set (${ACTIVE_CREATE_COUNT})`];
+  for (const spec of MVP_TEMPLATE_SPECS) {
+    const t = CATALOG_TEMPLATES.find((c) => c.type === spec.type);
+    if (!t) continue;
+    lines.push(
+      `- **${t.name}** (\`${t.type}\`) \u2014 ${spec.priority}. ${t.description} Parties: ${spec.requiredParties.join(", ")}. Rights tags: ${spec.rightsAffected.join(", ")}. Mode: ${spec.generationMode}. Lawyer review before execution (product rule): ${spec.lawyerReviewBeforeExecution}.`
+    );
+  }
+  lines.push("", "### Phase 2 (not activated for normal create)");
+  for (const p of PHASE2_WAIT_TEMPLATES.slice(0, 8)) {
+    lines.push(`- **${p.name}** (\`${p.type}\`) \u2014 deferred: ${p.reason}`);
+  }
+  lines.push(
+    "",
+    `Full catalog size: ${CATALOG_COUNT} (including drafts). Prefer active types: ${MVP_TEMPLATE_TYPES.join(", ")}.`
+  );
+  return lines.join("\n").trim();
+}
 function resolveCopilotPageKey(path3) {
   if (!path3) return void 0;
-  const keys = ["/", "/clients", "/projects", "/contracts", "/ownership", "/billing", "/analytics"];
-  if (keys.includes(path3)) return path3;
-  for (const key of keys) {
+  if (KNOWN_PAGE_KEYS.includes(path3)) return path3;
+  if (path3.startsWith("/contract/")) return "/templates";
+  for (const key of KNOWN_PAGE_KEYS) {
     if (key !== "/" && path3.startsWith(`${key}/`)) return key;
   }
-  return path3;
+  return void 0;
 }
-var COPILOT_PRICING, COPILOT_SYSTEM_PROMPT;
+function findCatalogTemplateHint(query) {
+  const q = query.toLowerCase();
+  return CATALOG_TEMPLATES.find(
+    (t) => q.includes(t.type) || q.includes(t.slug) || q.includes(t.name.toLowerCase())
+  ) ?? null;
+}
+var COPILOT_PRICING, ACTIVE_CATEGORIES, CATALOG_COUNT, ACTIVE_CREATE_COUNT, TEMPLATE_CATALOG_BRIEF, COPILOT_LEGAL_BOUNDARIES, COPILOT_SYSTEM_PROMPT, KNOWN_PAGE_KEYS;
 var init_copilot_knowledge = __esm({
   "server/copilot-knowledge.ts"() {
     "use strict";
+    init_agreement_catalog();
+    init_agreement_mvp();
     COPILOT_PRICING = [
       "\u2022 **Starter (Free)** \u2014 $0: 1 project, up to 2 contributors",
       "\u2022 **Pay-Per-Session** \u2014 $25 CAD/session: up to 5 contributors, full workflow + PDF",
@@ -3502,43 +5004,311 @@ var init_copilot_knowledge = __esm({
       "\u2022 **Studio Pro** \u2014 $49 CAD/month: unlimited projects, team workspaces, bulk exports",
       "\u2022 **Enterprise** \u2014 custom pricing for labels, publishers, and rights organizations"
     ].join("\n");
-    COPILOT_SYSTEM_PROMPT = `You are SoundLedger CoPilot, the expert AI assistant embedded inside SplitSheet \u2014 a Canadian music agreement and rights management platform built by SoundLedger Technologies Inc.
+    ACTIVE_CATEGORIES = TEMPLATE_CATEGORIES.filter((c) => !c.reserved);
+    CATALOG_COUNT = CATALOG_TEMPLATES.length;
+    ACTIVE_CREATE_COUNT = MVP_TEMPLATE_TYPES.length;
+    TEMPLATE_CATALOG_BRIEF = buildTemplateCatalogBrief();
+    COPILOT_LEGAL_BOUNDARIES = `
+CRITICAL BOUNDARIES (never violate):
+- You are NOT a lawyer, law firm, or professional legal service.
+- Do NOT draft or rewrite binding legal clauses, opinions, or "counsel-ready" contract language.
+- Do NOT claim any template is attorney-approved, enforceable, or suitable for every jurisdiction.
+- Do NOT give legal advice (including "you should sue", "this is legally binding", "this protects you in court").
+- Templates and CoPilot answers are for **workflow, documentation, and product guidance only**.
+- Always remind users: legal suitability depends on jurisdiction and transaction; consult qualified entertainment counsel when appropriate.
+- Preferred disclaimer to quote when discussing templates: "${LEGAL_DISCLAIMER}"
+- When stating product facts, use exact catalog fields (name, parties, rights tags, risk, status, generation mode). Do not paraphrase into legal conclusions.
+- Rights tags and ownership percentages in SplitSheet are **stored documentation fields**, not determinations of legal title.
+`.trim();
+    COPILOT_SYSTEM_PROMPT = `You are SoundLedger CoPilot, the product and workflow assistant inside SplitSheet \u2014 a Canadian music rights and agreement documentation platform by SoundLedger Technologies Inc.
 
-Your role is to guide music industry operators (independent artists, producers, studios, publishers) through the platform's features and answer music industry questions. You are professional, concise, warm, and deeply knowledgeable.
+Your job is to help operators navigate SplitSheet features, understand when to use each agreement *template* in the library, and walk through ownership, confirmation, billing, and Rights Ledger workflows \u2014 translating **product information accurately** without inventing capabilities or legal conclusions.
+
+${COPILOT_LEGAL_BOUNDARIES}
 
 \u2550\u2550\u2550 PLATFORM KNOWLEDGE \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 
-OPERATOR WORKFLOW (4 stages):
+OPERATOR WORKFLOW (core stages):
 1. Client Intake \u2014 add an artist, producer, or label as a client
-2. Split Setup \u2014 create a project, add contributors, set ownership percentages
-3. Contributor Confirmation \u2014 generate token-based links, send via WhatsApp/SMS/Instagram DMs
-4. Confirmed Record \u2014 timestamped, IP-logged, PDF-exportable agreement
+2. Split / Project Setup \u2014 create a project, add contributors, set ownership percentages
+3. Contributor Confirmation \u2014 generate token-based links (WhatsApp/SMS/DM)
+4. Confirmed Record \u2014 timestamped, IP-logged, PDF-exportable documentation
+5. Rights Ledger sync \u2014 when an executed agreement includes ownership/license data, SplitSheet can register structured rights records (append-only; historical versions preserved)
 
-AGREEMENT TYPES: Split Sheet, Producer Agreement, Performance Agreement, Management Agreement
+RIGHTS BASICS (product concepts, not legal advice):
+- Composition and Master ownership are tracked separately; each split set should total 100% when that right is in play.
+- PRO affiliations commonly used: SOCAN (Canada default), ASCAP, BMI, PRS, etc. IPI/CAE is a 9-digit identifier.
+- Saying \u201Cthe record shows 3 master royalty points\u201D is correct product language. Saying \u201Cthe producer legally owns 3% of the master\u201D is not.
 
-RIGHTS: Composition (PA) and Master (SR) tracked separately. Each must total 100% independently.
-
-PRO AFFILIATIONS: SOCAN (Canada default), ASCAP, BMI, PRS, MROC, ARTISTI. IPI/CAE = 9-digit PRO identifier.
-
-PRICING (CAD):
+PRICING (CAD) \u2014 quote only these tiers:
 ${COPILOT_PRICING}
+
+\u2550\u2550\u2550 ENTERTAINMENT AGREEMENT TEMPLATE LIBRARY \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+SplitSheet includes a structured catalog of **${CATALOG_COUNT}** workflow templates; **only ${ACTIVE_CREATE_COUNT}** are activated for normal create in the operator library.
+Templates are tagged with rights, required parties, risk level, version, and legal-review status.
+Active templates start as INTERNAL_REVIEW / documentation scaffolds \u2014 not counsel-approved legal instruments.
+
+HOW TO USE A TEMPLATE (product steps):
+1. Open **Templates** \u2192 filter by category / rights / risk / status
+2. Preview the template card (parties, rights tags, version, legal-review status)
+3. Click **Create Agreement** \u2192 fill the field-engine form (or the legacy form for Split Sheet / Producer / Performance / Management)
+4. Save draft or create \u2192 continue confirmation / signature from the contract record
+5. When fully confirmed, ownership/license data may sync into the Rights Ledger
+
+CATEGORIES:
+${ACTIVE_CATEGORIES.map((c) => `- ${c.label}`).join("\n")}
+
+TEMPLATE DIRECTORY (inform users which template fits a situation; stay high-level and product-focused):
+${TEMPLATE_CATALOG_BRIEF}
+
+When recommending a template:
+- Prefer the **active create set of ${ACTIVE_CREATE_COUNT}** for normal operator guidance; mention Phase 2 templates only if asked
+- Explain *why it fits the workflow* (roles present, master vs composition, live vs sync, etc.)
+- Mention required parties and rights tags from the directory / fact card \u2014 do not invent additional rights
+- State that the operator should still have counsel review before relying on it as a legal instrument
+- Point them to **/templates** or **/contract/{type}** (use the slug in backticks above)
+- Never invent template names that are not listed
+- For Work-for-Hire / counsel_required modes, emphasize counsel review and jurisdiction sensitivity
+
+\u2550\u2550\u2550 DATA ACCESS LIMITS \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+- This chat does **not** load a user\u2019s live projects, contracts, or Rights Ledger rows.
+- If asked who owns a specific track or what a specific deal\u2019s points are, do **not** guess \u2014 direct them to the project, contract, Rights Ledger, or Copilot Voice (authorized retrieval).
+- Prefer: \u201CI can explain how SplitSheet stores that field\u201D over inventing a number.
 
 \u2550\u2550\u2550 BEHAVIOR \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 
-- Answer the user's specific question directly \u2014 do not deflect or give unrelated info
-- Use 2\u20135 sentences for simple questions; numbered steps for processes
-- NEVER give legal advice \u2014 recommend a qualified entertainment lawyer
-- Quote pricing in CAD using the tiers above
-- Tailor guidance to the page the user is on when provided
-- If you are unsure, say so rather than inventing features or prices`;
+- Answer the user's question directly; keep replies concise (2\u20136 sentences, or short bullets for processes)
+- Prefer product navigation language ("In SplitSheet, go to Templates\u2026") over legal drafting
+- If asked for legal advice, refuse politely and redirect to qualified counsel + the disclaimer
+- Quote pricing in CAD using the tiers above only
+- Tailor guidance to the page the user is on when provided (known paths only)
+- If unsure about a feature, say so \u2014 do not invent capabilities
+- When a PRODUCT FACT CARD is attached for this turn, answer template questions from that card only`;
+    KNOWN_PAGE_KEYS = [
+      "/",
+      "/clients",
+      "/projects",
+      "/contracts",
+      "/templates",
+      "/ownership",
+      "/billing",
+      "/analytics",
+      "/admin"
+    ];
+  }
+});
+
+// server/copilot-product-grounding.ts
+function buildProductFactCard(template) {
+  const mvp = MVP_TEMPLATE_SPECS.find((s) => s.type === template.type);
+  const launchStatus = mvpStatusForType(template.type);
+  const isMvp = MVP_TEMPLATE_TYPES.includes(template.type);
+  const lines = [
+    `PRODUCT FACT CARD (answer ONLY from these fields \u2014 do not invent):`,
+    `\u2022 Name: ${template.name}`,
+    `\u2022 Type slug: \`${template.type}\``,
+    `\u2022 Category: ${template.category}`,
+    `\u2022 Description: ${template.description}`,
+    `\u2022 Required parties: ${template.requiredParties.join(", ") || "\u2014"}`,
+    `\u2022 Optional parties: ${template.optionalParties.join(", ") || "\u2014"}`,
+    `\u2022 Rights tags (product labels, not a legal ownership finding): ${template.rightsCategories.join(", ") || "\u2014"}`,
+    `\u2022 Risk level (workflow flag): ${template.riskLevel}`,
+    `\u2022 Catalog status: ${template.status}`,
+    `\u2022 Legal-review status (product field): ${template.legalReviewStatus}`,
+    `\u2022 Launch activation: ${isMvp ? `active create path (${launchStatus})` : "not in the active create set \u2014 Phase 2 / draft"}`,
+    `\u2022 Create path: /contract/${template.type} or Templates \u2192 ${template.name}`
+  ];
+  if (mvp) {
+    lines.push(
+      `\u2022 Transaction (product intent): ${mvp.transaction}`,
+      `\u2022 Generation mode: ${mvp.generationMode}`,
+      `\u2022 Lawyer review before execution (product rule): ${mvp.lawyerReviewBeforeExecution ? "yes" : "recommended when unsure"}`,
+      `\u2022 Jurisdiction review required (product rule): ${mvp.jurisdictionReviewRequired ? "yes" : "as needed"}`,
+      `\u2022 Ownership fields tracked: ${mvp.ownershipInfo}`,
+      `\u2022 Compensation fields tracked: ${mvp.compensationInfo}`
+    );
+  }
+  lines.push(
+    `\u2022 Safe user phrasing: \u201CIn SplitSheet, this template is used to document \u2026\u201D \u2014 never \u201Cthis legally means \u2026\u201D`,
+    `\u2022 Required disclaimer: ${LEGAL_DISCLAIMER}`
+  );
+  return lines.join("\n");
+}
+function summarizeProductTemplate(query) {
+  const t = findCatalogTemplateHint(query);
+  if (!t) return null;
+  const mvp = MVP_TEMPLATE_SPECS.find((s) => s.type === t.type);
+  const isMvp = MVP_TEMPLATE_TYPES.includes(t.type);
+  return [
+    `**${t.name}** (\`${t.type}\`) is a SplitSheet **workflow template** in the **${t.category}** category.`,
+    "",
+    t.description,
+    "",
+    `\u2022 Required parties: ${t.requiredParties.join(", ") || "\u2014"}`,
+    `\u2022 Rights tags (product labels): ${t.rightsCategories.join(", ") || "\u2014"}`,
+    `\u2022 Risk level: ${t.riskLevel} \xB7 Catalog status: ${t.status} \xB7 Legal-review field: ${t.legalReviewStatus}`,
+    `\u2022 Active for normal create: ${isMvp ? "yes" : "no (browse/Phase 2)"}`,
+    mvp ? `\u2022 Product intent: ${mvp.transaction}. Generation mode: ${mvp.generationMode}.` : null,
+    "",
+    `Open **Templates** or go to \`/contract/${t.type}\` to create a **documentation draft** \u2014 not a certified legal instrument.`,
+    "",
+    `_${LEGAL_DISCLAIMER}_`
+  ].filter(Boolean).join("\n");
+}
+function classifyCopilotQuery(message) {
+  const q = message.toLowerCase().trim();
+  if (!q) return "general";
+  if (LEGAL_ASK.test(q)) return "legal_advice";
+  if (LEDGER_DATA_ASK.test(q)) return "ledger_or_ownership_data";
+  if (/\b(pricing|plan|cost|how much|tier|subscription|billing)\b/.test(q)) return "pricing";
+  const named = findCatalogTemplateHint(q);
+  if (named && /\b(template|agreement|license|what is|what's|explain|tell me|when do|when should|use|producer|split|sync|master|publishing)\b/.test(
+    q
+  )) {
+    return "template_fact";
+  }
+  if (named && (q.includes(named.type) || q.includes(named.name.toLowerCase()))) {
+    return "template_fact";
+  }
+  if (/\b(how do i|workflow|confirm|project|client|pdf|export|get started)\b/.test(q)) {
+    return "workflow";
+  }
+  return "general";
+}
+function legalAdviceRefusal() {
+  return [
+    "I can help you navigate SplitSheet\u2019s **product workflows and stored documentation fields**, but I am **not** a lawyer and SplitSheet is **not** a law firm.",
+    "",
+    "I won\u2019t say whether a provision is legally appropriate, enforceable, or sufficient for your transaction.",
+    "I can point you to the relevant template fields and suggest preparing the record for qualified entertainment counsel.",
+    "",
+    `_${LEGAL_DISCLAIMER}_`
+  ].join("\n");
+}
+function ledgerDataRedirect() {
+  return [
+    "I don\u2019t have live access to your project or Rights Ledger records in this chat, so I won\u2019t invent ownership, splits, or points.",
+    "",
+    "To see **stored product data** (not a legal ownership determination):",
+    "\u2022 Open the project or contract in SplitSheet, or",
+    "\u2022 Use the **Rights Ledger** (/ownership), or",
+    "\u2022 Use Copilot Voice with confirmation \u2014 it reads authorized stored records only.",
+    "",
+    "Ask me about **templates, pricing, or workflow steps** and I\u2019ll answer from SplitSheet\u2019s product catalog."
+  ].join("\n");
+}
+function tryDeterministicProductAnswer(message) {
+  const kind = classifyCopilotQuery(message);
+  if (kind === "legal_advice") return legalAdviceRefusal();
+  if (kind === "ledger_or_ownership_data") return ledgerDataRedirect();
+  if (kind === "template_fact") {
+    return summarizeProductTemplate(message);
+  }
+  return null;
+}
+function buildGroundedSystemAugment(message) {
+  const kind = classifyCopilotQuery(message);
+  const named = findCatalogTemplateHint(message);
+  const parts = [
+    "",
+    "\u2550\u2550\u2550 PRODUCT FIDELITY RULES (this turn) \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+    `- Query kind: ${kind}`,
+    `- Catalog size: ${CATALOG_TEMPLATES.length} templates; active create set: ${MVP_TEMPLATE_TYPES.length}`,
+    "- Translate product fields literally. Do not upgrade workflow status into legal conclusions.",
+    "- Rights tags / ownership % in the product are **stored documentation fields**, not court findings.",
+    "- If a fact is not in PLATFORM KNOWLEDGE or a PRODUCT FACT CARD below, say you don\u2019t know.",
+    "- Never invent template names, pricing, or features.",
+    "- Do not answer who owns a specific song/project from memory \u2014 redirect to Rights Ledger / project UI."
+  ];
+  if (named) {
+    parts.push("", buildProductFactCard(named));
+  }
+  if (kind === "legal_advice") {
+    parts.push("", "This turn is a legal-advice request: refuse and quote the disclaimer; offer workflow help only.");
+  }
+  return parts.join("\n");
+}
+function sanitizeCopilotResponse(text2, opts) {
+  let out = text2;
+  let flagged = false;
+  if (BANNED_LEGAL_CLAIMS.test(out)) {
+    flagged = true;
+    out = out.replace(BANNED_LEGAL_CLAIMS, "[product guidance only \u2014 not a legal determination]");
+    if (!out.includes(LEGAL_DISCLAIMER.slice(0, 40))) {
+      out = `${out.trim()}
+
+_${LEGAL_DISCLAIMER}_`;
+    }
+  }
+  const slugMentions = [...out.matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]);
+  const knownTypes = new Set(CATALOG_TEMPLATES.map((t) => t.type));
+  const invented = slugMentions.filter(
+    (s) => s.includes("-") && !knownTypes.has(s) && !["en-ca", "en-us", "cad", "usd"].includes(s) && s.length > 3
+  );
+  if (invented.length) {
+    flagged = true;
+    out = `${out.trim()}
+
+_Note: I can only confirm templates in SplitSheet\u2019s catalog. Unrecognized type codes were ignored: ${invented.join(", ")}_`;
+  }
+  if (opts?.templateMentioned && !out.includes("not a law firm") && !out.includes(LEGAL_DISCLAIMER.slice(0, 32))) {
+    out = `${out.trim()}
+
+_${LEGAL_DISCLAIMER}_`;
+  }
+  return { text: out, flagged };
+}
+var BANNED_LEGAL_CLAIMS, LEDGER_DATA_ASK, LEGAL_ASK;
+var init_copilot_product_grounding = __esm({
+  "server/copilot-product-grounding.ts"() {
+    "use strict";
+    init_agreement_catalog();
+    init_agreement_mvp();
+    init_copilot_knowledge();
+    BANNED_LEGAL_CLAIMS = /\b(legally\s+binding|attorney[- ]approved|enforceable\s+in\s+|you\s+are\s+legally\s+protected|this\s+protects\s+you\s+in\s+court|guarantees?\s+enforceability|valid\s+in\s+all\s+jurisdictions|i\s+am\s+a\s+lawyer)\b/i;
+    LEDGER_DATA_ASK = /\b(who\s+owns|what\s+(?:is|are)\s+(?:my|our|the)\s+(?:split|ownership|points)|ownership\s+(?:of|for|on)\s+(?:this|my|the)|master\s+for\s+this|composition\s+for\s+this|my\s+song|project\s+[a-z0-9-]{4,})\b/i;
+    LEGAL_ASK = /\b(legal\s+advice|lawyer|attorney|law\s+firm|should\s+i\s+sue|am\s+i\s+protected|is\s+this\b.+\b(?:legally\s+)?(?:valid|binding|enforceable)|does\s+this\s+(?:clause|provision)\s+(?:protect|hold\s+up))\b/i;
   }
 });
 
 // server/copilot-fallback.ts
+function templateDisclaimerLine() {
+  return `
+
+_${LEGAL_DISCLAIMER}_`;
+}
 function getFallbackResponse(userMessage, currentPage) {
   const q = userMessage.toLowerCase();
   const pageKey = resolveCopilotPageKey(currentPage) ?? currentPage;
   const matches = (...terms) => terms.some((t) => q.includes(t));
+  if (matches("legal advice", "lawyer", "binding", "enforceable", "attorney", "law firm", "should i sue")) {
+    return legalAdviceRefusal();
+  }
+  if (matches("who owns", "ownership of this", "my split", "points on this")) {
+    return ledgerDataRedirect();
+  }
+  const named = findCatalogTemplateHint(q);
+  if (named && matches(
+    "template",
+    "agreement",
+    "what is",
+    "what's",
+    "explain",
+    "tell me about",
+    "when do i use",
+    "when should",
+    "use a",
+    "use the"
+  )) {
+    return summarizeProductTemplate(q);
+  }
+  if (named && (q.includes(named.type) || q.includes(named.name.toLowerCase()))) {
+    if (matches("agreement", "template", "license", "sheet", "contract") || named.name.split(" ").length <= 4) {
+      return summarizeProductTemplate(q);
+    }
+  }
   if (matches("first project", "start", "get started", "new operator", "begin")) {
     return [
       "Here's how to start your first project on SplitSheet:",
@@ -3550,16 +5320,15 @@ function getFallbackResponse(userMessage, currentPage) {
       "5. Click **Generate Confirmation Links** and send each link to contributors.",
       "6. When everyone confirms, the project moves to **Confirmed** and you can export a PDF.",
       "",
+      "Need an agreement scaffold beyond the split? Browse **Templates** for producer, master, publishing, licensing, or live docs.",
+      "",
       "Need help on a specific step? Tell me which stage you're on."
     ].join("\n");
   }
   if (matches("split sheet", "what is a split", "why split")) {
-    return [
-      "A **split sheet** is a written record of who owns what percentage of a song's composition and master recording.",
-      "",
-      "Without one, collaborators often disagree later about royalties \u2014 SOCAN, ASCAP, and distributors need documented splits to pay correctly.",
-      "",
-      "In SplitSheet: create a project \u2192 add contributors \u2192 send confirmation links \u2192 export PDF once everyone confirms."
+    return summarizeProductTemplate("split sheet") ?? [
+      "A **split sheet** in SplitSheet is a workflow template to document who owns what percentage of a song's composition (and related collaborator roles).",
+      templateDisclaimerLine()
     ].join("\n");
   }
   if (matches("confirmation", "confirm", "link", "contributor confirm")) {
@@ -3576,9 +5345,11 @@ function getFallbackResponse(userMessage, currentPage) {
   }
   if (matches("100%", "100 percent", "ownership", "percentage", "add up")) {
     return [
-      "The **100% rule**: all composition ownership percentages in a project must total exactly 100%.",
+      "The **100% rule** (product validation): all composition ownership percentages in a project must total exactly 100%.",
       "",
-      "Master recording percentages are tracked **separately** \u2014 a producer might own 30% of the master but 0% of the composition.",
+      "Master recording percentages are tracked **separately** in the product \u2014 e.g. a producer might have 30% on the master fields and 0% on composition fields.",
+      "",
+      "These are SplitSheet documentation fields, not a legal determination of title.",
       "",
       "SplitSheet validates totals before you can send confirmation links."
     ].join("\n");
@@ -3605,60 +5376,82 @@ function getFallbackResponse(userMessage, currentPage) {
   }
   if (matches("rights ledger", "ownership ledger", "iswc", "archive", "deactivate")) {
     return [
-      "The **Rights Ledger** (/ownership) is your long-term song asset registry.",
+      "The **Rights Ledger** (/ownership) is your long-term song asset registry in SplitSheet.",
       "",
       "\u2022 Register songs with ISWC codes and asset type",
-      "\u2022 Track ownership history over time",
+      "\u2022 Track ownership history over time (append-only versions)",
       "\u2022 **Archive** (reversible) or **Deactivate** (permanent)",
-      "\u2022 View revenue breakdown and activity log per asset",
+      "\u2022 Executed ownership/license agreements can sync structured records into the ledger",
+      "",
+      "Ledger rows are **stored product records**, not legal ownership determinations.",
       "",
       "Projects handle split confirmation; the Rights Ledger tracks assets after registration."
     ].join("\n");
   }
-  if (matches("agreement", "contract", "producer agreement", "template")) {
+  if (matches("template library", "all templates", "list templates", "what templates", "agreement template", "music agreement")) {
+    const cats = TEMPLATE_CATEGORIES.filter((c) => !c.reserved).map((c) => `\u2022 **${c.label}**`).join("\n");
     return [
-      "SplitSheet supports four agreement types:",
+      `SplitSheet's **Entertainment Agreement Template Library** has **${CATALOG_TEMPLATES.length}** workflow templates under **Templates** in the sidebar.`,
+      `**${MVP_TEMPLATE_TYPES.length}** are activated for normal create.`,
       "",
-      "1. **Split Sheet** \u2014 composition/master ownership",
-      "2. **Producer Agreement** \u2014 producer fee and royalty terms",
-      "3. **Performance Agreement** \u2014 live show terms",
-      "4. **Management Agreement** \u2014 artist management commission",
+      "Categories:",
+      cats,
       "",
-      "Go to **Music Agreements** \u2192 pick a template \u2192 fill fields \u2192 add collaborators \u2192 send for signature."
+      "Each card shows description, rights tags, required parties, risk level, version, and legal-review status.",
+      "Ask me about a specific template by name (e.g. \u201CWhat is a Producer Agreement?\u201D or \u201CWhen do I use a Sync License?\u201D).",
+      templateDisclaimerLine()
+    ].join("\n");
+  }
+  if (matches("agreement", "contract", "producer agreement", "template", "sync license", "publishing", "master license")) {
+    if (named) return summarizeProductTemplate(q);
+    return [
+      `SplitSheet has an expanded **template library** (${CATALOG_TEMPLATES.length} workflow templates; ${MVP_TEMPLATE_TYPES.length} active for create), including:`,
+      "",
+      "\u2022 **Song Creation** \u2014 Split Sheet, Co-Writing, Producer, Featured Artist, Remixer, \u2026",
+      "\u2022 **Master Rights** \u2014 Master ownership, assignment, exclusive/non-exclusive licenses, studio agreements",
+      "\u2022 **Publishing** \u2014 Publishing, co-pub, admin, mechanical, sync, catalogue admin",
+      "\u2022 **Artist & Label** \u2014 Management, recording artist, distribution, merch, marketing",
+      "\u2022 **Licensing** \u2014 Sync / film / TV / ad / game / podcast / creator licenses",
+      "\u2022 **Live & Touring** \u2014 Performance, venue, promoter, booking, tour, sponsorship",
+      "",
+      "Go to **Templates**, filter by category or rights, then **Create Agreement**.",
+      "I can explain what each template is *for in the workflow* \u2014 not whether it is legally sufficient for your deal.",
+      templateDisclaimerLine()
     ].join("\n");
   }
   if (matches("workflow", "walk me through", "full process", "how does splitsheet")) {
     return [
-      "The SplitSheet operator workflow has 4 stages:",
+      "The SplitSheet operator workflow has these core stages:",
       "",
       "1. **Client Intake** \u2014 add artists, producers, or labels you work with",
       "2. **Split Setup** \u2014 create a project, add contributors, set ownership %",
       "3. **Contributor Confirmation** \u2014 send token links; contributors confirm without an account",
-      "4. **Confirmed Record** \u2014 timestamped agreement, audit trail, PDF export",
+      "4. **Confirmed Record** \u2014 timestamped documentation, audit trail, PDF export",
+      "5. **Templates / Agreements** \u2014 use the library when you need producer, master, publishing, licensing, or live documentation scaffolds",
       "",
       currentPage ? `You're currently on **${pageKey ?? currentPage}** \u2014 ask me what to do next on this page.` : "Which stage are you on? I can give step-by-step guidance."
     ].join("\n");
   }
   if (matches("pdf", "export", "download")) {
-    return "You can export a PDF at any stage of an agreement from the contract detail page. The PDF includes all filled fields, party names, and confirmation records. Filename format: `{title}_agreement.pdf`.";
-  }
-  if (matches("legal advice", "lawyer", "binding", "enforceable")) {
-    return "SplitSheet is a **workflow and documentation platform**, not a law firm. Documents generated here do not constitute legal advice. For binding contracts or complex deals, consult a qualified music entertainment lawyer.";
+    return "You can export a PDF at any stage of an agreement from the contract detail page. The PDF includes filled fields, party names, and confirmation records. Filename format: `{title}_agreement.pdf`.";
   }
   const pageHints = {
     "/": "On the **Dashboard**, check pending confirmations and recent projects. Use quick actions to create a client or project.",
     "/clients": "On **Clients**, click **Add Client** to register an artist, producer, songwriter, or label.",
-    "/projects": "On **Projects**, create a project, add contributors, validate 100% totals, then generate confirmation links.",
-    "/contracts": "On **Music Agreements**, browse templates or open an existing agreement to edit or export.",
-    "/ownership": "On the **Rights Ledger**, register song assets and track ownership history over time.",
+    "/projects": "On **Projects**, create a project, add contributors, validate 100% totals, then generate confirmation links. Check **Recommended Agreements** on a project for template suggestions.",
+    "/contracts": "On **Contracts**, open an existing agreement to edit, confirm, or export. To start from a scaffold, open **Agreements** (Entertainment Agreement Templates Library).",
+    "/templates": "On **Entertainment Agreement Templates**, browse the library. Filter by category, rights, risk, or status, then Preview or Create Agreement. Ask me about any template by name.",
+    "/ownership": "On the **Rights Ledger**, register song assets and track ownership history over time. Ledger data is stored product information, not a legal determination.",
     "/billing": "On **Billing**, view your plan, upgrade, or manage Stripe subscription.",
-    "/analytics": "On **Analytics**, monitor confirmation rates and project activity."
+    "/analytics": "On **Analytics**, monitor confirmation rates and project activity.",
+    "/admin": "On **Admin \u2192 Agreements**, operators with admin role can activate, version, archive, and update legal-review status for templates."
   };
   if (pageKey && pageHints[pageKey]) {
     return [
       pageHints[pageKey],
       "",
-      'Ask me a specific question about this page, or try: "How do I set up ownership splits?" or "What is the confirmation workflow?"'
+      'Ask me a specific question about this page, or try: "Which template should I use for a producer?" or "What is a Sync License template for?"',
+      templateDisclaimerLine()
     ].join("\n");
   }
   return null;
@@ -3703,7 +5496,10 @@ function appendTextAsSSE(res, text2) {
 var init_copilot_fallback = __esm({
   "server/copilot-fallback.ts"() {
     "use strict";
+    init_agreement_catalog();
+    init_agreement_mvp();
     init_copilot_knowledge();
+    init_copilot_product_grounding();
   }
 });
 
@@ -3723,11 +5519,11 @@ function createCopilotClient() {
   });
 }
 async function streamCopilotCompletion(systemContent, messages2) {
-  const openai3 = createCopilotClient();
-  return openai3.chat.completions.create({
+  const openai2 = createCopilotClient();
+  return openai2.chat.completions.create({
     model: getCopilotModel(),
     max_tokens: 1200,
-    temperature: 0.3,
+    temperature: 0.2,
     stream: true,
     messages: [
       { role: "system", content: systemContent },
@@ -3760,6 +5556,11 @@ function getLastUserMessage(messages2) {
   }
   return messages2[messages2.length - 1]?.content ?? "";
 }
+function safePageContext(raw) {
+  if (!raw) return void 0;
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 120);
+  return cleaned || void 0;
+}
 function respondWithFallback(res, userMessage, currentPage, prefix) {
   const pageKey = resolveCopilotPageKey(currentPage);
   const fallback = getFallbackResponse(userMessage, pageKey);
@@ -3767,7 +5568,10 @@ function respondWithFallback(res, userMessage, currentPage, prefix) {
   const text2 = prefix ? `${prefix}
 
 ${fallback}` : fallback;
-  streamTextAsSSE(res, text2);
+  const { text: safe } = sanitizeCopilotResponse(text2, {
+    templateMentioned: Boolean(findCatalogTemplateHint(userMessage))
+  });
+  streamTextAsSSE(res, safe);
   return true;
 }
 function registerCopilotRoutes(app) {
@@ -3789,16 +5593,25 @@ function registerCopilotRoutes(app) {
     }
     const userMessage = getLastUserMessage(body.messages);
     const pageKey = resolveCopilotPageKey(body.currentPage);
+    const pageCtx = safePageContext(body.pageContext);
     const pageNote = pageKey ? `
 
-[User is on: ${pageKey}${body.pageContext ? ` \u2014 "${body.pageContext}"` : ""}]` : "";
-    const systemContent = COPILOT_SYSTEM_PROMPT + pageNote;
+[User is on: ${pageKey}${pageCtx ? ` \u2014 "${pageCtx}"` : ""}]` : "";
+    const deterministic = tryDeterministicProductAnswer(userMessage);
+    if (deterministic) {
+      const { text: safe } = sanitizeCopilotResponse(deterministic, {
+        templateMentioned: classifyCopilotQuery(userMessage) === "template_fact"
+      });
+      streamTextAsSSE(res, safe);
+      return;
+    }
+    const systemContent = COPILOT_SYSTEM_PROMPT + pageNote + buildGroundedSystemAugment(userMessage);
     if (!isCopilotConfigured()) {
       if (respondWithFallback(
         res,
         userMessage,
         pageKey,
-        "CoPilot AI is not configured (missing OPENAI_API_KEY). Here's guidance from SplitSheet's built-in knowledge:"
+        "CoPilot AI is not configured (missing OPENAI_API_KEY). Here's guidance from SplitSheet's built-in product knowledge:"
       )) {
         return;
       }
@@ -3814,25 +5627,21 @@ function registerCopilotRoutes(app) {
           content: m.content
         }))
       );
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.flushHeaders();
+      let assembled = "";
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta?.content;
-        if (delta) {
-          res.write(
-            `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}
-
-`
-          );
-        }
-        if (chunk.choices[0]?.finish_reason) {
-          res.write("data: [DONE]\n\n");
-        }
+        if (delta) assembled += delta;
       }
-      res.end();
+      const { text: safe, flagged } = sanitizeCopilotResponse(assembled, {
+        templateMentioned: Boolean(findCatalogTemplateHint(userMessage) || findCatalogTemplateHint(assembled))
+      });
+      if (flagged) {
+        console.warn("[COPILOT] Response sanitized for product/legal risk", {
+          userId,
+          queryKind: classifyCopilotQuery(userMessage)
+        });
+      }
+      streamTextAsSSE(res, safe);
     } catch (err) {
       console.error("[COPILOT ERROR]", err);
       const errorIntro = getOpenAIErrorMessage(err);
@@ -3840,9 +5649,12 @@ function registerCopilotRoutes(app) {
       const combined = fallback ? `${errorIntro}
 
 ${fallback}` : errorIntro;
+      const { text: safe } = sanitizeCopilotResponse(combined, {
+        templateMentioned: Boolean(findCatalogTemplateHint(userMessage))
+      });
       if (!res.headersSent) {
         if (fallback) {
-          streamTextAsSSE(res, combined);
+          streamTextAsSSE(res, safe);
           return;
         }
         res.status(500).json({
@@ -3853,7 +5665,7 @@ ${fallback}` : errorIntro;
       }
       appendTextAsSSE(res, `
 
-${combined}`);
+${safe}`);
     }
   });
   app.get("/api/copilot/health", isAuthenticated, (_req, res) => {
@@ -3861,7 +5673,8 @@ ${combined}`);
       configured: isCopilotConfigured(),
       model: getCopilotModel(),
       status: isCopilotConfigured() ? "ready" : "missing_api_key",
-      fallback: "available"
+      fallback: "available",
+      grounding: "product_catalog"
     });
   });
 }
@@ -3872,6 +5685,7 @@ var init_copilot_routes = __esm({
     init_replitAuth();
     init_copilot_fallback();
     init_copilot_knowledge();
+    init_copilot_product_grounding();
     init_claude_service();
     copilotSchema = z3.object({
       messages: z3.array(
@@ -3887,9 +5701,1162 @@ var init_copilot_routes = __esm({
   }
 });
 
+// shared/voice-orchestration.ts
+function confidenceBand(score, conflict = false) {
+  if (conflict) return "conflict";
+  if (score >= CONFIDENCE_THRESHOLDS.high) return "high";
+  if (score >= CONFIDENCE_THRESHOLDS.medium) return "medium";
+  return "low";
+}
+function requiresConfirmation(intent, band) {
+  if (band === "conflict" || band === "low") return true;
+  if (CONSEQUENTIAL_INTENTS.includes(intent)) return true;
+  if (band === "medium" && !LOW_RISK_INTENTS.includes(intent)) return true;
+  return false;
+}
+var CONSEQUENTIAL_INTENTS, LOW_RISK_INTENTS, CONFIDENCE_THRESHOLDS, LEGAL_VOICE_REFUSAL, PLATFORM_VOICE_DISCLAIMER, VOICE_RETENTION;
+var init_voice_orchestration = __esm({
+  "shared/voice-orchestration.ts"() {
+    "use strict";
+    CONSEQUENTIAL_INTENTS = [
+      "create_agreement_draft",
+      "update_agreement_fields",
+      "create_rights_record",
+      "extract_rights",
+      "flag_for_review"
+    ];
+    LOW_RISK_INTENTS = [
+      "search",
+      "summarize",
+      "retrieve_rights",
+      "retrieve_agreement",
+      "identify_missing_fields",
+      "identify_conflicts",
+      "prepare_for_counsel",
+      "clarify"
+    ];
+    CONFIDENCE_THRESHOLDS = {
+      high: 0.85,
+      medium: 0.6,
+      low: 0.35
+    };
+    LEGAL_VOICE_REFUSAL = "I can identify the relevant provision and prepare the information for review, but I can't determine whether this provision is legally appropriate for your transaction.";
+    PLATFORM_VOICE_DISCLAIMER = "SoundLedger Copilot helps with workflow and structured documentation. It is not a lawyer and does not provide legal advice.";
+    VOICE_RETENTION = {
+      /** Default hours to retain raw audio references (if any); transcripts may be shorter-lived */
+      audioHours: 24,
+      transcriptHours: 168,
+      // 7 days
+      pendingActionMinutes: 30,
+      sessionHours: 4
+    };
+  }
+});
+
+// server/voice/intent-engine.ts
+function classifyIntent(transcript) {
+  const q = transcript.toLowerCase().trim();
+  if (!q) return { intent: "unknown", confidence: 0, rationale: "empty" };
+  if (/\b(confirm|yes|do it|go ahead|approve)\b/.test(q) && q.length < 80) {
+    return { intent: "confirm_action", confidence: 0.9, rationale: "affirmation" };
+  }
+  if (/\b(cancel|reject|no|don't|do not)\b/.test(q) && q.length < 80) {
+    return { intent: "reject_action", confidence: 0.9, rationale: "negation" };
+  }
+  if (/\b(legal advice|should i sue|lawyer|attorney)\b/.test(q) || /\bis this\b.+\b(legally\s+)?(valid|binding|enforceable)\b/.test(q) || /\b(does this (clause|provision) (protect|hold up))\b/.test(q)) {
+    return { intent: "legal_question", confidence: 0.95, rationale: "legal_advice_boundary" };
+  }
+  if (/\b(who owns|ownership of|rights (to|for)|master for|composition for)\b/.test(q)) {
+    return { intent: "retrieve_rights", confidence: 0.88, rationale: "rights_query" };
+  }
+  if (/\b(show|find|get|retrieve|open)\b.*\b(agreement|contract|split)\b/.test(q)) {
+    return { intent: "retrieve_agreement", confidence: 0.82, rationale: "agreement_retrieve" };
+  }
+  if (/\b(summarize|summary|what does)\b.*\b(agreement|contract|deal)\b/.test(q)) {
+    return { intent: "summarize", confidence: 0.8, rationale: "summarize" };
+  }
+  if (/\b(missing|incomplete|what's left|what is left)\b/.test(q)) {
+    return { intent: "identify_missing_fields", confidence: 0.78, rationale: "missing_fields" };
+  }
+  if (/\b(conflict|mismatch|inconsist|disagree)\b/.test(q)) {
+    return { intent: "identify_conflicts", confidence: 0.8, rationale: "conflicts" };
+  }
+  if (/\b(flag|send|prepare).*(counsel|lawyer|review)\b/.test(q) || /\b(legal review)\b/.test(q)) {
+    return { intent: "flag_for_review", confidence: 0.85, rationale: "review_flag" };
+  }
+  if (/\b(prepare|package).*(counsel|lawyer)\b/.test(q)) {
+    return { intent: "prepare_for_counsel", confidence: 0.84, rationale: "counsel_prep" };
+  }
+  if (/\b(create|start|draft|new)\b.*\b(producer|split|feature|sync|master|agreement|contract|license)\b/.test(q) || /\b(producer agreement|split sheet|sync license)\b/.test(q)) {
+    return { intent: "create_agreement_draft", confidence: 0.86, rationale: "draft_create" };
+  }
+  if (/\b(update|change|set|modify)\b.*\b(royalty|points|ownership|split|fee|term|territory)\b/.test(q)) {
+    return { intent: "update_agreement_fields", confidence: 0.84, rationale: "field_update" };
+  }
+  if (/\b(register|create).*(rights|ownership|ledger)\b/.test(q)) {
+    return { intent: "create_rights_record", confidence: 0.8, rationale: "rights_create" };
+  }
+  if (/\b(search|look up|find)\b/.test(q)) {
+    return { intent: "search", confidence: 0.7, rationale: "search" };
+  }
+  if (/\b(mean|clarify|what did you|which)\b/.test(q)) {
+    return { intent: "clarify", confidence: 0.65, rationale: "clarify" };
+  }
+  return { intent: "unknown", confidence: 0.4, rationale: "fallback" };
+}
+var init_intent_engine = __esm({
+  "server/voice/intent-engine.ts"() {
+    "use strict";
+  }
+});
+
+// server/voice/entity-extraction.ts
+function extractEntities(transcript) {
+  const entities = [];
+  const q = transcript;
+  for (const spec of MVP_TEMPLATE_SPECS) {
+    const name = spec.name.toLowerCase();
+    if (q.toLowerCase().includes(name) || q.toLowerCase().includes(spec.type.replace(/-/g, " "))) {
+      entities.push({
+        type: "agreement_type",
+        value: spec.type,
+        raw: spec.name,
+        confidence: 0.9
+      });
+    }
+  }
+  if (/\bsplit sheet\b/i.test(q) && !entities.some((e) => e.value === "split-sheet")) {
+    entities.push({ type: "agreement_type", value: "split-sheet", raw: "split sheet", confidence: 0.92 });
+  }
+  if (/\bproducer agreement\b/i.test(q) && !entities.some((e) => e.value === "producer")) {
+    entities.push({ type: "agreement_type", value: "producer", raw: "producer agreement", confidence: 0.92 });
+  }
+  const slash = q.match(/\b(\d{1,3})\s*\/\s*(\d{1,3})\b/);
+  if (slash) {
+    entities.push({
+      type: "ownership",
+      value: `${slash[1]}/${slash[2]}`,
+      raw: slash[0],
+      confidence: 0.88,
+      notes: "composition_split_pair"
+    });
+  }
+  const ownershipPct = [...q.matchAll(/\b(\d{1,3}(?:\.\d+)?)\s*%\s*(?:of\s+)?(composition|song|publishing|ownership)?/gi)];
+  for (const m of ownershipPct) {
+    const right = (m[2] || "ownership").toLowerCase();
+    entities.push({
+      type: right.includes("composition") || right.includes("song") || right.includes("publishing") || right === "ownership" ? "ownership" : "percentage",
+      value: Number(m[1]),
+      raw: m[0],
+      confidence: m[2] ? 0.9 : 0.7,
+      notes: m[2] ? `right:${m[2]}` : "bare_percent"
+    });
+  }
+  const points = [...q.matchAll(/\b(\d{1,3}(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen)\s+points?\b(?:\s+on\s+the\s+(master|composition))?/gi)];
+  const wordNum = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    fifteen: 15
+  };
+  for (const m of points) {
+    const n = wordNum[m[1].toLowerCase()] ?? Number(m[1]);
+    entities.push({
+      type: "points",
+      value: n,
+      raw: m[0],
+      confidence: m[2] ? 0.93 : 0.85,
+      notes: m[2] ? `on:${m[2].toLowerCase()}` : "points_unscoped"
+    });
+  }
+  const money = [...q.matchAll(/\$\s?(\d+(?:\.\d+)?)|\b(\d+(?:\.\d+)?)\s*(cad|usd|dollars?)\b/gi)];
+  for (const m of money) {
+    entities.push({
+      type: "currency",
+      value: Number(m[1] || m[2]),
+      raw: m[0],
+      confidence: 0.9
+    });
+  }
+  const wordNumAmbiguous = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+    twenty: 20,
+    twentyfive: 25,
+    thirty: 30,
+    forty: 40,
+    fifty: 50
+  };
+  const ambiguous = [
+    ...q.matchAll(
+      /\b(gets?|give|giving|at|for)\s+(\d{1,3}(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)\b(?!\s*(%|percent|points?|dollars?|cad|usd))/gi
+    )
+  ];
+  for (const m of ambiguous) {
+    const rawNum = m[2];
+    const numeric = wordNumAmbiguous[rawNum.toLowerCase().replace(/[\s-]/g, "")] ?? Number(rawNum);
+    if (Number.isNaN(numeric)) continue;
+    const already = entities.some(
+      (e) => (e.type === "points" || e.type === "ownership" || e.type === "currency" || e.type === "percentage") && (String(e.raw).toLowerCase().includes(rawNum.toLowerCase()) || e.value === numeric)
+    );
+    if (already) continue;
+    entities.push({
+      type: "ambiguous_number",
+      value: numeric,
+      raw: m[0],
+      confidence: 0.4,
+      notes: "Could mean ownership %, royalty points, revenue share, or currency \u2014 clarification required"
+    });
+  }
+  for (const role of ROLE_WORDS) {
+    if (new RegExp(`\\b${role}\\b`, "i").test(q)) {
+      entities.push({ type: "role", value: role, raw: role, confidence: 0.8 });
+    }
+  }
+  for (const rt of RIGHT_TYPES) {
+    if (new RegExp(`\\b${rt}\\b`, "i").test(q)) {
+      entities.push({
+        type: "right_type",
+        value: rt === "sync" ? "synchronization" : rt,
+        raw: rt,
+        confidence: 0.85
+      });
+    }
+  }
+  if (/\b(exclusive|non-exclusive|nonexclusive)\b/i.test(q)) {
+    const exclusivity = /\bnon[- ]?exclusive\b/i.test(q) ? "Non-Exclusive" : "Exclusive";
+    entities.push({ type: "exclusivity", value: exclusivity, raw: exclusivity, confidence: 0.85 });
+  }
+  const titled = q.match(/\b(?:track|song|project)\s+(?:called|named)?\s*[\"']?([A-Za-z0-9][\w\s-]{1,40})[\"']?/i);
+  if (titled?.[1] && !/^(the|a|an|new|this)$/i.test(titled[1].trim())) {
+    entities.push({
+      type: "song",
+      value: titled[1].trim(),
+      raw: titled[0],
+      confidence: 0.65
+    });
+  }
+  return dedupeEntities(entities);
+}
+function dedupeEntities(entities) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const e of entities) {
+    const key = `${e.type}:${e.value}:${e.raw}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+var ROLE_WORDS, RIGHT_TYPES;
+var init_entity_extraction = __esm({
+  "server/voice/entity-extraction.ts"() {
+    "use strict";
+    init_agreement_mvp();
+    ROLE_WORDS = [
+      "producer",
+      "songwriter",
+      "co-writer",
+      "artist",
+      "featured",
+      "vocalist",
+      "publisher",
+      "label",
+      "licensee",
+      "licensor",
+      "manager"
+    ];
+    RIGHT_TYPES = [
+      "master",
+      "composition",
+      "publishing",
+      "mechanical",
+      "performance",
+      "synchronization",
+      "sync",
+      "neighboring",
+      "ownership"
+    ];
+  }
+});
+
+// server/voice/validation-engine.ts
+function validateVoiceExtraction(input) {
+  const issues = [];
+  let conflict = false;
+  const ambiguous = input.entities.filter((e) => e.type === "ambiguous_number");
+  for (const a of ambiguous) {
+    issues.push({
+      code: "ambiguous_number",
+      severity: "blocking",
+      message: `I heard \u201C${a.raw}\u201D but I\u2019m not sure whether that means ownership %, royalty points, revenue share, or an amount of money. Please clarify.`,
+      field: "economic_term"
+    });
+    conflict = true;
+  }
+  const ownership = input.entities.filter((e) => e.type === "ownership" || e.type === "percentage" && e.notes?.includes("composition"));
+  const points = input.entities.filter((e) => e.type === "points");
+  const rights = input.entities.filter((e) => e.type === "right_type").map((e) => String(e.value));
+  if (points.length && ownership.length) {
+    const masterScoped = points.some((p) => p.notes?.includes("master"));
+    const compositionScoped = ownership.some((o) => String(o.notes || "").includes("composition") || String(o.value).includes("/"));
+    if (!masterScoped && rights.includes("master") && rights.includes("composition")) {
+      issues.push({
+        code: "master_composition_distinction",
+        severity: "warning",
+        message: "I detected both master and composition terms. I\u2019ll keep master royalty points separate from composition ownership unless you say otherwise."
+      });
+    }
+    if (compositionScoped && masterScoped) {
+      issues.push({
+        code: "dual_economics",
+        severity: "info",
+        message: "Recorded composition ownership and master royalty points as separate fields."
+      });
+    }
+  }
+  if (points.length && !points.some((p) => p.notes?.includes("master") || p.notes?.includes("composition"))) {
+    issues.push({
+      code: "points_unscoped",
+      severity: "warning",
+      message: "You mentioned points without saying whether they apply to the master or composition. Please confirm.",
+      field: "points"
+    });
+  }
+  if (input.intent === "create_agreement_draft") {
+    const agreementType = input.entities.find((e) => e.type === "agreement_type");
+    if (!agreementType) {
+      issues.push({
+        code: "missing_agreement_type",
+        severity: "blocking",
+        message: "Which agreement template should I draft? For example: Producer Agreement or Split Sheet.",
+        field: "agreement_type"
+      });
+    }
+  }
+  if (CONSEQUENTIAL_INTENTS.includes(input.intent) && input.transcriptConfidence < 0.7) {
+    issues.push({
+      code: "low_transcript_confidence",
+      severity: "warning",
+      message: "Speech recognition confidence is moderate. Please confirm the transcript before any changes."
+    });
+  }
+  const entityConf = input.entities.length === 0 ? input.intentConfidence : input.entities.reduce((s, e) => s + e.confidence, 0) / input.entities.length;
+  const overall = input.intentConfidence * 0.45 + input.transcriptConfidence * 0.25 + entityConf * 0.3;
+  const blocking = issues.some((i) => i.severity === "blocking");
+  const band = confidenceBand(overall, conflict || blocking);
+  return {
+    ok: !blocking && band !== "conflict" && band !== "low",
+    issues,
+    band,
+    overallConfidence: Number(overall.toFixed(4)),
+    conflict: conflict || blocking
+  };
+}
+var init_validation_engine = __esm({
+  "server/voice/validation-engine.ts"() {
+    "use strict";
+    init_voice_orchestration();
+  }
+});
+
+// server/voice/action-orchestrator.ts
+function buildProposedAction(input) {
+  const agreementType = input.entities.find((e) => e.type === "agreement_type")?.value || void 0;
+  const ownership = input.entities.filter((e) => e.type === "ownership");
+  const points = input.entities.filter((e) => e.type === "points");
+  const song = input.entities.find((e) => e.type === "song");
+  if (input.intent === "create_agreement_draft") {
+    const data = {
+      sourceTranscript: input.transcript,
+      compositionOwnership: ownership.map((o) => o.value),
+      masterPoints: points.map((p) => ({
+        value: p.value,
+        scope: p.notes?.replace("on:", "") || "unspecified"
+      })),
+      roles: input.entities.filter((e) => e.type === "role").map((e) => e.value),
+      rightTypes: input.entities.filter((e) => e.type === "right_type").map((e) => e.value)
+    };
+    if (song) data.songTitle = song.value;
+    const typeLabel = agreementType || "agreement";
+    return {
+      actionType: "create_agreement_draft",
+      summary: `Prepare a draft ${typeLabel} from your voice request (not executed until you confirm).`,
+      payload: {
+        agreementType: agreementType || "producer",
+        title: song ? `${song.value} \u2014 ${typeLabel}` : void 0,
+        projectId: input.projectId,
+        contractId: input.contractId,
+        data
+      },
+      requiresConfirmation: true,
+      riskLevel: "high",
+      confidence: input.confidence
+    };
+  }
+  if (input.intent === "update_agreement_fields") {
+    return {
+      actionType: "update_agreement_fields",
+      summary: "Update agreement fields from voice (requires confirmation; will not silently modify rights).",
+      payload: {
+        contractId: input.contractId,
+        projectId: input.projectId,
+        fields: {
+          ownership,
+          points,
+          exclusivity: input.entities.find((e) => e.type === "exclusivity")?.value
+        }
+      },
+      requiresConfirmation: true,
+      riskLevel: "high",
+      confidence: input.confidence
+    };
+  }
+  if (input.intent === "create_rights_record") {
+    return {
+      actionType: "create_rights_record",
+      summary: "Create a Rights Ledger record from confirmed structured data (append-only).",
+      payload: { projectId: input.projectId, contractId: input.contractId, ownership, points },
+      requiresConfirmation: true,
+      riskLevel: "critical",
+      confidence: input.confidence
+    };
+  }
+  if (input.intent === "flag_for_review") {
+    return {
+      actionType: "flag_for_review",
+      summary: "Flag this matter for qualified counsel review.",
+      payload: {
+        targetId: input.contractId || input.projectId,
+        note: input.transcript
+      },
+      requiresConfirmation: true,
+      riskLevel: "medium",
+      confidence: input.confidence
+    };
+  }
+  if (input.intent === "prepare_for_counsel") {
+    return {
+      actionType: "prepare_for_counsel",
+      summary: "Assemble a counsel preparation package from stored records only.",
+      payload: {
+        package: {
+          contractId: input.contractId,
+          projectId: input.projectId,
+          transcript: input.transcript
+        }
+      },
+      requiresConfirmation: true,
+      riskLevel: "medium",
+      confidence: input.confidence
+    };
+  }
+  return void 0;
+}
+var init_action_orchestrator = __esm({
+  "server/voice/action-orchestrator.ts"() {
+    "use strict";
+  }
+});
+
+// server/voice/response.ts
+function composeVoiceResponse(input) {
+  if (input.legalBoundaryTriggered || input.intent === "legal_question") {
+    return `${LEGAL_VOICE_REFUSAL} ${PLATFORM_VOICE_DISCLAIMER}`;
+  }
+  const blocking = input.issues.filter((i) => i.severity === "blocking");
+  if (blocking.length) {
+    return blocking.map((b) => b.message).join(" ");
+  }
+  if (input.band === "conflict" || input.band === "low") {
+    const hints = input.issues.map((i) => i.message).filter(Boolean);
+    return hints[0] || "I\u2019m not confident enough to act on that yet. Please clarify the parties, percentages, and whether you mean ownership or royalty points.";
+  }
+  if (input.intent === "retrieve_rights") {
+    const ctx = input.rightsContext;
+    if (!ctx || ctx.available === false) {
+      return String(
+        ctx?.reason || "I couldn\u2019t establish ownership from your stored records with enough confidence, so I won\u2019t guess."
+      );
+    }
+    const ownership = ctx.ownership || [];
+    if (!ownership.length) {
+      return "I found the asset, but there is no current ownership record stored yet. That doesn\u2019t mean there is no owner \u2014 only that SplitSheet has no ledger entry.";
+    }
+    const lines = ownership.slice(0, 6).map((o) => `${o.name || o.userId}: ${o.ownershipPercentage}% (${o.role || o.ownershipType || "role n/a"})`).join("; ");
+    return `According to your stored Rights Ledger record, current entries are: ${lines}. This is stored data, not a legal ownership determination.`;
+  }
+  if (input.intent === "retrieve_agreement" || input.intent === "summarize") {
+    const c = input.rightsContext?.contract;
+    if (!c) {
+      return "I couldn\u2019t find an authorized agreement in context. Open a project or agreement first, or name it clearly.";
+    }
+    return `I found \u201C${c.title}\u201D (${c.type}, status ${c.status}). I can summarize stored fields or prepare a draft update \u2014 I won\u2019t treat the record as a legal conclusion.`;
+  }
+  if (input.proposedAction?.requiresConfirmation) {
+    const warnings = input.issues.filter((i) => i.severity === "warning" || i.severity === "info").map((i) => i.message);
+    const prefix = warnings.length ? `${warnings[0]} ` : "";
+    return `${prefix}${input.proposedAction.summary} Say confirm to proceed with a draft-only action, or cancel to discard. ${PLATFORM_VOICE_DISCLAIMER}`;
+  }
+  if (input.intent === "identify_missing_fields") {
+    return "I can check required template fields once an agreement type and draft are in context. Tell me which template you\u2019re working on.";
+  }
+  if (input.intent === "search") {
+    return "Tell me what you want to find \u2014 a song, agreement type, collaborator, or rights record \u2014 and I\u2019ll search your authorized SplitSheet data.";
+  }
+  if (input.intent === "unknown") {
+    return "I can help draft agreements, retrieve stored rights records, flag items for counsel, or clarify missing fields. What would you like to do?";
+  }
+  return `Understood. ${PLATFORM_VOICE_DISCLAIMER}`;
+}
+var init_response = __esm({
+  "server/voice/response.ts"() {
+    "use strict";
+    init_voice_orchestration();
+  }
+});
+
+// server/voice/rights-context.ts
+async function retrieveRightsContext(input) {
+  try {
+    if (input.contractId || input.projectId) {
+      const id = input.contractId || input.projectId;
+      const contract = await storage.getContract(id);
+      if (!contract || contract.createdBy !== input.userId) {
+        return { available: false, reason: "Agreement not found or not authorized" };
+      }
+      const collaborators = await storage.getContractCollaborators(id);
+      const assets = await storage.getSongAssetsByContract(id);
+      let ownership = [];
+      if (assets[0]) {
+        ownership = await storage.getCurrentOwnershipWithNames(assets[0].id);
+      }
+      return {
+        available: true,
+        source: "canonical",
+        contract: {
+          id: contract.id,
+          title: contract.title,
+          type: contract.type,
+          status: contract.status,
+          templateVersion: contract.templateVersion
+        },
+        collaborators: collaborators.map((c) => ({
+          name: c.name,
+          role: c.role,
+          ownershipPercentage: c.ownershipPercentage,
+          status: c.status
+        })),
+        assets: assets.map((a) => ({ id: a.id, title: a.title, slSongId: a.slSongId })),
+        ownership,
+        disclaimer: "This reflects stored SplitSheet records, not a legal determination of ownership."
+      };
+    }
+    if (input.songQuery) {
+      const assets = await storage.getSongAssets(input.userId);
+      const match = assets.find(
+        (a) => a.title?.toLowerCase().includes(input.songQuery.toLowerCase())
+      );
+      if (!match) {
+        return {
+          available: false,
+          reason: "No matching song asset found in your Rights Ledger for that title."
+        };
+      }
+      const ownership = await storage.getCurrentOwnershipWithNames(match.id);
+      return {
+        available: true,
+        source: "canonical",
+        asset: { id: match.id, title: match.title, slSongId: match.slSongId },
+        ownership,
+        disclaimer: "This reflects stored SplitSheet records, not a legal determination of ownership."
+      };
+    }
+    return null;
+  } catch (err) {
+    console.error("[voice/rights-context]", err);
+    return { available: false, reason: "Unable to retrieve rights context right now." };
+  }
+}
+var init_rights_context = __esm({
+  "server/voice/rights-context.ts"() {
+    "use strict";
+    init_storage();
+  }
+});
+
+// server/voice/store.ts
+import { and as and2, desc as desc2, eq as eq2 } from "drizzle-orm";
+async function createVoiceSession(input) {
+  const expiresAt = new Date(Date.now() + VOICE_RETENTION.sessionHours * 36e5);
+  const [session2] = await db.insert(voiceSessions).values({
+    userId: input.userId,
+    pageContext: input.pageContext,
+    projectId: input.projectId,
+    contractId: input.contractId,
+    organizationId: input.organizationId,
+    locale: input.locale || "en-CA",
+    status: "active",
+    expiresAt,
+    metadata: {}
+  }).returning();
+  return session2;
+}
+async function getVoiceSession(sessionId, userId) {
+  const [session2] = await db.select().from(voiceSessions).where(and2(eq2(voiceSessions.id, sessionId), eq2(voiceSessions.userId, userId)));
+  return session2;
+}
+async function recordVoiceTurn(input) {
+  const audioUntil = new Date(Date.now() + VOICE_RETENTION.audioHours * 36e5);
+  const [turn] = await db.insert(voiceTurns).values({
+    sessionId: input.sessionId,
+    userId: input.userId,
+    role: input.role,
+    transcript: input.transcript,
+    transcriptConfidence: input.transcriptConfidence != null ? String(input.transcriptConfidence) : null,
+    intent: input.intent,
+    intentConfidence: input.intentConfidence != null ? String(input.intentConfidence) : null,
+    entities: input.entities,
+    validation: input.validation,
+    responseText: input.responseText,
+    riskLevel: input.riskLevel,
+    requiresConfirmation: input.requiresConfirmation ?? false,
+    audioRetentionUntil: audioUntil
+  }).returning();
+  return turn;
+}
+async function writeProvenance(input) {
+  const [row] = await db.insert(voiceProvenance).values({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    userId: input.userId,
+    source: input.source,
+    fieldPath: input.fieldPath,
+    extractedValue: input.extractedValue,
+    confidence: input.confidence != null ? String(input.confidence) : null,
+    confirmationStatus: input.confirmationStatus ?? "none",
+    resultRef: input.resultRef
+  }).returning();
+  return row;
+}
+async function createPendingAction(input) {
+  const expiresAt = new Date(Date.now() + VOICE_RETENTION.pendingActionMinutes * 6e4);
+  const [row] = await db.insert(voicePendingActions).values({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    userId: input.userId,
+    actionType: input.action.actionType,
+    payload: {
+      summary: input.action.summary,
+      riskLevel: input.action.riskLevel,
+      ...input.action.payload
+    },
+    status: "pending",
+    confidence: String(input.action.confidence),
+    expiresAt
+  }).returning();
+  return row;
+}
+async function getPendingAction(id, userId) {
+  const [row] = await db.select().from(voicePendingActions).where(and2(eq2(voicePendingActions.id, id), eq2(voicePendingActions.userId, userId)));
+  return row;
+}
+async function resolvePendingAction(id, userId, decision) {
+  const pending = await getPendingAction(id, userId);
+  if (!pending) return { ok: false, error: "Pending action not found" };
+  if (pending.status !== "pending") {
+    return { ok: false, error: `Action already ${pending.status}` };
+  }
+  if (pending.expiresAt && pending.expiresAt.getTime() < Date.now()) {
+    await db.update(voicePendingActions).set({ status: "expired" }).where(eq2(voicePendingActions.id, id));
+    return { ok: false, error: "Pending action expired \u2014 please repeat the request" };
+  }
+  if (decision === "rejected") {
+    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq2(voicePendingActions.id, id)).returning();
+    return { ok: true, pending: row, executed: null };
+  }
+  const payload = pending.payload || {};
+  let result = {};
+  try {
+    if (pending.actionType === "create_agreement_draft") {
+      const type = String(payload.agreementType || "split-sheet");
+      const title = String(payload.title || `Voice draft \u2014 ${type}`);
+      const data = payload.data || {};
+      const contract = await storage.createContract({
+        title,
+        type,
+        status: "draft",
+        createdBy: userId,
+        data: {
+          ...data,
+          voiceOrigin: true,
+          provenanceNote: "Created via Copilot Voice after explicit confirmation"
+        },
+        metadata: {
+          createdFrom: "voice_copilot",
+          pendingActionId: id,
+          requiresLegalReview: true
+        },
+        templateVersion: payload.templateVersion ?? null
+      });
+      result = { contractId: contract.id, status: contract.status, type: contract.type };
+    } else if (pending.actionType === "flag_for_review") {
+      result = {
+        flagged: true,
+        targetId: payload.targetId || null,
+        note: payload.note || "Flagged via Copilot Voice for qualified counsel review"
+      };
+    } else if (pending.actionType === "prepare_for_counsel") {
+      result = {
+        package: payload.package || {},
+        message: "Counsel preparation package assembled from stored records only."
+      };
+    } else {
+      result = {
+        deferred: true,
+        message: "This action type requires the standard SplitSheet workflow UI/API and was not auto-executed."
+      };
+    }
+    const [row] = await db.update(voicePendingActions).set({
+      status: "executed",
+      confirmedAt: /* @__PURE__ */ new Date(),
+      executedAt: /* @__PURE__ */ new Date(),
+      result
+    }).where(eq2(voicePendingActions.id, id)).returning();
+    return { ok: true, pending: row, executed: result };
+  } catch (err) {
+    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq2(voicePendingActions.id, id));
+    return { ok: false, error: "Failed to execute confirmed action" };
+  }
+}
+async function listAuthorizedMemory(userId) {
+  return db.select().from(voiceUserMemory).where(and2(eq2(voiceUserMemory.userId, userId), eq2(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
+}
+async function upsertAuthorizedMemory(input) {
+  const blocked = /password|ssn|sin|bank|card|secret|signature/i;
+  if (blocked.test(input.key) || blocked.test(JSON.stringify(input.value))) {
+    throw new Error("That information cannot be stored in Copilot memory");
+  }
+  const existing = await db.select().from(voiceUserMemory).where(and2(eq2(voiceUserMemory.userId, input.userId), eq2(voiceUserMemory.key, input.key)));
+  if (existing[0]) {
+    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq2(voiceUserMemory.id, existing[0].id)).returning();
+    return row2;
+  }
+  const [row] = await db.insert(voiceUserMemory).values({
+    userId: input.userId,
+    key: input.key,
+    value: input.value,
+    category: input.category || "preference",
+    authorized: true
+  }).returning();
+  return row;
+}
+var init_store = __esm({
+  "server/voice/store.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_voice_orchestration();
+    init_storage();
+  }
+});
+
+// server/voice/speech.ts
+import OpenAI2, { toFile } from "openai";
+function getOpenAI() {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  return new OpenAI2({ apiKey: key });
+}
+async function transcribeVoiceInput(input) {
+  if (input.transcript?.trim()) {
+    return {
+      transcript: input.transcript.trim(),
+      confidence: 0.95,
+      // client-provided; still subject to confirmation on consequential actions
+      provider: "passthrough",
+      language: input.locale || "en-CA"
+    };
+  }
+  if (!input.audioBase64) {
+    return { transcript: "", confidence: 0, provider: "unavailable" };
+  }
+  const openai2 = getOpenAI();
+  if (!openai2) {
+    return {
+      transcript: "",
+      confidence: 0,
+      provider: "unavailable"
+    };
+  }
+  try {
+    const buf = Buffer.from(input.audioBase64, "base64");
+    const file = await toFile(buf, "utterance.webm", {
+      type: input.mimeType || "audio/webm"
+    });
+    const result = await openai2.audio.transcriptions.create({
+      file,
+      model: "whisper-1",
+      language: (input.locale || "en").slice(0, 2)
+    });
+    return {
+      transcript: (result.text || "").trim(),
+      confidence: 0.8,
+      provider: "openai-whisper",
+      language: input.locale || "en-CA"
+    };
+  } catch (err) {
+    console.error("[voice/stt] Whisper failed:", err);
+    return { transcript: "", confidence: 0, provider: "unavailable" };
+  }
+}
+var init_speech = __esm({
+  "server/voice/speech.ts"() {
+    "use strict";
+  }
+});
+
+// server/voice/pipeline.ts
+async function startVoiceSession(input) {
+  const session2 = await createVoiceSession(input);
+  const memory = await listAuthorizedMemory(input.userId);
+  return {
+    sessionId: session2.id,
+    expiresAt: session2.expiresAt,
+    memoryKeys: memory.map((m) => m.key),
+    principles: {
+      voiceIsNotLawyer: true,
+      voiceIsNotDatabaseOfRecord: true,
+      confirmationRequiredForConsequentialActions: true,
+      canonicalRightsPrevail: true,
+      disclaimer: PLATFORM_VOICE_DISCLAIMER
+    }
+  };
+}
+async function processVoiceTurn(input) {
+  const session2 = await getVoiceSession(input.sessionId, input.userId);
+  if (!session2 || session2.status !== "active") {
+    throw Object.assign(new Error("Voice session not found or inactive"), { status: 404 });
+  }
+  if (session2.expiresAt && session2.expiresAt.getTime() < Date.now()) {
+    throw Object.assign(new Error("Voice session expired"), { status: 410 });
+  }
+  const stt = await transcribeVoiceInput({
+    transcript: input.transcript,
+    audioBase64: input.audioBase64,
+    mimeType: input.mimeType,
+    locale: session2.locale || "en-CA"
+  });
+  if (!stt.transcript) {
+    throw Object.assign(new Error("No transcript available. Provide transcript or configure speech recognition."), {
+      status: 400
+    });
+  }
+  const intentResult = classifyIntent(stt.transcript);
+  const entities = extractEntities(stt.transcript);
+  const validation = validateVoiceExtraction({
+    intent: intentResult.intent,
+    intentConfidence: intentResult.confidence,
+    transcriptConfidence: stt.confidence,
+    entities
+  });
+  const songQuery = entities.find((e) => e.type === "song")?.value;
+  const rightsContext = await retrieveRightsContext({
+    userId: input.userId,
+    projectId: session2.projectId,
+    contractId: session2.contractId,
+    songQuery
+  });
+  const legalBoundaryTriggered = intentResult.intent === "legal_question";
+  let proposedAction = buildProposedAction({
+    intent: intentResult.intent,
+    entities,
+    transcript: stt.transcript,
+    projectId: session2.projectId,
+    contractId: session2.contractId,
+    confidence: validation.overallConfidence
+  });
+  const needsConfirm = !legalBoundaryTriggered && (requiresConfirmation(intentResult.intent, validation.band) || proposedAction?.requiresConfirmation || validation.conflict);
+  if (proposedAction && !needsConfirm && validation.band === "high") {
+    if (proposedAction.requiresConfirmation) {
+    }
+  }
+  if (proposedAction) {
+    proposedAction = { ...proposedAction, requiresConfirmation: true };
+  }
+  const responseText = composeVoiceResponse({
+    intent: intentResult.intent,
+    transcript: stt.transcript,
+    entities,
+    issues: validation.issues,
+    band: validation.band,
+    proposedAction,
+    rightsContext,
+    legalBoundaryTriggered
+  });
+  const userTurn = await recordVoiceTurn({
+    sessionId: session2.id,
+    userId: input.userId,
+    role: "user",
+    transcript: stt.transcript,
+    transcriptConfidence: stt.confidence,
+    intent: intentResult.intent,
+    intentConfidence: intentResult.confidence,
+    entities,
+    validation,
+    riskLevel: proposedAction?.riskLevel || (legalBoundaryTriggered ? "high" : "low"),
+    requiresConfirmation: Boolean(proposedAction)
+  });
+  let pendingActionId;
+  if (proposedAction && !legalBoundaryTriggered && !validation.conflict) {
+    const pending = await createPendingAction({
+      sessionId: session2.id,
+      turnId: userTurn.id,
+      userId: input.userId,
+      action: proposedAction
+    });
+    pendingActionId = pending.id;
+  }
+  for (const entity of entities) {
+    await writeProvenance({
+      sessionId: session2.id,
+      turnId: userTurn.id,
+      userId: input.userId,
+      source: input.audioBase64 ? "voice" : "text",
+      fieldPath: `entities.${entity.type}`,
+      extractedValue: entity,
+      confidence: entity.confidence,
+      confirmationStatus: proposedAction ? "pending" : "none"
+    });
+  }
+  await recordVoiceTurn({
+    sessionId: session2.id,
+    userId: input.userId,
+    role: "assistant",
+    responseText,
+    intent: intentResult.intent,
+    requiresConfirmation: Boolean(pendingActionId)
+  });
+  return {
+    sessionId: session2.id,
+    turnId: userTurn.id,
+    transcript: stt.transcript,
+    transcriptConfidence: stt.confidence,
+    intent: intentResult.intent,
+    intentConfidence: intentResult.confidence,
+    entities,
+    validation: { ok: validation.ok, issues: validation.issues },
+    confidenceBand: validation.band,
+    proposedAction,
+    pendingActionId,
+    responseText,
+    rightsContext,
+    legalBoundaryTriggered
+  };
+}
+async function confirmVoiceAction(input) {
+  const session2 = await getVoiceSession(input.sessionId, input.userId);
+  if (!session2) {
+    throw Object.assign(new Error("Voice session not found"), { status: 404 });
+  }
+  const result = await resolvePendingAction(input.pendingActionId, input.userId, input.decision);
+  if (!result.ok) {
+    throw Object.assign(new Error(result.error), { status: 400 });
+  }
+  const responseText = input.decision === "rejected" ? "Canceled. No changes were made to your agreements or rights records." : result.executed && result.executed.contractId ? `Draft created. Agreement id ${result.executed.contractId} is saved as a draft only \u2014 not signed or executed. ${PLATFORM_VOICE_DISCLAIMER}` : `Confirmed. ${JSON.stringify(result.executed)} ${PLATFORM_VOICE_DISCLAIMER}`;
+  await recordVoiceTurn({
+    sessionId: session2.id,
+    userId: input.userId,
+    role: "assistant",
+    responseText,
+    intent: input.decision === "confirmed" ? "confirm_action" : "reject_action"
+  });
+  if (input.decision === "confirmed" && result.executed?.contractId) {
+    await writeProvenance({
+      sessionId: session2.id,
+      userId: input.userId,
+      source: "voice",
+      fieldPath: "action.create_agreement_draft",
+      extractedValue: result.executed,
+      confirmationStatus: "confirmed",
+      resultRef: String(result.executed.contractId),
+      confidence: 1
+    });
+  }
+  return {
+    decision: input.decision,
+    result: result.executed,
+    responseText
+  };
+}
+var init_pipeline = __esm({
+  "server/voice/pipeline.ts"() {
+    "use strict";
+    init_voice_orchestration();
+    init_intent_engine();
+    init_entity_extraction();
+    init_validation_engine();
+    init_action_orchestrator();
+    init_response();
+    init_rights_context();
+    init_store();
+    init_speech();
+  }
+});
+
+// server/voice-routes.ts
+import { z as z4 } from "zod";
+function checkRateLimit2(userId, max2 = 30) {
+  const now = Date.now();
+  const entry = rateLimits2.get(userId);
+  if (!entry || now > entry.resetAt) {
+    rateLimits2.set(userId, { count: 1, resetAt: now + 6e4 });
+    return true;
+  }
+  if (entry.count >= max2) return false;
+  entry.count++;
+  return true;
+}
+function registerVoiceRoutes(app) {
+  app.get("/api/copilot/voice/health", isAuthenticated, (_req, res) => {
+    res.json({
+      status: "ready",
+      layer: "voice-orchestration",
+      speechProviders: ["passthrough-transcript", process.env.OPENAI_API_KEY ? "openai-whisper" : null].filter(Boolean),
+      principles: {
+        notALawyer: true,
+        notDatabaseOfRecord: true,
+        confirmationGates: true,
+        canonicalRightsPrevail: true
+      },
+      disclaimer: PLATFORM_VOICE_DISCLAIMER
+    });
+  });
+  app.post("/api/copilot/voice/session", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const body = sessionSchema.parse(req.body ?? {});
+      const session2 = await startVoiceSession({ userId, ...body });
+      res.status(201).json(session2);
+    } catch (err) {
+      console.error("[voice/session]", err);
+      res.status(400).json({ error: err?.message || "Failed to start voice session" });
+    }
+  });
+  app.post("/api/copilot/voice/turn", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      if (!checkRateLimit2(userId)) {
+        return res.status(429).json({ error: "Too many voice requests. Please wait a moment." });
+      }
+      const body = turnSchema.parse(req.body ?? {});
+      if (!body.transcript && !body.audioBase64) {
+        return res.status(400).json({ error: "Provide transcript and/or audioBase64" });
+      }
+      const result = await processVoiceTurn({ userId, ...body });
+      res.json(result);
+    } catch (err) {
+      const status = err?.status || 500;
+      console.error("[voice/turn]", err);
+      res.status(status).json({ error: err?.message || "Voice turn failed" });
+    }
+  });
+  app.post("/api/copilot/voice/confirm", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const body = confirmSchema.parse(req.body ?? {});
+      const result = await confirmVoiceAction({ userId, ...body });
+      res.json(result);
+    } catch (err) {
+      const status = err?.status || 500;
+      console.error("[voice/confirm]", err);
+      res.status(status).json({ error: err?.message || "Confirmation failed" });
+    }
+  });
+  app.get("/api/copilot/voice/memory", isAuthenticated, async (req, res) => {
+    const userId = req.user?.claims?.sub;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const rows = await listAuthorizedMemory(userId);
+    res.json({ memory: rows, note: "Canonical rights records always override conversational memory." });
+  });
+  app.put("/api/copilot/voice/memory", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const body = memorySchema.parse(req.body ?? {});
+      const row = await upsertAuthorizedMemory({ userId, ...body });
+      res.json({ memory: row });
+    } catch (err) {
+      res.status(400).json({ error: err?.message || "Memory update failed" });
+    }
+  });
+}
+var sessionSchema, turnSchema, confirmSchema, memorySchema, rateLimits2;
+var init_voice_routes = __esm({
+  "server/voice-routes.ts"() {
+    "use strict";
+    init_replitAuth();
+    init_pipeline();
+    init_store();
+    init_voice_orchestration();
+    sessionSchema = z4.object({
+      pageContext: z4.string().max(200).optional(),
+      projectId: z4.string().max(100).optional(),
+      contractId: z4.string().max(100).optional(),
+      organizationId: z4.string().max(100).optional(),
+      locale: z4.string().max(20).optional()
+    });
+    turnSchema = z4.object({
+      sessionId: z4.string().min(1),
+      transcript: z4.string().max(8e3).optional(),
+      audioBase64: z4.string().max(5e6).optional(),
+      mimeType: z4.string().max(100).optional()
+    });
+    confirmSchema = z4.object({
+      sessionId: z4.string().min(1),
+      pendingActionId: z4.string().min(1),
+      decision: z4.enum(["confirmed", "rejected"])
+    });
+    memorySchema = z4.object({
+      key: z4.string().min(1).max(80),
+      value: z4.unknown(),
+      category: z4.enum(["preference", "collaborator", "workflow", "terminology"]).optional()
+    });
+    rateLimits2 = /* @__PURE__ */ new Map();
+  }
+});
+
 // server/service-routes.ts
 import crypto3 from "crypto";
-import { z as z4 } from "zod";
+import { z as z5 } from "zod";
 import { sql as sql5 } from "drizzle-orm";
 function generateToken2() {
   return crypto3.randomBytes(32).toString("hex");
@@ -4335,19 +7302,19 @@ var init_service_routes = __esm({
     init_replitAuth();
     init_storage();
     init_db();
-    contributorSchema = z4.object({
-      name: z4.string().min(1).max(200),
-      email: z4.string().email().optional().or(z4.literal("")),
-      role: z4.string().min(1).max(100),
-      pro: z4.string().max(50).optional(),
-      ipi: z4.string().max(20).optional(),
-      ownershipPercentage: z4.union([z4.string(), z4.number()])
+    contributorSchema = z5.object({
+      name: z5.string().min(1).max(200),
+      email: z5.string().email().optional().or(z5.literal("")),
+      role: z5.string().min(1).max(100),
+      pro: z5.string().max(50).optional(),
+      ipi: z5.string().max(20).optional(),
+      ownershipPercentage: z5.union([z5.string(), z5.number()])
     });
   }
 });
 
 // server/organization-routes.ts
-import { z as z5 } from "zod";
+import { z as z6 } from "zod";
 import crypto4 from "crypto";
 async function generateUniqueSlOrgId() {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -4406,7 +7373,7 @@ function registerOrganizationRoutes(app) {
   app.post("/api/organizations", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
-      const body = insertOrganizationSchema.pick({ name: true, type: true, email: true, website: true, country: true }).extend({ type: z5.enum(ORGANIZATION_TYPES) }).parse(req.body);
+      const body = insertOrganizationSchema.pick({ name: true, type: true, email: true, website: true, country: true }).extend({ type: z6.enum(ORGANIZATION_TYPES) }).parse(req.body);
       const slOrgId = await generateUniqueSlOrgId();
       const org = await storage.createOrganization({
         ...body,
@@ -4429,7 +7396,7 @@ function registerOrganizationRoutes(app) {
       });
       res.status(201).json(org);
     } catch (error) {
-      if (error instanceof z5.ZodError) {
+      if (error instanceof z6.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[ORG CREATE ERROR]", error);
@@ -4457,7 +7424,7 @@ function registerOrganizationRoutes(app) {
         const updated = await storage.updateOrganization(req.params.id, updates);
         res.json(updated);
       } catch (error) {
-        if (error instanceof z5.ZodError) {
+        if (error instanceof z6.ZodError) {
           res.status(400).json({ message: "Validation failed", issues: error.errors });
         } else {
           console.error("[ORG UPDATE ERROR]", error);
@@ -4483,7 +7450,7 @@ function registerOrganizationRoutes(app) {
     async (req, res) => {
       const actingUserId = req.user.claims.sub;
       try {
-        const body = z5.object({ userId: z5.string().min(1), role: z5.enum(ORGANIZATION_ROLES).default("member") }).parse(req.body);
+        const body = z6.object({ userId: z6.string().min(1), role: z6.enum(ORGANIZATION_ROLES).default("member") }).parse(req.body);
         const existing = await storage.getOrganizationMember(req.params.id, body.userId);
         if (existing) {
           res.status(409).json({ message: "User is already a member of this organization" });
@@ -4505,7 +7472,7 @@ function registerOrganizationRoutes(app) {
         });
         res.status(201).json(member);
       } catch (error) {
-        if (error instanceof z5.ZodError) {
+        if (error instanceof z6.ZodError) {
           res.status(400).json({ message: "Validation failed", issues: error.errors });
         } else {
           console.error("[ORG MEMBER ADD ERROR]", error);
@@ -4521,11 +7488,11 @@ function registerOrganizationRoutes(app) {
     requireOrgRole("owner"),
     async (req, res) => {
       try {
-        const { role } = z5.object({ role: z5.enum(ORGANIZATION_ROLES) }).parse(req.body);
+        const { role } = z6.object({ role: z6.enum(ORGANIZATION_ROLES) }).parse(req.body);
         const updated = await storage.updateOrganizationMemberRole(req.params.memberId, role);
         res.json(updated);
       } catch (error) {
-        if (error instanceof z5.ZodError) {
+        if (error instanceof z6.ZodError) {
           res.status(400).json({ message: "Validation failed", issues: error.errors });
         } else {
           console.error("[ORG MEMBER ROLE ERROR]", error);
@@ -4572,9 +7539,9 @@ function registerOrganizationRoutes(app) {
     async (req, res) => {
       const userId = req.user.claims.sub;
       try {
-        const body = z5.object({
-          name: z5.string().min(1).max(100),
-          scopes: z5.array(z5.string()).min(1)
+        const body = z6.object({
+          name: z6.string().min(1).max(100),
+          scopes: z6.array(z6.string()).min(1)
         }).parse(req.body);
         const { raw, hash, prefix } = generateApiKey();
         const key = await storage.createOrganizationApiKey({
@@ -4596,7 +7563,7 @@ function registerOrganizationRoutes(app) {
         const { keyHash, ...safeKey } = key;
         res.status(201).json({ ...safeKey, rawKey: raw });
       } catch (error) {
-        if (error instanceof z5.ZodError) {
+        if (error instanceof z6.ZodError) {
           res.status(400).json({ message: "Validation failed", issues: error.errors });
         } else {
           console.error("[ORG API KEY CREATE ERROR]", error);
@@ -4638,7 +7605,7 @@ var init_organization_routes = __esm({
 });
 
 // server/message-routes.ts
-import { z as z6 } from "zod";
+import { z as z7 } from "zod";
 function messageRateLimit(maxRequests, windowMs) {
   return (req, res, next) => {
     const userId = req.user?.claims?.sub;
@@ -4759,7 +7726,7 @@ function registerMessageRoutes(app) {
         );
         res.status(201).json(message);
       } catch (error) {
-        if (error instanceof z6.ZodError) {
+        if (error instanceof z7.ZodError) {
           res.status(400).json({ message: "Invalid message", errors: error.errors });
           return;
         }
@@ -4792,10 +7759,10 @@ var init_message_routes = __esm({
     init_replitAuth();
     init_security();
     rateLimitStore = /* @__PURE__ */ new Map();
-    sendMessageSchema = z6.object({
-      receiverId: z6.string().min(1),
-      content: z6.string().min(1).max(5e3),
-      messageType: z6.enum(["text", "image", "file"]).optional().default("text")
+    sendMessageSchema = z7.object({
+      receiverId: z7.string().min(1),
+      content: z7.string().min(1).max(5e3),
+      messageType: z7.enum(["text", "image", "file"]).optional().default("text")
     });
   }
 });
@@ -5208,7 +8175,7 @@ var init_payment_service = __esm({
 // server/payment-routes.ts
 import express from "express";
 import Stripe3 from "stripe";
-import { z as z7 } from "zod";
+import { z as z8 } from "zod";
 import { sql as sql8 } from "drizzle-orm";
 function uid(req) {
   return req.user?.claims?.sub ?? "";
@@ -5257,7 +8224,7 @@ function registerPaymentRoutes(app) {
       });
       res.status(201).json(result);
     } catch (err) {
-      if (err instanceof z7.ZodError) {
+      if (err instanceof z8.ZodError) {
         return res.status(400).json({ error: "Validation failed", issues: err.errors });
       }
       console.error("[PAYMENT INTENT]", err.message);
@@ -5285,7 +8252,7 @@ function registerPaymentRoutes(app) {
       });
       res.json(result);
     } catch (err) {
-      if (err instanceof z7.ZodError) {
+      if (err instanceof z8.ZodError) {
         return res.status(400).json({ error: "Validation failed", issues: err.errors });
       }
       console.error("[EXECUTE SPLITS]", err.message);
@@ -5449,7 +8416,7 @@ function registerPaymentRoutes(app) {
         message: `Refunded ${reversals.length} transfers + original charge`
       });
     } catch (err) {
-      if (err instanceof z7.ZodError) {
+      if (err instanceof z8.ZodError) {
         return res.status(400).json({ error: "Validation failed", issues: err.errors });
       }
       console.error("[REFUND ERROR]", err.message);
@@ -5600,30 +8567,30 @@ var init_payment_routes = __esm({
     stripe3 = new Stripe3(process.env.STRIPE_SECRET_KEY ?? "", {
       apiVersion: "2025-08-27.basil"
     });
-    createPaymentSchema = z7.object({
-      contractId: z7.string().uuid(),
-      assetId: z7.string().uuid(),
-      source: z7.enum(["streaming", "sync", "performance", "mechanical", "other"]),
-      grossAmount: z7.number().positive().max(1e7),
-      currency: z7.string().length(3).default("CAD"),
-      description: z7.string().min(3).max(500)
+    createPaymentSchema = z8.object({
+      contractId: z8.string().uuid(),
+      assetId: z8.string().uuid(),
+      source: z8.enum(["streaming", "sync", "performance", "mechanical", "other"]),
+      grossAmount: z8.number().positive().max(1e7),
+      currency: z8.string().length(3).default("CAD"),
+      description: z8.string().min(3).max(500)
     });
-    executeSplitsSchema = z7.object({
-      revenueEventId: z7.string().uuid(),
-      contractId: z7.string().uuid(),
-      paymentIntentId: z7.string().min(1),
-      grossAmount: z7.number().positive(),
-      currency: z7.string().length(3).default("CAD")
+    executeSplitsSchema = z8.object({
+      revenueEventId: z8.string().uuid(),
+      contractId: z8.string().uuid(),
+      paymentIntentId: z8.string().min(1),
+      grossAmount: z8.number().positive(),
+      currency: z8.string().length(3).default("CAD")
     });
-    refundSchema = z7.object({
-      revenueEventId: z7.string().uuid(),
-      reason: z7.enum(["duplicate", "fraudulent", "requested_by_customer"]).optional()
+    refundSchema = z8.object({
+      revenueEventId: z8.string().uuid(),
+      reason: z8.enum(["duplicate", "fraudulent", "requested_by_customer"]).optional()
     });
   }
 });
 
 // server/security-routes.ts
-import { z as z8 } from "zod";
+import { z as z9 } from "zod";
 import { sql as sql9 } from "drizzle-orm";
 async function registerSecurityRoutes(app) {
   app.post(
@@ -5719,7 +8686,7 @@ async function registerSecurityRoutes(app) {
           } : null
         });
       } catch (err) {
-        if (err instanceof z8.ZodError) {
+        if (err instanceof z9.ZodError) {
           res.status(400).json({ error: "Validation failed", issues: err.errors });
         } else {
           console.error("[SPLIT CREATE ERROR]", err);
@@ -5735,17 +8702,17 @@ async function registerSecurityRoutes(app) {
     async (req, res) => {
       const userId = req.user?.claims?.sub;
       const { versionId } = req.params;
-      const bodySchema = z8.object({
-        signerName: z8.string().min(2).max(200),
-        signerEmail: z8.string().email(),
-        signerTitle: z8.string().max(100).optional(),
-        signatureData: z8.string().min(100),
+      const bodySchema = z9.object({
+        signerName: z9.string().min(2).max(200),
+        signerEmail: z9.string().email(),
+        signerTitle: z9.string().max(100).optional(),
+        signatureData: z9.string().min(100),
         // base64 PNG
-        mode: z8.enum(["draw", "type"]),
-        kycLegalName: z8.string().max(200).optional(),
-        kycIdType: z8.string().max(40).optional(),
-        kycPhone: z8.string().max(20).optional(),
-        kycVerifiedAt: z8.string().datetime().optional()
+        mode: z9.enum(["draw", "type"]),
+        kycLegalName: z9.string().max(200).optional(),
+        kycIdType: z9.string().max(40).optional(),
+        kycPhone: z9.string().max(20).optional(),
+        kycVerifiedAt: z9.string().datetime().optional()
       });
       try {
         const body = bodySchema.parse(req.body);
@@ -5843,7 +8810,7 @@ async function registerSecurityRoutes(app) {
           message: allSigned ? "All parties have signed. Contract will lock in 48 hours." : `${actualSigs}/${requiredSigs} signatures collected.`
         });
       } catch (err) {
-        if (err instanceof z8.ZodError) {
+        if (err instanceof z9.ZodError) {
           res.status(400).json({ error: "Invalid signature data", issues: err.errors });
         } else {
           console.error("[SIGN ERROR]", err);
@@ -5858,7 +8825,7 @@ async function registerSecurityRoutes(app) {
       const result = await openDispute(userId, req.body, req);
       res.status(201).json(result);
     } catch (err) {
-      if (err instanceof z8.ZodError) {
+      if (err instanceof z9.ZodError) {
         res.status(400).json({ error: "Invalid dispute data", issues: err.errors });
       } else {
         console.error("[DISPUTE OPEN ERROR]", err);
@@ -5880,16 +8847,16 @@ async function registerSecurityRoutes(app) {
   });
   app.patch("/api/disputes/:id/resolve", isAuthenticated, async (req, res) => {
     const adminId = req.user?.claims?.sub;
-    const schema = z8.object({
-      resolution: z8.enum(["accepted", "rejected"]),
-      notes: z8.string().min(5).max(2e3)
+    const schema = z9.object({
+      resolution: z9.enum(["accepted", "rejected"]),
+      notes: z9.string().min(5).max(2e3)
     });
     try {
       const { resolution, notes } = schema.parse(req.body);
       await resolveDispute(req.params.id, adminId, resolution, notes, req);
       res.json({ resolved: true, resolution });
     } catch (err) {
-      if (err instanceof z8.ZodError) {
+      if (err instanceof z9.ZodError) {
         res.status(400).json({ error: "Invalid resolve data", issues: err.errors });
       } else {
         console.error("[DISPUTE RESOLVE ERROR]", err);
@@ -5899,10 +8866,10 @@ async function registerSecurityRoutes(app) {
   });
   app.post("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const schema = z8.object({
-      name: z8.string().min(1).max(100),
-      scopes: z8.array(z8.enum(["verify_ownership", "read_metadata", "write_splits", "*"])),
-      expiresAt: z8.string().datetime().optional()
+    const schema = z9.object({
+      name: z9.string().min(1).max(100),
+      scopes: z9.array(z9.enum(["verify_ownership", "read_metadata", "write_splits", "*"])),
+      expiresAt: z9.string().datetime().optional()
     });
     try {
       const body = schema.parse(req.body);
@@ -5930,7 +8897,7 @@ async function registerSecurityRoutes(app) {
         warning: "Store this key securely. It will not be shown again."
       });
     } catch (err) {
-      if (err instanceof z8.ZodError) {
+      if (err instanceof z9.ZodError) {
         res.status(400).json({ error: "Invalid API key config", issues: err.errors });
       } else {
         console.error("[API KEY CREATE ERROR]", err);
@@ -6025,8 +8992,8 @@ var init_security_routes = __esm({
 });
 
 // server/compliance-routes.ts
-import { z as z9 } from "zod";
-import { eq as eq2 } from "drizzle-orm";
+import { z as z10 } from "zod";
+import { eq as eq3 } from "drizzle-orm";
 function requireTermsAccepted(req, res, next) {
   const path3 = req.path;
   const isPublicLegalDocRoute = req.method === "GET" && path3.startsWith("/api/legal/documents/");
@@ -6095,9 +9062,9 @@ function registerComplianceRoutes(app) {
   });
   app.post("/api/user/accept-terms", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
-    const schema = z9.object({
-      docType: z9.enum(GATED_DOC_TYPES).optional(),
-      version: z9.string().max(40).optional()
+    const schema = z10.object({
+      docType: z10.enum(GATED_DOC_TYPES).optional(),
+      version: z10.string().max(40).optional()
       // legacy field, ignored — version is always the current published one
     });
     try {
@@ -6120,7 +9087,7 @@ function registerComplianceRoutes(app) {
       );
       const tosResult = results.find((r) => r.docType === "tos");
       if (tosResult) {
-        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq2(users.id, userId));
+        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq3(users.id, userId));
       }
       await storage.trackUserActivity(userId, "terms_accepted", {
         docTypes: results.map((r) => r.docType),
@@ -6129,7 +9096,7 @@ function registerComplianceRoutes(app) {
       });
       res.json({ accepted: true, results, acceptedAt });
     } catch (err) {
-      if (err instanceof z9.ZodError) {
+      if (err instanceof z10.ZodError) {
         res.status(400).json({ error: "Invalid request" });
       } else {
         logger.error("compliance.accept_terms_failed", { error: err?.message });
@@ -6154,16 +9121,16 @@ function registerComplianceRoutes(app) {
         sentOrReceivedMessages
       ] = await Promise.all([
         storage.getUser(userId),
-        db.select().from(contracts).where(eq2(contracts.createdBy, userId)),
-        db.select().from(contractCollaborators).where(eq2(contractCollaborators.userId, userId)),
-        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq2(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq2(contractCollaborators.userId, userId)),
-        db.select().from(songAssets).where(eq2(songAssets.createdBy, userId)),
-        db.select().from(ownershipRecords).where(eq2(ownershipRecords.userId, userId)),
-        db.select().from(payoutRecords).where(eq2(payoutRecords.userId, userId)),
-        db.select().from(userBalances).where(eq2(userBalances.userId, userId)),
-        db.select().from(userActivity).where(eq2(userActivity.userId, userId)),
-        db.select().from(notifications).where(eq2(notifications.userId, userId)),
-        db.select().from(messages).where(eq2(messages.senderId, userId))
+        db.select().from(contracts).where(eq3(contracts.createdBy, userId)),
+        db.select().from(contractCollaborators).where(eq3(contractCollaborators.userId, userId)),
+        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq3(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq3(contractCollaborators.userId, userId)),
+        db.select().from(songAssets).where(eq3(songAssets.createdBy, userId)),
+        db.select().from(ownershipRecords).where(eq3(ownershipRecords.userId, userId)),
+        db.select().from(payoutRecords).where(eq3(payoutRecords.userId, userId)),
+        db.select().from(userBalances).where(eq3(userBalances.userId, userId)),
+        db.select().from(userActivity).where(eq3(userActivity.userId, userId)),
+        db.select().from(notifications).where(eq3(notifications.userId, userId)),
+        db.select().from(messages).where(eq3(messages.senderId, userId))
       ]);
       await storage.trackUserActivity(userId, "data_export_requested", { requestedAt: (/* @__PURE__ */ new Date()).toISOString() });
       res.setHeader("Content-Disposition", `attachment; filename="splitsheet-data-export-${userId}.json"`);
@@ -6189,7 +9156,7 @@ function registerComplianceRoutes(app) {
   });
   app.post("/api/account/delete", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
-    const schema = z9.object({ confirm: z9.literal(true) });
+    const schema = z10.object({ confirm: z10.literal(true) });
     try {
       schema.parse(req.body ?? {});
       const anonymizedEmail = `deleted-${userId}@anonymized.splitsheet.ca`;
@@ -6204,7 +9171,7 @@ function registerComplianceRoutes(app) {
         contactInfo: null,
         isActive: false,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq2(users.id, userId));
+      }).where(eq3(users.id, userId));
       await storage.trackUserActivity(userId, "account_deletion_requested", {
         requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
         ipAddress: req.ip
@@ -6217,7 +9184,7 @@ function registerComplianceRoutes(app) {
         message: "Your account has been deactivated and personal data anonymized. Financial/legal records required for royalty accounting are retained in anonymized form."
       });
     } catch (err) {
-      if (err instanceof z9.ZodError) {
+      if (err instanceof z10.ZodError) {
         res.status(400).json({ error: "You must confirm deletion (confirm: true)." });
       } else {
         logger.error("compliance.delete_failed", { userId, error: err?.message });
@@ -6251,8 +9218,8 @@ var init_compliance_routes = __esm({
 
 // server/verification-routes.ts
 import crypto5 from "crypto";
-import { z as z10 } from "zod";
-import { and as and2, desc as desc2, eq as eq3, gt, isNull } from "drizzle-orm";
+import { z as z11 } from "zod";
+import { and as and3, desc as desc3, eq as eq4, gt, isNull } from "drizzle-orm";
 function generateSixDigitCode() {
   return crypto5.randomInt(0, 1e6).toString().padStart(6, "0");
 }
@@ -6292,7 +9259,7 @@ function registerVerificationRoutes(app) {
         devCode: process.env.NODE_ENV !== "production" && delivery.mode === "log" ? code : void 0
       });
     } catch (err) {
-      if (err instanceof z10.ZodError) {
+      if (err instanceof z11.ZodError) {
         res.status(400).json({ error: "Invalid request", issues: err.errors });
       } else {
         console.error("[VERIFY SEND CODE]", err);
@@ -6305,14 +9272,14 @@ function registerVerificationRoutes(app) {
     try {
       const body = confirmCodeSchema.parse(req.body);
       const [pending] = await db.select().from(verificationCodes).where(
-        and2(
-          eq3(verificationCodes.userId, userId),
-          eq3(verificationCodes.destination, body.destination),
-          eq3(verificationCodes.purpose, body.purpose),
+        and3(
+          eq4(verificationCodes.userId, userId),
+          eq4(verificationCodes.destination, body.destination),
+          eq4(verificationCodes.purpose, body.purpose),
           isNull(verificationCodes.consumedAt),
           gt(verificationCodes.expiresAt, /* @__PURE__ */ new Date())
         )
-      ).orderBy(desc2(verificationCodes.createdAt)).limit(1);
+      ).orderBy(desc3(verificationCodes.createdAt)).limit(1);
       if (!pending) {
         res.status(400).json({ error: "No active verification code. Request a new one." });
         return;
@@ -6326,12 +9293,12 @@ function registerVerificationRoutes(app) {
         Buffer.from(codeHash, "hex"),
         Buffer.from(pending.codeHash, "hex")
       );
-      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq3(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq4(verificationCodes.id, pending.id));
       if (!matches) {
         res.status(400).json({ error: "Incorrect code." });
         return;
       }
-      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq3(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq4(verificationCodes.id, pending.id));
       await storage.trackUserActivity(userId, "identity_verified", {
         legalName: pending.legalName,
         idType: pending.idType,
@@ -6345,7 +9312,7 @@ function registerVerificationRoutes(app) {
         verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
       });
     } catch (err) {
-      if (err instanceof z10.ZodError) {
+      if (err instanceof z11.ZodError) {
         res.status(400).json({ error: "Invalid request", issues: err.errors });
       } else {
         console.error("[VERIFY CONFIRM CODE]", err);
@@ -6355,7 +9322,7 @@ function registerVerificationRoutes(app) {
   });
   app.get("/api/verify/status", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const [latest] = await db.select().from(userActivity).where(and2(eq3(userActivity.userId, userId), eq3(userActivity.activityType, "identity_verified"))).orderBy(desc2(userActivity.createdAt)).limit(1);
+    const [latest] = await db.select().from(userActivity).where(and3(eq4(userActivity.userId, userId), eq4(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
     res.json({ verified: Boolean(latest), verifiedAt: latest?.createdAt ?? null });
   });
 }
@@ -6371,24 +9338,24 @@ var init_verification_routes = __esm({
     init_email_service();
     CODE_TTL_MS = 10 * 60 * 1e3;
     MAX_ATTEMPTS2 = 5;
-    sendCodeSchema = z10.object({
-      destination: z10.string().min(3).max(200),
+    sendCodeSchema = z11.object({
+      destination: z11.string().min(3).max(200),
       // email address or phone number
-      channel: z10.enum(["email", "sms"]).default("email"),
-      purpose: z10.string().max(50).default("identity_verification"),
-      legalName: z10.string().max(200).optional(),
-      idType: z10.string().max(40).optional()
+      channel: z11.enum(["email", "sms"]).default("email"),
+      purpose: z11.string().max(50).default("identity_verification"),
+      legalName: z11.string().max(200).optional(),
+      idType: z11.string().max(40).optional()
     });
-    confirmCodeSchema = z10.object({
-      destination: z10.string().min(3).max(200),
-      code: z10.string().length(6).regex(/^\d{6}$/),
-      purpose: z10.string().max(50).default("identity_verification")
+    confirmCodeSchema = z11.object({
+      destination: z11.string().min(3).max(200),
+      code: z11.string().length(6).regex(/^\d{6}$/),
+      purpose: z11.string().max(50).default("identity_verification")
     });
   }
 });
 
 // server/creator-routes.ts
-import { z as z11 } from "zod";
+import { z as z12 } from "zod";
 import crypto6 from "crypto";
 async function generateUniqueSlCreatorId() {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -6430,7 +9397,7 @@ function registerCreatorRoutes(app) {
       });
       res.status(201).json(creator);
     } catch (error) {
-      if (error instanceof z11.ZodError) {
+      if (error instanceof z12.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[CREATOR CREATE ERROR]", error);
@@ -6481,7 +9448,7 @@ function registerCreatorRoutes(app) {
       });
       res.json(updated);
     } catch (error) {
-      if (error instanceof z11.ZodError) {
+      if (error instanceof z12.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[CREATOR UPDATE ERROR]", error);
@@ -6528,7 +9495,7 @@ var init_creator_routes = __esm({
 });
 
 // server/rights-routes.ts
-import { z as z12 } from "zod";
+import { z as z13 } from "zod";
 function registerRightsRoutes(app) {
   app.get("/api/rights-organizations", isAuthenticated, async (req, res) => {
     try {
@@ -6556,7 +9523,7 @@ function registerRightsRoutes(app) {
   app.put("/api/rights-profile", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
-      const body = insertCreatorRightsProfileSchema.extend({ territory: z12.enum(TERRITORIES).optional() }).parse(req.body);
+      const body = insertCreatorRightsProfileSchema.extend({ territory: z13.enum(TERRITORIES).optional() }).parse(req.body);
       const before = await storage.getCreatorRightsProfile(userId);
       const profile = await storage.upsertCreatorRightsProfile(userId, body);
       await auditLog({
@@ -6570,7 +9537,7 @@ function registerRightsRoutes(app) {
       });
       res.json(profile);
     } catch (error) {
-      if (error instanceof z12.ZodError) {
+      if (error instanceof z13.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[RIGHTS PROFILE UPDATE ERROR]", error);
@@ -6621,7 +9588,7 @@ var init_adminAuth = __esm({
 });
 
 // server/legal-routes.ts
-import { z as z13 } from "zod";
+import { z as z14 } from "zod";
 function parseDocType(raw) {
   const result = docTypeParamSchema.safeParse(raw);
   return result.success ? result.data : null;
@@ -6693,7 +9660,7 @@ function registerLegalRoutes(app) {
         publishedAt: doc.publishedAt
       });
     } catch (error) {
-      if (error instanceof z13.ZodError) {
+      if (error instanceof z14.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else if (error?.code === "23505") {
         res.status(409).json({ error: "This doc type + version has already been published" });
@@ -6713,7 +9680,461 @@ var init_legal_routes = __esm({
     init_adminAuth();
     init_schema();
     init_security();
-    docTypeParamSchema = z13.enum(LEGAL_DOC_TYPES);
+    docTypeParamSchema = z14.enum(LEGAL_DOC_TYPES);
+  }
+});
+
+// server/agreement-ledger.ts
+import { eq as eq5, sql as sql10 } from "drizzle-orm";
+function generateSlSongId() {
+  const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
+  return `SL-SONG-${hex}`;
+}
+function asRecord(data) {
+  return data && typeof data === "object" ? data : {};
+}
+async function syncAgreementToRightsLedger(contractId, actorId) {
+  const contract = await storage.getContract(contractId);
+  if (!contract) return { synced: false, reason: "Contract not found" };
+  if (contract.status !== "signed" && contract.status !== "confirmed") {
+    return { synced: false, reason: "Contract is not fully executed" };
+  }
+  const template = contract.templateId ? await storage.getContractTemplate(contract.templateId) : await storage.getContractTemplateByType(contract.type);
+  const rights = template?.rightsCategories ?? [];
+  const data = asRecord(contract.data);
+  const createdBy = actorId || contract.createdBy;
+  const needsOwnership = rights.includes("OWNERSHIP") || rights.includes("COMPOSITION") || contract.type === "split-sheet" || Array.isArray(data.collaborators) || Array.isArray(data.ownershipSplit);
+  const needsLicense = rights.includes("LICENSE") || rights.includes("SYNCHRONIZATION") || (template?.agreementType ?? "").includes("license") || contract.type.includes("license");
+  if (!needsOwnership && !needsLicense) {
+    return { synced: false, reason: "Template does not map to ledger ownership or license records" };
+  }
+  let assetId;
+  let ownershipVersion;
+  let licenseId;
+  if (needsOwnership) {
+    const title = String(data.songTitle || data.recordingTitle || data.title || contract.title || "Untitled").trim();
+    const existingAssets = await storage.getSongAssetsByContract(contractId);
+    let asset = existingAssets[0];
+    if (!asset) {
+      asset = await storage.createSongAsset({
+        title,
+        artistName: String(data.artistName || data.artist || "") || null,
+        createdBy,
+        contractId,
+        status: "active",
+        slSongId: generateSlSongId(),
+        metadata: {
+          source: "agreement_sync",
+          contractType: contract.type,
+          templateId: contract.templateId,
+          templateVersion: contract.templateVersion ?? template?.version ?? null
+        }
+      });
+    }
+    assetId = asset.id;
+    const splits = extractOwnershipSplits(contract, data);
+    if (splits.length > 0) {
+      const prepared = await ensureUserIdsForSplits(splits, createdBy);
+      const total = prepared.reduce((s, p) => s + parseFloat(p.ownershipPercentage), 0);
+      if (Math.abs(total - 100) <= 0.01) {
+        const records = await storage.updateOwnershipSplit(
+          asset.id,
+          prepared,
+          createdBy,
+          `Synced from executed agreement ${contract.id} (${contract.type})`
+        );
+        ownershipVersion = records[0]?.version;
+      }
+    }
+  }
+  if (needsLicense) {
+    if (!assetId) {
+      const existingAssets = await storage.getSongAssetsByContract(contractId);
+      assetId = existingAssets[0]?.id;
+    }
+    const [latest] = await db.select({ maxVersion: sql10`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq5(licenseRecords.contractId, contractId));
+    const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
+    const [row] = await db.insert(licenseRecords).values({
+      contractId,
+      assetId: assetId ?? null,
+      licenseType: contract.type,
+      licensorName: String(data.licensor || data.partyA || "") || null,
+      licenseeName: String(data.licensee || data.partyB || "") || null,
+      territory: String(data.territory || "") || null,
+      term: String(data.term || "") || null,
+      exclusivity: String(data.exclusivity || "") || null,
+      rightsGranted: Array.isArray(data.rightsGranted) ? data.rightsGranted : rights,
+      fee: data.licenseFee != null || data.fee != null ? String(data.licenseFee ?? data.fee) : null,
+      metadata: {
+        source: "agreement_sync",
+        templateVersion: contract.templateVersion ?? template?.version ?? null
+      },
+      version: nextVersion,
+      createdBy
+    }).returning();
+    licenseId = row.id;
+  }
+  const meta = asRecord(contract.metadata);
+  await storage.updateContract(contractId, {
+    metadata: {
+      ...meta,
+      rightsLedgerSync: {
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        assetId,
+        ownershipVersion,
+        licenseId
+      }
+    }
+  });
+  return { synced: true, assetId, ownershipVersion, licenseId };
+}
+function extractOwnershipSplits(_contract, data) {
+  const fromCollabs = Array.isArray(data.collaborators) ? data.collaborators : [];
+  const fromSplit = Array.isArray(data.ownershipSplit) ? data.ownershipSplit : [];
+  const rows = [...fromCollabs, ...fromSplit];
+  return rows.map((r) => ({
+    name: r.name,
+    email: r.email,
+    userId: r.userId,
+    ownershipPercentage: String(r.ownershipPercentage ?? r.percentage ?? r.share ?? ""),
+    role: String(r.role || "writer")
+  })).filter((r) => r.ownershipPercentage && !Number.isNaN(parseFloat(r.ownershipPercentage)));
+}
+async function ensureUserIdsForSplits(splits, fallbackUserId) {
+  return splits.map((s) => ({
+    userId: s.userId || fallbackUserId,
+    ownershipPercentage: s.ownershipPercentage,
+    role: s.role
+  }));
+}
+var init_agreement_ledger = __esm({
+  "server/agreement-ledger.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_storage();
+  }
+});
+
+// server/template-routes.ts
+async function writeTemplateAudit(templateId, actorId, action, before, after) {
+  await db.insert(templateAuditLog).values({
+    templateId: templateId ?? void 0,
+    actorId,
+    action,
+    before,
+    after
+  });
+}
+function registerTemplateRoutes(app) {
+  app.get("/api/templates/meta", isAuthenticated, async (_req, res) => {
+    res.json({
+      categories: TEMPLATE_CATEGORIES.filter((c) => !c.reserved),
+      futureCategories: TEMPLATE_CATEGORIES.filter((c) => c.reserved),
+      rights: RIGHTS_TAXONOMY,
+      parties: PARTY_TYPES,
+      statuses: TEMPLATE_STATUSES,
+      legalReviewStatuses: LEGAL_REVIEW_STATUSES,
+      riskLevels: RISK_LEVELS,
+      disclaimer: LEGAL_DISCLAIMER
+    });
+  });
+  app.get("/api/templates", isAuthenticated, async (req, res) => {
+    try {
+      const templates = await storage.getContractTemplates({
+        category: req.query.category,
+        status: req.query.status,
+        riskLevel: req.query.riskLevel,
+        jurisdiction: req.query.jurisdiction,
+        rights: req.query.rights,
+        search: req.query.search
+      });
+      res.json(templates);
+    } catch (error) {
+      console.error("Error fetching templates:", error);
+      res.status(500).json({ message: "Failed to fetch templates" });
+    }
+  });
+  app.get("/api/templates/by-type/:type", isAuthenticated, async (req, res) => {
+    try {
+      const template = await storage.getContractTemplateByType(req.params.type);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      res.json(template);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch template" });
+    }
+  });
+  app.post("/api/templates/:id/validate", isAuthenticated, async (req, res) => {
+    try {
+      const template = await storage.getContractTemplate(req.params.id);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      const fields = template.template?.fields ?? [];
+      const result = validateTemplateFieldValues(fields, req.body?.data ?? {});
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Validation failed" });
+    }
+  });
+  app.get("/api/admin/templates", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const templates = await storage.listAllContractTemplates({
+        category: req.query.category,
+        status: req.query.status,
+        search: req.query.search,
+        includeInactive: true
+      });
+      res.json(templates);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to list templates" });
+    }
+  });
+  app.post("/api/admin/templates", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const body = req.body ?? {};
+      if (!body.name || !body.type || !body.template) {
+        return res.status(400).json({ message: "name, type, and template are required" });
+      }
+      const created = await storage.createContractTemplate({
+        name: body.name,
+        type: body.type,
+        slug: body.slug || body.type,
+        description: body.description,
+        category: body.category,
+        subcategory: body.subcategory,
+        industry: body.industry || "music",
+        agreementType: body.agreementType,
+        version: body.version || "1.0",
+        status: body.status || "draft",
+        jurisdiction: body.jurisdiction || "CA",
+        legalReviewStatus: body.legalReviewStatus || "NOT_REVIEWED",
+        rightsCategories: body.rightsCategories || [],
+        requiredParties: body.requiredParties || [],
+        optionalParties: body.optionalParties || [],
+        riskLevel: body.riskLevel || "medium",
+        workflowType: body.workflowType,
+        supportedTransactions: body.supportedTransactions || [],
+        template: body.template,
+        isActive: (body.status || "draft") === "active"
+      });
+      await writeTemplateAudit(created.id, actorId, "create", null, created);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create template" });
+    }
+  });
+  app.patch("/api/admin/templates/:id", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const before = await storage.getContractTemplate(req.params.id);
+      if (!before) return res.status(404).json({ message: "Template not found" });
+      const updates = { ...req.body };
+      delete updates.id;
+      if (updates.status) {
+        updates.isActive = updates.status === "active";
+      }
+      const after = await storage.updateContractTemplate(req.params.id, updates);
+      await writeTemplateAudit(after.id, actorId, "update", before, after);
+      res.json(after);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update template" });
+    }
+  });
+  app.post("/api/admin/templates/:id/duplicate", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const source = await storage.getContractTemplate(req.params.id);
+      if (!source) return res.status(404).json({ message: "Template not found" });
+      const suffix = `-copy-${Date.now().toString(36)}`;
+      const created = await storage.createContractTemplate({
+        name: `${source.name} (Copy)`,
+        type: `${source.type}${suffix}`,
+        slug: `${source.slug || source.type}${suffix}`,
+        description: source.description,
+        category: source.category,
+        subcategory: source.subcategory,
+        industry: source.industry,
+        agreementType: source.agreementType,
+        version: "1.0",
+        status: "draft",
+        jurisdiction: source.jurisdiction,
+        legalReviewStatus: "NOT_REVIEWED",
+        rightsCategories: source.rightsCategories,
+        requiredParties: source.requiredParties,
+        optionalParties: source.optionalParties,
+        riskLevel: source.riskLevel,
+        workflowType: source.workflowType,
+        supportedTransactions: source.supportedTransactions,
+        parentTemplateId: source.id,
+        template: source.template,
+        isActive: false
+      });
+      await writeTemplateAudit(created.id, actorId, "duplicate", source, created);
+      res.status(201).json(created);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to duplicate template" });
+    }
+  });
+  app.post("/api/admin/templates/:id/version", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const source = await storage.getContractTemplate(req.params.id);
+      if (!source) return res.status(404).json({ message: "Template not found" });
+      const [major, minor] = String(source.version || "1.0").split(".").map((n) => parseInt(n, 10) || 0);
+      const bump = req.body?.bump === "major" ? "major" : "minor";
+      const nextVersion = bump === "major" ? `${major + 1}.0` : `${major}.${minor + 1}`;
+      await storage.updateContractTemplate(source.id, {
+        status: "deprecated",
+        isActive: false,
+        legalReviewStatus: source.legalReviewStatus === "COUNSEL_APPROVED" ? "DEPRECATED" : source.legalReviewStatus
+      });
+      const created = await storage.createContractTemplate({
+        name: source.name,
+        type: source.type,
+        slug: source.slug || source.type,
+        description: source.description,
+        category: source.category,
+        subcategory: source.subcategory,
+        industry: source.industry,
+        agreementType: source.agreementType,
+        version: nextVersion,
+        status: "draft",
+        jurisdiction: source.jurisdiction,
+        legalReviewStatus: "NOT_REVIEWED",
+        rightsCategories: source.rightsCategories,
+        requiredParties: source.requiredParties,
+        optionalParties: source.optionalParties,
+        riskLevel: source.riskLevel,
+        workflowType: source.workflowType,
+        supportedTransactions: source.supportedTransactions,
+        parentTemplateId: source.id,
+        template: req.body?.template ?? source.template,
+        isActive: false
+      });
+      await writeTemplateAudit(created.id, actorId, "version", source, created);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to version template" });
+    }
+  });
+  app.post("/api/admin/templates/:id/activate", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const before = await storage.getContractTemplate(req.params.id);
+      if (!before) return res.status(404).json({ message: "Template not found" });
+      const after = await storage.updateContractTemplate(req.params.id, {
+        status: "active",
+        isActive: true
+      });
+      await writeTemplateAudit(after.id, actorId, "activate", before, after);
+      res.json(after);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to activate template" });
+    }
+  });
+  app.post("/api/admin/templates/:id/archive", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const actorId = req.user.claims.sub;
+      const before = await storage.getContractTemplate(req.params.id);
+      if (!before) return res.status(404).json({ message: "Template not found" });
+      const after = await storage.updateContractTemplate(req.params.id, {
+        status: "archived",
+        isActive: false
+      });
+      await writeTemplateAudit(after.id, actorId, "archive", before, after);
+      res.json(after);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to archive template" });
+    }
+  });
+  app.get("/api/projects/:id/recommended-agreements", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const project = await storage.getContract(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.createdBy !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const collaborators = await storage.getContractCollaborators(project.id);
+      const roles = collaborators.map((c) => c.role);
+      const data = project.data || {};
+      const recommendations = recommendAgreements({
+        roles,
+        songwriterCount: collaborators.filter(
+          (c) => /writer|composer|songwriter/i.test(c.role)
+        ).length,
+        hasProducer: roles.some((r) => /producer/i.test(r)) || Boolean(data.hasProducer),
+        hasExternalBeat: Boolean(data.hasExternalBeat || data.externalBeat),
+        hasMaster: Boolean(data.hasMaster || data.recordingTitle) || project.type.includes("master"),
+        hasPublishing: Boolean(data.hasPublishing) || roles.some((r) => /publish/i.test(r)),
+        hasLiveEvent: Boolean(data.eventDate || data.venue),
+        hasSyncUse: Boolean(data.syncUse || data.media),
+        notes: data.notes
+      });
+      const enriched = await Promise.all(
+        recommendations.map(async (rec) => {
+          const template = await storage.getContractTemplateByType(rec.template);
+          return {
+            ...rec,
+            templateRecord: template ? {
+              id: template.id,
+              name: template.name,
+              type: template.type,
+              status: template.status,
+              riskLevel: template.riskLevel,
+              legalReviewStatus: template.legalReviewStatus,
+              version: template.version,
+              category: template.category
+            } : null,
+            draftable: template ? isDraftableStatus(template.status) : false
+          };
+        })
+      );
+      res.json({ projectId: project.id, recommendations: enriched, disclaimer: LEGAL_DISCLAIMER });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to recommend agreements" });
+    }
+  });
+  app.post("/api/projects/:id/workflow/sync-ledger", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const project = await storage.getContract(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const result = await syncAgreementToRightsLedger(project.id, userId);
+      res.json(result);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to sync rights ledger" });
+    }
+  });
+  app.post("/api/contracts/:id/sync-ledger", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (contract.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const result = await syncAgreementToRightsLedger(contract.id, userId);
+      res.json(result);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to sync rights ledger" });
+    }
+  });
+}
+var init_template_routes = __esm({
+  "server/template-routes.ts"() {
+    "use strict";
+    init_replitAuth();
+    init_adminAuth();
+    init_storage();
+    init_db();
+    init_schema();
+    init_agreement_catalog();
+    init_agreement_ledger();
   }
 });
 
@@ -6787,7 +10208,7 @@ var init_license_readiness = __esm({
 });
 
 // server/rights-ledger-routes.ts
-import { z as z14 } from "zod";
+import { z as z15 } from "zod";
 import crypto7 from "crypto";
 async function generateUniqueSlSongId() {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -6866,7 +10287,7 @@ function registerRightsLedgerRoutes(app) {
       await recalculateLicenseReadiness(req.params.id);
       res.json(composition);
     } catch (error) {
-      if (error instanceof z14.ZodError) {
+      if (error instanceof z15.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[COMPOSITION UPSERT ERROR]", error);
@@ -6902,7 +10323,7 @@ function registerRightsLedgerRoutes(app) {
       await recalculateLicenseReadiness(req.params.id);
       res.json(master);
     } catch (error) {
-      if (error instanceof z14.ZodError) {
+      if (error instanceof z15.ZodError) {
         res.status(400).json({ message: "Validation failed", issues: error.errors });
       } else {
         console.error("[MASTER UPSERT ERROR]", error);
@@ -6947,7 +10368,7 @@ function registerRightsLedgerRoutes(app) {
       try {
         const asset = await requireAssetOwner(req, res);
         if (!asset) return;
-        const { status } = z14.object({ status: z14.enum(["clear", "pending", "not_cleared", "not_applicable"]) }).parse(req.body);
+        const { status } = z15.object({ status: z15.enum(["clear", "pending", "not_cleared", "not_applicable"]) }).parse(req.body);
         const existing = await storage.getLicenseReadiness(req.params.id);
         await storage.upsertLicenseReadiness(req.params.id, {
           ownershipComplete: existing?.ownershipComplete ?? false,
@@ -6970,7 +10391,7 @@ function registerRightsLedgerRoutes(app) {
         const tier = tierForScore(readiness.licenseScore);
         res.json({ ...readiness, tier, tierLabel: tierLabel(tier) });
       } catch (error) {
-        if (error instanceof z14.ZodError) {
+        if (error instanceof z15.ZodError) {
           res.status(400).json({ message: "Validation failed", issues: error.errors });
         } else {
           console.error("[SAMPLE CLEARANCE UPDATE ERROR]", error);
@@ -7014,8 +10435,8 @@ var init_rights_ledger_routes = __esm({
 import express2 from "express";
 import { createServer } from "http";
 import Stripe4 from "stripe";
-import { z as z15 } from "zod";
-import OpenAI2 from "openai";
+import { z as z16 } from "zod";
+import OpenAI3 from "openai";
 function rateLimit(maxRequests, windowMs) {
   return (req, res, next) => {
     const userId = req.user?.claims?.sub;
@@ -7109,8 +10530,15 @@ async function registerRoutes(app) {
   });
   app.get("/api/contract-templates", isAuthenticated, async (req, res) => {
     try {
-      const templates2 = await storage.getContractTemplates();
-      res.json(templates2);
+      const templates = await storage.getContractTemplates({
+        category: req.query.category,
+        status: req.query.status,
+        riskLevel: req.query.riskLevel,
+        jurisdiction: req.query.jurisdiction,
+        rights: req.query.rights,
+        search: req.query.search
+      });
+      res.json(templates);
     } catch (error) {
       console.error("Error fetching contract templates:", error);
       res.status(500).json({ message: "Failed to fetch contract templates" });
@@ -7163,15 +10591,46 @@ async function registerRoutes(app) {
   app.post("/api/contracts", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
+      let templateId = req.body.templateId;
+      let templateVersion = req.body.templateVersion;
+      let template = templateId ? await storage.getContractTemplate(templateId) : await storage.getContractTemplateByType(req.body.type);
+      if (template) {
+        if (!isDraftableStatus(template.status) && !(template.isActive && (template.status == null || template.status === ""))) {
+          return res.status(400).json({
+            message: "Template is not available for new agreements",
+            status: template.status
+          });
+        }
+        templateId = template.id;
+        templateVersion = template.version || "1.0";
+        const fields = template.template?.fields ?? [];
+        if (fields.length > 0 && req.body.data && req.body.status !== "draft") {
+          const validation = validateTemplateFieldValues(fields, req.body.data);
+          if (!validation.ok) {
+            return res.status(400).json({
+              message: "Template field validation failed",
+              errors: validation.errors
+            });
+          }
+        }
+      }
       const contractData = insertContractSchema.parse({
         ...req.body,
-        createdBy: userId
+        templateId: templateId ?? req.body.templateId ?? null,
+        templateVersion: templateVersion ?? null,
+        createdBy: userId,
+        metadata: {
+          ...req.body.metadata || {},
+          createdFrom: req.body.metadata?.createdFrom || "template",
+          templateType: req.body.type,
+          templateVersion: templateVersion ?? null
+        }
       });
       const contract = await storage.createContract(contractData);
       res.json(contract);
     } catch (error) {
       console.error("Error creating contract:", error);
-      if (error instanceof z15.ZodError) {
+      if (error instanceof z16.ZodError) {
         return res.status(400).json({ message: "Invalid contract data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create contract" });
@@ -7273,7 +10732,7 @@ async function registerRoutes(app) {
         res.json(collaborator);
       } catch (error) {
         console.error("Error adding collaborator:", error);
-        if (error instanceof z15.ZodError) {
+        if (error instanceof z16.ZodError) {
           return res.status(400).json({
             message: "Invalid collaborator data",
             errors: error.errors
@@ -7341,7 +10800,7 @@ async function registerRoutes(app) {
         res.json(signature);
       } catch (error) {
         console.error("Error creating signature:", error);
-        if (error instanceof z15.ZodError) {
+        if (error instanceof z16.ZodError) {
           return res.status(400).json({ message: "Invalid signature data", errors: error.errors });
         }
         res.status(500).json({ message: "Failed to create signature" });
@@ -7463,7 +10922,7 @@ async function registerRoutes(app) {
       res.json(updatedUser);
     } catch (error) {
       console.error("Error updating profile:", error);
-      if (error instanceof z15.ZodError) {
+      if (error instanceof z16.ZodError) {
         return res.status(400).json({
           message: "Invalid profile data",
           errors: error.errors.map((e) => ({
@@ -7893,7 +11352,7 @@ async function registerRoutes(app) {
       res.json({ success: true });
     } catch (error) {
       console.error("Error tracking activity:", error);
-      if (error instanceof z15.ZodError) {
+      if (error instanceof z16.ZodError) {
         return res.status(400).json({ message: "Invalid activity data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to track activity" });
@@ -7907,7 +11366,7 @@ async function registerRoutes(app) {
       res.json({ success: true, processed: batchData.activities.length });
     } catch (error) {
       console.error("Error tracking batch activities:", error);
-      if (error instanceof z15.ZodError) {
+      if (error instanceof z16.ZodError) {
         return res.status(400).json({ message: "Invalid batch data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to track batch activities" });
@@ -7952,7 +11411,7 @@ async function registerRoutes(app) {
       res.status(201).json(negotiation);
     } catch (error) {
       console.error("Error creating negotiation:", error);
-      if (error instanceof z15.ZodError) {
+      if (error instanceof z16.ZodError) {
         return res.status(400).json({ message: "Invalid negotiation data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create negotiation" });
@@ -8052,7 +11511,7 @@ async function registerRoutes(app) {
         }
       } catch (error) {
         console.error("Error adding conversation:", error);
-        if (error instanceof z15.ZodError) {
+        if (error instanceof z16.ZodError) {
           return res.status(400).json({
             message: "Invalid conversation data",
             errors: error.errors
@@ -8655,6 +12114,11 @@ async function registerRoutes(app) {
         const allConfirmed = allConfirmations.every((c) => c.status === "confirmed");
         if (allConfirmed) {
           await storage.updateContract(confirmation.contractId, { status: "signed" });
+          try {
+            await syncAgreementToRightsLedger(confirmation.contractId);
+          } catch (syncErr) {
+            console.error("Rights ledger sync after confirmation failed:", syncErr);
+          }
         }
       }
       res.json(updatedConfirmation);
@@ -8681,7 +12145,9 @@ async function registerRoutes(app) {
   registerRightsRoutes(app);
   registerRightsLedgerRoutes(app);
   registerLegalRoutes(app);
+  registerTemplateRoutes(app);
   registerCopilotRoutes(app);
+  registerVoiceRoutes(app);
   registerPaymentRoutes(app);
   await registerSecurityRoutes(app);
   registerVerificationRoutes(app);
@@ -8700,6 +12166,7 @@ var init_routes = __esm({
     init_schema();
     init_confirmation_routes();
     init_copilot_routes();
+    init_voice_routes();
     init_service_routes();
     init_organization_routes();
     init_message_routes();
@@ -8710,6 +12177,9 @@ var init_routes = __esm({
     init_creator_routes();
     init_rights_routes();
     init_legal_routes();
+    init_template_routes();
+    init_agreement_ledger();
+    init_agreement_catalog();
     init_adminAuth();
     init_rights_ledger_routes();
     init_security();
@@ -8733,75 +12203,32 @@ var init_routes = __esm({
         "STRIPE_SECRET_KEY not found - Stripe functionality will be disabled"
       );
     }
-    openai = new OpenAI2({
+    openai = new OpenAI3({
       apiKey: process.env.OPENAI_API_KEY
     });
   }
 });
 
 // server/chatbotRoutes.ts
-import OpenAI3 from "openai";
-import { promises as fs2 } from "fs";
-async function loadKnowledgeBase() {
-  try {
-    const knowledgeBaseContent = await fs2.readFile(
-      "/home/ubuntu/splitsheet-platform/chatbot_knowledge_base.md",
-      "utf-8"
-    );
-    return knowledgeBaseContent;
-  } catch (error) {
-    console.error("Error loading knowledge base:", error);
-    return "";
-  }
-}
 function registerChatbotRoutes(app) {
-  app.post("/api/chatbot", isAuthenticated, async (req, res) => {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ message: "OpenAI API key not configured." });
-    }
-    const { query } = req.body;
-    if (!query) {
-      return res.status(400).json({ message: "Query is required." });
-    }
-    try {
-      const knowledgeBase = await loadKnowledgeBase();
-      const response = await openai2.chat.completions.create({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `You are the SoundLedger Co-pilot, an AI assistant for the SplitSheet platform. Your goal is to assist users with onboarding, walkthroughs, and platform guidance based on the provided knowledge base. Be concise, helpful, and directly answer questions using only the information from the knowledge base. If the answer is not in the knowledge base, state that you don't have enough information to answer.
-
-Knowledge Base:
-${knowledgeBase}`
-          },
-          { role: "user", content: query }
-        ],
-        max_tokens: 500,
-        temperature: 0.7
-      });
-      const botResponse = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that.";
-      res.json({ response: botResponse });
-    } catch (error) {
-      console.error("Error processing chatbot query:", error);
-      res.status(500).json({ message: "Error processing your request." });
-    }
+  app.post("/api/chatbot", isAuthenticated, (_req, res) => {
+    res.status(410).json({
+      error: "This endpoint is retired. Use POST /api/copilot for product-grounded Copilot answers.",
+      code: "chatbot_retired",
+      redirect: "/api/copilot"
+    });
   });
 }
-var openai2;
 var init_chatbotRoutes = __esm({
   "server/chatbotRoutes.ts"() {
     "use strict";
     init_replitAuth();
-    openai2 = new OpenAI3({
-      apiKey: process.env.OPENAI_API_KEY
-    });
   }
 });
 
 // server/static-serve.ts
 import express3 from "express";
-import fs3 from "fs";
+import fs2 from "fs";
 import path2 from "path";
 function log2(message, source = "express") {
   const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
@@ -8818,7 +12245,7 @@ function serveStatic(app, options = {}) {
     path2.resolve(import.meta.dirname, "..", "dist", "public"),
     path2.resolve(process.cwd(), "dist", "public")
   ];
-  const distPath = candidates.find((p) => fs3.existsSync(p));
+  const distPath = candidates.find((p) => fs2.existsSync(p));
   if (!distPath) {
     const message = `Could not find the build directory (tried: ${candidates.join(", ")}). Run \`vite build\` / \`npm run build\` first.`;
     if (options.optional) {
@@ -8828,7 +12255,13 @@ function serveStatic(app, options = {}) {
     throw new Error(message);
   }
   app.use(express3.static(distPath));
-  app.use("*", (_req, res) => {
+  app.use("*", (req, res) => {
+    if (req.originalUrl.startsWith("/api")) {
+      return res.status(404).json({
+        error: "API route not found",
+        path: req.originalUrl.split("?")[0]
+      });
+    }
     res.sendFile(path2.resolve(distPath, "index.html"));
   });
 }
@@ -8839,114 +12272,73 @@ var init_static_serve = __esm({
 });
 
 // server/seedData.ts
+import { eq as eq6 } from "drizzle-orm";
 async function seedContractTemplates() {
   try {
-    console.log("Seeding contract templates...");
-    const existingTemplates = await db.select().from(contractTemplates);
-    if (existingTemplates.length > 0) {
-      console.log("Templates already exist, skipping seed");
-      return;
+    console.log("Seeding entertainment agreement template library (MVP-gated)...");
+    const existing = await db.select().from(contractTemplates);
+    const byType = new Map(existing.map((t) => [t.type, t]));
+    let inserted = 0;
+    let updated = 0;
+    for (const seed of CATALOG_TEMPLATES) {
+      const row = catalogToDbRow(seed);
+      const status = mvpStatusForType(seed.type);
+      row.status = status;
+      row.isActive = status === "active";
+      row.legalReviewStatus = mvpLegalReviewForType(seed.type);
+      if (isMvpTemplateType(seed.type)) {
+        const spec = MVP_TEMPLATE_SPECS.find((s) => s.type === seed.type);
+        if (spec?.generationMode === "counsel_required") {
+          row.workflowType = "counsel-required";
+        } else if (spec?.generationMode === "controlled_workflow") {
+          row.workflowType = "controlled-workflow";
+        }
+      }
+      const current = byType.get(seed.type);
+      if (!current) {
+        await db.insert(contractTemplates).values(row);
+        inserted += 1;
+        continue;
+      }
+      const preserveLegacyJson = Boolean(seed.legacy && current.template);
+      await db.update(contractTemplates).set({
+        name: row.name,
+        slug: row.slug,
+        description: row.description,
+        category: row.category,
+        subcategory: row.subcategory,
+        industry: row.industry,
+        agreementType: row.agreementType,
+        version: row.version,
+        status: row.status,
+        jurisdiction: row.jurisdiction,
+        legalReviewStatus: row.legalReviewStatus,
+        rightsCategories: row.rightsCategories,
+        requiredParties: row.requiredParties,
+        optionalParties: row.optionalParties,
+        riskLevel: row.riskLevel,
+        workflowType: row.workflowType,
+        supportedTransactions: row.supportedTransactions,
+        isActive: row.isActive,
+        template: preserveLegacyJson ? current.template : row.template,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq6(contractTemplates.id, current.id));
+      updated += 1;
     }
-    for (const template of templates) {
-      await db.insert(contractTemplates).values(template);
-    }
-    console.log("Contract templates seeded successfully");
+    console.log(
+      `Contract templates seed complete: ${inserted} inserted, ${updated} updated, catalog ${CATALOG_TEMPLATES.length}, MVP active ${MVP_TEMPLATE_SPECS.length}`
+    );
   } catch (error) {
     console.error("Error seeding contract templates:", error);
   }
 }
-var templates;
 var init_seedData = __esm({
   "server/seedData.ts"() {
     "use strict";
     init_db();
     init_schema();
-    templates = [
-      {
-        name: "Split Sheet Agreement",
-        type: "split-sheet",
-        description: "Define ownership percentages and revenue splits for collaborative music projects.",
-        template: {
-          fields: [
-            { name: "title", label: "Song Title", type: "text", required: true },
-            { name: "releaseDate", label: "Release Date", type: "date", required: false },
-            { name: "collaborators", label: "Collaborators", type: "array", required: true },
-            { name: "performanceRoyalties", label: "Performance Royalties", type: "select", required: true },
-            { name: "mechanicalRoyalties", label: "Mechanical Royalties", type: "select", required: true },
-            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-          ],
-          legalClauses: [
-            "All parties agree to the ownership percentages as specified herein.",
-            "Revenue splits shall be distributed according to the agreed percentages.",
-            "Publishing rights shall be administered according to ownership shares.",
-            "This agreement shall be governed by the laws of [State/Country]."
-          ]
-        }
-      },
-      {
-        name: "Performance Agreement",
-        type: "performance",
-        description: "Secure bookings with venues, festivals, and event organizers.",
-        template: {
-          fields: [
-            { name: "title", label: "Event Title", type: "text", required: true },
-            { name: "venue", label: "Venue", type: "text", required: true },
-            { name: "eventDate", label: "Event Date", type: "datetime", required: true },
-            { name: "performanceFee", label: "Performance Fee", type: "number", required: true },
-            { name: "technicalRequirements", label: "Technical Requirements", type: "textarea", required: false },
-            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-          ],
-          legalClauses: [
-            "Artist agrees to perform at the specified venue on the agreed date and time.",
-            "Venue agrees to provide adequate sound system and technical support.",
-            "Payment shall be made within 30 days of performance completion.",
-            "Force majeure clause applies to unforeseen circumstances preventing performance."
-          ]
-        }
-      },
-      {
-        name: "Producer Agreement",
-        type: "producer",
-        description: "Establish terms for beat licensing, production credits, and royalties.",
-        template: {
-          fields: [
-            { name: "title", label: "Track Title", type: "text", required: true },
-            { name: "producerName", label: "Producer Name", type: "text", required: true },
-            { name: "beatPrice", label: "Beat Price", type: "number", required: true },
-            { name: "royaltyPercentage", label: "Royalty Percentage", type: "number", required: true },
-            { name: "creditRequirement", label: "Credit Requirement", type: "text", required: true },
-            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-          ],
-          legalClauses: [
-            "Producer grants exclusive/non-exclusive rights to the beat as specified.",
-            "Artist agrees to provide proper production credits as specified.",
-            "Royalty payments shall be made according to the agreed percentage.",
-            "Producer retains ownership of the underlying musical composition."
-          ]
-        }
-      },
-      {
-        name: "Management Agreement",
-        type: "management",
-        description: "Define roles and responsibilities with your artist manager or booking agent.",
-        template: {
-          fields: [
-            { name: "title", label: "Agreement Title", type: "text", required: true },
-            { name: "managerName", label: "Manager Name", type: "text", required: true },
-            { name: "commissionRate", label: "Commission Rate", type: "number", required: true },
-            { name: "contractDuration", label: "Contract Duration", type: "text", required: true },
-            { name: "responsibilities", label: "Manager Responsibilities", type: "textarea", required: true },
-            { name: "additionalTerms", label: "Additional Terms", type: "textarea", required: false }
-          ],
-          legalClauses: [
-            "Manager agrees to provide professional representation and career guidance.",
-            "Artist agrees to pay the specified commission rate on gross earnings.",
-            "Either party may terminate this agreement with 30 days written notice.",
-            "Manager shall act in the best interests of the artist at all times."
-          ]
-        }
-      }
-    ];
+    init_agreement_catalog();
+    init_agreement_mvp();
   }
 });
 
@@ -8994,9 +12386,9 @@ var init_transport_security = __esm({
 });
 
 // server/db-migrations.ts
-import { sql as sql10 } from "drizzle-orm";
+import { sql as sql11 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
-  await db.execute(sql10`
+  await db.execute(sql11`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS stripe_connect_account_id varchar,
       ADD COLUMN IF NOT EXISTS stripe_connect_onboarded boolean DEFAULT false,
@@ -9005,7 +12397,7 @@ async function runCoreSchemaMigrations() {
       ADD COLUMN IF NOT EXISTS terms_accepted_at timestamp,
       ADD COLUMN IF NOT EXISTS terms_version varchar;
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL REFERENCES contracts(id),
@@ -9021,7 +12413,7 @@ async function runCoreSchemaMigrations() {
       updated_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS song_assets (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       title       varchar NOT NULL,
@@ -9035,11 +12427,11 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS ownership_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id             varchar NOT NULL REFERENCES song_assets(id),
@@ -9053,13 +12445,13 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     ALTER TABLE ownership_records
       ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
       ADD COLUMN IF NOT EXISTS territory varchar,
       ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS revenue_events (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id     varchar NOT NULL REFERENCES song_assets(id),
@@ -9073,7 +12465,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS payout_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       revenue_event_id     varchar NOT NULL REFERENCES revenue_events(id),
@@ -9088,7 +12480,7 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS user_balances (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -9099,7 +12491,7 @@ async function runCoreSchemaMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS split_confirmations (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL REFERENCES contracts(id),
@@ -9118,7 +12510,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,
@@ -9128,7 +12520,7 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS error_logs (
       id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       level      varchar NOT NULL DEFAULT 'error',
@@ -9140,14 +12532,14 @@ async function runCoreSchemaMigrations() {
       created_at timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS rate_limit_buckets (
       bucket_key varchar PRIMARY KEY,
       count      integer NOT NULL DEFAULT 0,
       reset_at   timestamp NOT NULL
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS organizations (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_org_id   varchar NOT NULL UNIQUE,
@@ -9162,7 +12554,7 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS organization_members (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -9173,9 +12565,9 @@ async function runCoreSchemaMigrations() {
       UNIQUE (organization_id, user_id)
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS organization_api_keys (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -9189,8 +12581,8 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar REFERENCES users(id),
@@ -9206,7 +12598,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS rights_organizations (
       id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       name              varchar NOT NULL,
@@ -9217,7 +12609,7 @@ async function runCoreSchemaMigrations() {
       created_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS creators (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_creator_id varchar NOT NULL UNIQUE,
@@ -9234,8 +12626,8 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS creator_rights_profiles (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -9248,7 +12640,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS composition_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -9259,7 +12651,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS master_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -9273,7 +12665,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS license_readiness (
       id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -9286,7 +12678,7 @@ async function runCoreSchemaMigrations() {
       last_checked_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
     SELECT * FROM (VALUES
       ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
@@ -9307,7 +12699,7 @@ async function runCoreSchemaMigrations() {
   `);
 }
 async function runLegalDocumentMigrations() {
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS legal_documents (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       doc_type       varchar NOT NULL,
@@ -9319,7 +12711,7 @@ async function runLegalDocumentMigrations() {
       UNIQUE (doc_type, version)
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL REFERENCES users(id),
@@ -9330,18 +12722,18 @@ async function runLegalDocumentMigrations() {
       user_agent   varchar
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+  await db.execute(sql11`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
     FROM users u
@@ -9352,7 +12744,7 @@ async function runLegalDocumentMigrations() {
         WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
       );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
     FROM users u
@@ -9365,7 +12757,7 @@ async function runLegalDocumentMigrations() {
   `);
 }
 async function runSecurityEngineMigrations() {
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS split_versions (
       id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar NOT NULL,
@@ -9383,8 +12775,8 @@ async function runSecurityEngineMigrations() {
       UNIQUE (contract_id, version_number)
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS split_signatures (
       id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       split_version_id uuid NOT NULL REFERENCES split_versions(id) ON DELETE CASCADE,
@@ -9405,7 +12797,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (split_version_id, signer_email)
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS fraud_events (
       id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL,
@@ -9418,8 +12810,8 @@ async function runSecurityEngineMigrations() {
       created_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS contract_risk_profiles (
       contract_id        varchar PRIMARY KEY,
       current_score      integer NOT NULL DEFAULT 0,
@@ -9431,7 +12823,7 @@ async function runSecurityEngineMigrations() {
       updated_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS audit_log (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       varchar,
@@ -9447,8 +12839,8 @@ async function runSecurityEngineMigrations() {
       created_at    timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS api_keys (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       owner_id     varchar NOT NULL,
@@ -9463,8 +12855,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS login_events (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL,
@@ -9476,8 +12868,8 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS user_devices (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL,
@@ -9490,7 +12882,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (user_id, device_hash)
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS disputes (
       id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id       varchar NOT NULL,
@@ -9507,8 +12899,8 @@ async function runSecurityEngineMigrations() {
       updated_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
-  await db.execute(sql10`
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS dispute_transitions (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       dispute_id  uuid NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
@@ -9519,7 +12911,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`
+  await db.execute(sql11`
     CREATE TABLE IF NOT EXISTS zk_ownership_proofs (
       proof_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL,
@@ -9539,7 +12931,150 @@ async function runSecurityEngineMigrations() {
       created_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql10`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql11`
+    ALTER TABLE contract_templates
+      ADD COLUMN IF NOT EXISTS slug varchar,
+      ADD COLUMN IF NOT EXISTS category varchar,
+      ADD COLUMN IF NOT EXISTS subcategory varchar,
+      ADD COLUMN IF NOT EXISTS industry varchar DEFAULT 'music',
+      ADD COLUMN IF NOT EXISTS agreement_type varchar,
+      ADD COLUMN IF NOT EXISTS version varchar DEFAULT '1.0',
+      ADD COLUMN IF NOT EXISTS status varchar DEFAULT 'draft',
+      ADD COLUMN IF NOT EXISTS jurisdiction varchar,
+      ADD COLUMN IF NOT EXISTS legal_review_status varchar DEFAULT 'NOT_REVIEWED',
+      ADD COLUMN IF NOT EXISTS legal_review_date timestamp,
+      ADD COLUMN IF NOT EXISTS rights_categories jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS required_parties jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS optional_parties jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS risk_level varchar DEFAULT 'medium',
+      ADD COLUMN IF NOT EXISTS workflow_type varchar,
+      ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS parent_template_id varchar;
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+  await db.execute(sql11`
+    ALTER TABLE contracts
+      ADD COLUMN IF NOT EXISTS template_version varchar;
+  `);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS template_audit_log (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      template_id varchar REFERENCES contract_templates(id),
+      actor_id    varchar REFERENCES users(id),
+      action      varchar NOT NULL,
+      before      jsonb,
+      after       jsonb,
+      created_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS license_records (
+      id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id     varchar REFERENCES contracts(id),
+      asset_id        varchar REFERENCES song_assets(id),
+      license_type    varchar NOT NULL,
+      licensor_name   varchar,
+      licensee_name   varchar,
+      territory       varchar,
+      term            varchar,
+      exclusivity     varchar,
+      rights_granted  jsonb DEFAULT '[]'::jsonb,
+      fee             decimal(12, 2),
+      metadata        jsonb,
+      version         integer DEFAULT 1,
+      created_by      varchar REFERENCES users(id),
+      created_at      timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS voice_sessions (
+      id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         varchar NOT NULL REFERENCES users(id),
+      organization_id varchar,
+      status          varchar DEFAULT 'active',
+      page_context    varchar,
+      project_id      varchar,
+      contract_id     varchar,
+      locale          varchar DEFAULT 'en-CA',
+      metadata        jsonb,
+      expires_at      timestamp,
+      closed_at       timestamp,
+      created_at      timestamp DEFAULT now(),
+      updated_at      timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS voice_turns (
+      id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id            varchar NOT NULL REFERENCES voice_sessions(id),
+      user_id               varchar NOT NULL REFERENCES users(id),
+      role                  varchar NOT NULL,
+      transcript            text,
+      transcript_confidence decimal(5,4),
+      intent                varchar,
+      intent_confidence     decimal(5,4),
+      entities              jsonb,
+      validation            jsonb,
+      response_text         text,
+      risk_level            varchar,
+      requires_confirmation boolean DEFAULT false,
+      audio_retention_until timestamp,
+      created_at            timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS voice_pending_actions (
+      id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id   varchar NOT NULL REFERENCES voice_sessions(id),
+      turn_id      varchar REFERENCES voice_turns(id),
+      user_id      varchar NOT NULL REFERENCES users(id),
+      action_type  varchar NOT NULL,
+      payload      jsonb NOT NULL,
+      status       varchar DEFAULT 'pending',
+      confidence   decimal(5,4),
+      expires_at   timestamp,
+      confirmed_at timestamp,
+      executed_at  timestamp,
+      result       jsonb,
+      created_at   timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS voice_provenance (
+      id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id           varchar REFERENCES voice_sessions(id),
+      turn_id              varchar REFERENCES voice_turns(id),
+      user_id              varchar NOT NULL REFERENCES users(id),
+      source               varchar NOT NULL,
+      field_path           varchar NOT NULL,
+      extracted_value      jsonb,
+      confidence           decimal(5,4),
+      confirmation_status  varchar,
+      result_ref           varchar,
+      created_at           timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`
+    CREATE TABLE IF NOT EXISTS voice_user_memory (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     varchar NOT NULL REFERENCES users(id),
+      key         varchar NOT NULL,
+      value       jsonb NOT NULL,
+      category    varchar DEFAULT 'preference',
+      authorized  boolean DEFAULT true,
+      expires_at  timestamp,
+      created_at  timestamp DEFAULT now(),
+      updated_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }
 var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
 var init_db_migrations = __esm({
@@ -9709,7 +13244,8 @@ async function buildApp() {
   }
   app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();
-    return express4.json({ limit: "1mb" })(req, res, next);
+    const limit = req.path.startsWith("/api/copilot/voice") ? "6mb" : "1mb";
+    return express4.json({ limit })(req, res, next);
   });
   app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();

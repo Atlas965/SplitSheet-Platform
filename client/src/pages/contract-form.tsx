@@ -175,7 +175,7 @@ export default function ContractFormPage() {
             href="/templates"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            ← Templates
+            ← Agreement Templates
           </Link>
           <div className="flex flex-wrap items-center gap-2 mt-2">
             <h1 className="text-2xl font-bold">{template.name}</h1>

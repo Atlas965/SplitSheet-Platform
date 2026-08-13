@@ -97,6 +97,86 @@ export const templateAuditLog = pgTable("template_audit_log", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/** Copilot Voice Assistant — session orchestration (not UI) */
+export const voiceSessions = pgTable("voice_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  organizationId: varchar("organization_id"),
+  status: varchar("status").default("active"), // active | closed | expired
+  pageContext: varchar("page_context"),
+  projectId: varchar("project_id"),
+  contractId: varchar("contract_id"),
+  locale: varchar("locale").default("en-CA"),
+  metadata: jsonb("metadata"),
+  expiresAt: timestamp("expires_at"),
+  closedAt: timestamp("closed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const voiceTurns = pgTable("voice_turns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").references(() => voiceSessions.id).notNull(),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  role: varchar("role").notNull(), // user | assistant | system
+  transcript: text("transcript"),
+  transcriptConfidence: decimal("transcript_confidence", { precision: 5, scale: 4 }),
+  intent: varchar("intent"),
+  intentConfidence: decimal("intent_confidence", { precision: 5, scale: 4 }),
+  entities: jsonb("entities"),
+  validation: jsonb("validation"),
+  responseText: text("response_text"),
+  riskLevel: varchar("risk_level"),
+  requiresConfirmation: boolean("requires_confirmation").default(false),
+  audioRetentionUntil: timestamp("audio_retention_until"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Pending consequential actions awaiting explicit confirmation (voice never auto-executes these) */
+export const voicePendingActions = pgTable("voice_pending_actions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").references(() => voiceSessions.id).notNull(),
+  turnId: varchar("turn_id").references(() => voiceTurns.id),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  actionType: varchar("action_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  status: varchar("status").default("pending"), // pending | confirmed | rejected | expired | executed | failed
+  confidence: decimal("confidence", { precision: 5, scale: 4 }),
+  expiresAt: timestamp("expires_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  executedAt: timestamp("executed_at"),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Provenance chain: spoken instruction → structured field */
+export const voiceProvenance = pgTable("voice_provenance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").references(() => voiceSessions.id),
+  turnId: varchar("turn_id").references(() => voiceTurns.id),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  source: varchar("source").notNull(), // voice | text | system
+  fieldPath: varchar("field_path").notNull(),
+  extractedValue: jsonb("extracted_value"),
+  confidence: decimal("confidence", { precision: 5, scale: 4 }),
+  confirmationStatus: varchar("confirmation_status"), // none | pending | confirmed | rejected
+  resultRef: varchar("result_ref"), // contract id, asset id, etc.
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Persistent user-authorized Copilot memory (separate from canonical rights records) */
+export const voiceUserMemory = pgTable("voice_user_memory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  key: varchar("key").notNull(),
+  value: jsonb("value").notNull(),
+  category: varchar("category").default("preference"), // preference | collaborator | workflow | terminology
+  authorized: boolean("authorized").default(true),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Contracts
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -11,6 +11,12 @@ import {
   validateOwnershipPercents,
   validateTemplateFieldValues,
 } from "../../shared/agreement-catalog";
+import {
+  MVP_TEMPLATE_SPECS,
+  PHASE2_WAIT_TEMPLATES,
+  HIGH_RISK_HOLD_TEMPLATES,
+  mvpStatusForType,
+} from "../../shared/agreement-mvp";
 
 describe("Entertainment Agreement Template Catalog", () => {
   it("includes 56 unique templates", () => {
@@ -39,20 +45,44 @@ describe("Entertainment Agreement Template Catalog", () => {
     }
   });
 
-  it("preserves legacy template types as active", () => {
-    for (const type of ["split-sheet", "performance", "producer", "management"]) {
-      const row = CATALOG_TEMPLATES.find((t) => t.type === type);
-      expect(row?.status).toBe("active");
-      expect(row?.legacy).toBe(true);
-    }
-  });
-
   it("builds DB rows with field-engine JSON", () => {
     const row = catalogToDbRow(CATALOG_TEMPLATES[0]);
     expect(row.slug).toBeTruthy();
     expect(row.template.fieldEngine).toBe(true);
     expect(Array.isArray(row.template.fields)).toBe(true);
     expect(row.template.disclaimer).toMatch(/not a law firm/i);
+  });
+});
+
+describe("MVP template gate", () => {
+  it("activates exactly 12 MVP templates", () => {
+    expect(MVP_TEMPLATE_SPECS).toHaveLength(12);
+    for (const spec of MVP_TEMPLATE_SPECS) {
+      expect(mvpStatusForType(spec.type)).toBe("active");
+      expect(CATALOG_TEMPLATES.some((t) => t.type === spec.type)).toBe(true);
+    }
+  });
+
+  it("keeps Phase 2 and high-risk hold templates out of active MVP status", () => {
+    for (const t of PHASE2_WAIT_TEMPLATES) {
+      if (!MVP_TEMPLATE_SPECS.some((m) => m.type === t.type)) {
+        expect(mvpStatusForType(t.type)).toBe("draft");
+      }
+    }
+    for (const t of HIGH_RISK_HOLD_TEMPLATES) {
+      if (t.type === "work-for-hire-music") {
+        expect(mvpStatusForType(t.type)).toBe("active");
+      } else {
+        expect(mvpStatusForType(t.type)).toBe("draft");
+      }
+    }
+  });
+
+  it("demotes legacy performance/management from MVP active set", () => {
+    expect(mvpStatusForType("performance")).toBe("draft");
+    expect(mvpStatusForType("management")).toBe("draft");
+    expect(mvpStatusForType("split-sheet")).toBe("active");
+    expect(mvpStatusForType("producer")).toBe("active");
   });
 });
 
@@ -97,7 +127,7 @@ describe("Recommendation engine", () => {
     expect(types).toContain("split-sheet");
     expect(types).toContain("producer");
     expect(types).toContain("master-ownership");
-    expect(types).toContain("publishing-admin");
+    expect(types).not.toContain("publishing-admin");
     expect(recs.find((r) => r.template === "producer")?.required).toBe(true);
   });
 

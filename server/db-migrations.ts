@@ -785,4 +785,95 @@ export async function runSecurityEngineMigrations(): Promise<void> {
     );
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+
+  // ── Copilot Voice Assistant orchestration tables ──────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS voice_sessions (
+      id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         varchar NOT NULL REFERENCES users(id),
+      organization_id varchar,
+      status          varchar DEFAULT 'active',
+      page_context    varchar,
+      project_id      varchar,
+      contract_id     varchar,
+      locale          varchar DEFAULT 'en-CA',
+      metadata        jsonb,
+      expires_at      timestamp,
+      closed_at       timestamp,
+      created_at      timestamp DEFAULT now(),
+      updated_at      timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS voice_turns (
+      id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id            varchar NOT NULL REFERENCES voice_sessions(id),
+      user_id               varchar NOT NULL REFERENCES users(id),
+      role                  varchar NOT NULL,
+      transcript            text,
+      transcript_confidence decimal(5,4),
+      intent                varchar,
+      intent_confidence     decimal(5,4),
+      entities              jsonb,
+      validation            jsonb,
+      response_text         text,
+      risk_level            varchar,
+      requires_confirmation boolean DEFAULT false,
+      audio_retention_until timestamp,
+      created_at            timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS voice_pending_actions (
+      id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id   varchar NOT NULL REFERENCES voice_sessions(id),
+      turn_id      varchar REFERENCES voice_turns(id),
+      user_id      varchar NOT NULL REFERENCES users(id),
+      action_type  varchar NOT NULL,
+      payload      jsonb NOT NULL,
+      status       varchar DEFAULT 'pending',
+      confidence   decimal(5,4),
+      expires_at   timestamp,
+      confirmed_at timestamp,
+      executed_at  timestamp,
+      result       jsonb,
+      created_at   timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS voice_provenance (
+      id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id           varchar REFERENCES voice_sessions(id),
+      turn_id              varchar REFERENCES voice_turns(id),
+      user_id              varchar NOT NULL REFERENCES users(id),
+      source               varchar NOT NULL,
+      field_path           varchar NOT NULL,
+      extracted_value      jsonb,
+      confidence           decimal(5,4),
+      confirmation_status  varchar,
+      result_ref           varchar,
+      created_at           timestamp DEFAULT now()
+    );
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS voice_user_memory (
+      id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     varchar NOT NULL REFERENCES users(id),
+      key         varchar NOT NULL,
+      value       jsonb NOT NULL,
+      category    varchar DEFAULT 'preference',
+      authorized  boolean DEFAULT true,
+      expires_at  timestamp,
+      created_at  timestamp DEFAULT now(),
+      updated_at  timestamp DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }

@@ -26,7 +26,7 @@ export async function streamCopilotCompletion(
   return openai.chat.completions.create({
     model: getCopilotModel(),
     max_tokens: 1200,
-    temperature: 0.3,
+    temperature: 0.2,
     stream: true,
     messages: [
       { role: "system", content: systemContent },

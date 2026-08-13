@@ -29,6 +29,7 @@ import {
 } from "@shared/schema";
 import { registerConfirmationRoutes } from "./confirmation-routes";
 import { registerCopilotRoutes } from "./copilot-routes";
+import { registerVoiceRoutes } from "./voice-routes";
 import { registerServiceRoutes } from "./service-routes";
 import { registerOrganizationRoutes } from "./organization-routes";
 import { registerMessageRoutes } from "./message-routes";
@@ -2300,6 +2301,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);
+
+  // Copilot Voice Assistant orchestration layer (no UI)
+  registerVoiceRoutes(app);
 
   // Stripe Connect payouts — per-contributor royalty transfers
   registerPaymentRoutes(app);

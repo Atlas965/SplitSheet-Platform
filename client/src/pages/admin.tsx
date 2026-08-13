@@ -324,7 +324,7 @@ export default function AdminPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold">Agreement Template Management</h3>
+            <h3 className="text-lg font-semibold">Entertainment Agreement Templates</h3>
             <p className="text-sm text-muted-foreground">
               Activate, archive, version, and set legal-review status. Changes are audit-logged.
             </p>
@@ -401,7 +401,7 @@ export default function AdminPage() {
           </TabsTrigger>
           <TabsTrigger value="templates">
             <FileText className="h-4 w-4 mr-2" />
-            Templates
+            Agreements
           </TabsTrigger>
           <TabsTrigger value="monitoring">
             <Activity className="h-4 w-4 mr-2" />

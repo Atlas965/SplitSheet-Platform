@@ -882,6 +882,13 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
       reason: "Project includes multiple songwriters or composition contributors requiring documented ownership splits.",
       riskLevel: "medium",
     });
+    push({
+      template: "co-writing",
+      priority: "medium",
+      required: false,
+      reason: "Co-writing terms clarify credit and ownership before or alongside the split sheet.",
+      riskLevel: "medium",
+    });
   }
 
   if (input.hasProducer || hasRole("producer")) {
@@ -919,14 +926,11 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
       reason: "Project references a master recording — clarify master ownership before release or license.",
       riskLevel: "high",
     });
-  }
-
-  if (input.hasPublishing || hasRole("publisher", "publish")) {
     push({
-      template: "publishing-admin",
+      template: "master-license",
       priority: "medium",
       required: false,
-      reason: "Publishing administration is indicated for composition rights and royalty collection.",
+      reason: "If a third party will exploit the master, document a master license (exclusivity via fields).",
       riskLevel: "high",
     });
   }
@@ -941,16 +945,6 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
     });
   }
 
-  if (hasRole("remix", "remixer")) {
-    push({
-      template: "remixer",
-      priority: "high",
-      required: true,
-      reason: "Remix deliverables and remix master rights should be documented.",
-      riskLevel: "medium",
-    });
-  }
-
   if (hasRole("session", "musician", "instrument")) {
     push({
       template: "session-musician",
@@ -961,13 +955,13 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
     });
   }
 
-  if (input.hasLiveEvent || hasRole("venue", "promoter", "tour", "festival")) {
+  if (hasRole("vocal", "singer")) {
     push({
-      template: "performance",
-      priority: "high",
-      required: true,
-      reason: "Live event metadata indicates a performance engagement should be documented.",
-      riskLevel: "medium",
+      template: "vocalist",
+      priority: "medium",
+      required: false,
+      reason: "Vocalist services should be documented with fee and optional points.",
+      riskLevel: "low",
     });
   }
 
@@ -979,14 +973,21 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
       reason: "Audiovisual / sync use case detected — composition and/or master sync terms are recommended.",
       riskLevel: "high",
     });
-  }
-
-  if (hasRole("manager", "management")) {
     push({
-      template: "management",
+      template: "master-use-license",
       priority: "medium",
       required: false,
-      reason: "Manager relationship indicated — document commission and scope.",
+      reason: "If the master is licensed separately for the use, document a master-use license.",
+      riskLevel: "high",
+    });
+  }
+
+  if (hasRole("commission", "work for hire", "wfh", "brand")) {
+    push({
+      template: "work-for-hire-music",
+      priority: "high",
+      required: true,
+      reason: "Commissioned / assignment intent detected — use the WFH workflow with counsel gate.",
       riskLevel: "high",
     });
   }
@@ -997,7 +998,7 @@ export function recommendAgreements(input: RecommendationInput): TemplateRecomme
       template: "split-sheet",
       priority: "medium",
       required: false,
-      reason: "Baseline recommendation for music projects: document composition ownership early.",
+      reason: "Baseline MVP recommendation: document composition ownership early.",
       riskLevel: "medium",
     });
   }

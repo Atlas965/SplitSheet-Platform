@@ -2,17 +2,20 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { contractTemplates } from "@shared/schema";
 import { CATALOG_TEMPLATES, catalogToDbRow } from "@shared/agreement-catalog";
+import {
+  isMvpTemplateType,
+  mvpLegalReviewForType,
+  mvpStatusForType,
+  MVP_TEMPLATE_SPECS,
+} from "@shared/agreement-mvp";
 
 /**
  * Upsert the Entertainment Agreement Template Library by `type`.
- * - Inserts missing templates
- * - Refreshes metadata for existing rows
- * - Preserves legacy template JSON field layouts for the original 4 types
- *   when they already exist (so customized DBs are not clobbered)
+ * MVP (12) templates are activated for production create; Phase 2+ remain draft.
  */
 export async function seedContractTemplates() {
   try {
-    console.log("Seeding entertainment agreement template library...");
+    console.log("Seeding entertainment agreement template library (MVP-gated)...");
 
     const existing = await db.select().from(contractTemplates);
     const byType = new Map(existing.map((t) => [t.type, t]));
@@ -22,6 +25,20 @@ export async function seedContractTemplates() {
 
     for (const seed of CATALOG_TEMPLATES) {
       const row = catalogToDbRow(seed);
+      // Enforce MVP activation policy (do not activate all 56)
+      const status = mvpStatusForType(seed.type);
+      row.status = status;
+      row.isActive = status === "active";
+      row.legalReviewStatus = mvpLegalReviewForType(seed.type);
+      if (isMvpTemplateType(seed.type)) {
+        const spec = MVP_TEMPLATE_SPECS.find((s) => s.type === seed.type);
+        if (spec?.generationMode === "counsel_required") {
+          row.workflowType = "counsel-required";
+        } else if (spec?.generationMode === "controlled_workflow") {
+          row.workflowType = "controlled-workflow";
+        }
+      }
+
       const current = byType.get(seed.type);
 
       if (!current) {
@@ -30,7 +47,6 @@ export async function seedContractTemplates() {
         continue;
       }
 
-      // Always refresh catalog metadata; keep legacy field JSON if already present
       const preserveLegacyJson = Boolean(seed.legacy && current.template);
       await db
         .update(contractTemplates)
@@ -61,7 +77,7 @@ export async function seedContractTemplates() {
     }
 
     console.log(
-      `Contract templates seed complete: ${inserted} inserted, ${updated} updated, catalog size ${CATALOG_TEMPLATES.length}`,
+      `Contract templates seed complete: ${inserted} inserted, ${updated} updated, catalog ${CATALOG_TEMPLATES.length}, MVP active ${MVP_TEMPLATE_SPECS.length}`,
     );
   } catch (error) {
     console.error("Error seeding contract templates:", error);

@@ -37,7 +37,13 @@ export function serveStatic(
   }
 
   app.use(express.static(distPath));
-  app.use("*", (_req, res) => {
+  app.use("*", (req, res) => {
+    if (req.originalUrl.startsWith("/api")) {
+      return res.status(404).json({
+        error: "API route not found",
+        path: req.originalUrl.split("?")[0],
+      });
+    }
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

@@ -1,37 +1,26 @@
 /**
  * Offline fallback responses when OpenAI is unavailable (quota, network, etc.).
- * Keeps CoPilot useful for core SplitSheet workflow questions.
+ * Keeps CoPilot useful for core SplitSheet workflow questions — answers from product catalog only.
  */
 import {
   CATALOG_TEMPLATES,
   LEGAL_DISCLAIMER,
   TEMPLATE_CATEGORIES,
 } from "@shared/agreement-catalog";
+import { MVP_TEMPLATE_TYPES } from "@shared/agreement-mvp";
 import {
   COPILOT_PRICING,
   findCatalogTemplateHint,
   resolveCopilotPageKey,
 } from "./copilot-knowledge";
+import {
+  legalAdviceRefusal,
+  ledgerDataRedirect,
+  summarizeProductTemplate,
+} from "./copilot-product-grounding";
 
 function templateDisclaimerLine(): string {
   return `\n\n_${LEGAL_DISCLAIMER}_`;
-}
-
-function summarizeTemplate(query: string): string | null {
-  const t = findCatalogTemplateHint(query);
-  if (!t) return null;
-  return [
-    `**${t.name}** (\`${t.type}\`) is a SplitSheet *workflow template* in the **${t.category}** category.`,
-    "",
-    t.description,
-    "",
-    `• Required parties: ${t.requiredParties.join(", ") || "—"}`,
-    `• Rights tags: ${t.rightsCategories.join(", ") || "—"}`,
-    `• Risk level: ${t.riskLevel} · Status: ${t.status} · Legal review: ${t.legalReviewStatus}`,
-    "",
-    `Open **Templates** or go to \`/contract/${t.type}\` to create a documentation draft from this template.`,
-    templateDisclaimerLine(),
-  ].join("\n");
 }
 
 export function getFallbackResponse(userMessage: string, currentPage?: string): string | null {
@@ -40,15 +29,12 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
 
   const matches = (...terms: string[]) => terms.some((t) => q.includes(t));
 
-  if (matches("legal advice", "lawyer", "binding", "enforceable", "attorney", "law firm")) {
-    return [
-      "I can help you navigate SplitSheet's **workflow and documentation** tools, but I am **not** a lawyer and SplitSheet is **not** a law firm.",
-      "",
-      "I won't draft or certify legal clauses, or say whether a template is enforceable in your jurisdiction.",
-      "",
-      "For legal suitability, consult a qualified entertainment lawyer.",
-      templateDisclaimerLine(),
-    ].join("\n");
+  if (matches("legal advice", "lawyer", "binding", "enforceable", "attorney", "law firm", "should i sue")) {
+    return legalAdviceRefusal();
+  }
+
+  if (matches("who owns", "ownership of this", "my split", "points on this")) {
+    return ledgerDataRedirect();
   }
 
   const named = findCatalogTemplateHint(q);
@@ -67,13 +53,12 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
       "use the",
     )
   ) {
-    return summarizeTemplate(q);
+    return summarizeProductTemplate(q);
   }
 
-  // Direct name/slug questions like "producer agreement" / "sync-license"
   if (named && (q.includes(named.type) || q.includes(named.name.toLowerCase()))) {
     if (matches("agreement", "template", "license", "sheet", "contract") || named.name.split(" ").length <= 4) {
-      return summarizeTemplate(q);
+      return summarizeProductTemplate(q);
     }
   }
 
@@ -95,14 +80,13 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
   }
 
   if (matches("split sheet", "what is a split", "why split")) {
-    return [
-      "A **split sheet** in SplitSheet is a workflow template to document who owns what percentage of a song's composition (and related collaborator roles).",
-      "",
-      "Use it when multiple writers/contributors need a clear ownership record before confirmation and Rights Ledger registration.",
-      "",
-      "In SplitSheet: **Templates → Split Sheet** (or create a project) → add contributors → send confirmation links → export PDF once everyone confirms.",
-      templateDisclaimerLine(),
-    ].join("\n");
+    return (
+      summarizeProductTemplate("split sheet") ??
+      [
+        "A **split sheet** in SplitSheet is a workflow template to document who owns what percentage of a song's composition (and related collaborator roles).",
+        templateDisclaimerLine(),
+      ].join("\n")
+    );
   }
 
   if (matches("confirmation", "confirm", "link", "contributor confirm")) {
@@ -120,9 +104,11 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
 
   if (matches("100%", "100 percent", "ownership", "percentage", "add up")) {
     return [
-      "The **100% rule**: all composition ownership percentages in a project must total exactly 100%.",
+      "The **100% rule** (product validation): all composition ownership percentages in a project must total exactly 100%.",
       "",
-      "Master recording percentages are tracked **separately** — a producer might own 30% of the master but 0% of the composition.",
+      "Master recording percentages are tracked **separately** in the product — e.g. a producer might have 30% on the master fields and 0% on composition fields.",
+      "",
+      "These are SplitSheet documentation fields, not a legal determination of title.",
       "",
       "SplitSheet validates totals before you can send confirmation links.",
     ].join("\n");
@@ -152,12 +138,14 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
 
   if (matches("rights ledger", "ownership ledger", "iswc", "archive", "deactivate")) {
     return [
-      "The **Rights Ledger** (/ownership) is your long-term song asset registry.",
+      "The **Rights Ledger** (/ownership) is your long-term song asset registry in SplitSheet.",
       "",
       "• Register songs with ISWC codes and asset type",
       "• Track ownership history over time (append-only versions)",
       "• **Archive** (reversible) or **Deactivate** (permanent)",
       "• Executed ownership/license agreements can sync structured records into the ledger",
+      "",
+      "Ledger rows are **stored product records**, not legal ownership determinations.",
       "",
       "Projects handle split confirmation; the Rights Ledger tracks assets after registration.",
     ].join("\n");
@@ -169,6 +157,7 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
       .join("\n");
     return [
       `SplitSheet's **Entertainment Agreement Template Library** has **${CATALOG_TEMPLATES.length}** workflow templates under **Templates** in the sidebar.`,
+      `**${MVP_TEMPLATE_TYPES.length}** are activated for normal create.`,
       "",
       "Categories:",
       cats,
@@ -180,10 +169,10 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
   }
 
   if (matches("agreement", "contract", "producer agreement", "template", "sync license", "publishing", "master license")) {
-    if (named) return summarizeTemplate(q);
+    if (named) return summarizeProductTemplate(q);
 
     return [
-      "SplitSheet has an expanded **template library** (56 workflow templates), including:",
+      `SplitSheet has an expanded **template library** (${CATALOG_TEMPLATES.length} workflow templates; ${MVP_TEMPLATE_TYPES.length} active for create), including:`,
       "",
       "• **Song Creation** — Split Sheet, Co-Writing, Producer, Featured Artist, Remixer, …",
       "• **Master Rights** — Master ownership, assignment, exclusive/non-exclusive licenses, studio agreements",
@@ -222,12 +211,12 @@ export function getFallbackResponse(userMessage: string, currentPage?: string): 
     "/": "On the **Dashboard**, check pending confirmations and recent projects. Use quick actions to create a client or project.",
     "/clients": "On **Clients**, click **Add Client** to register an artist, producer, songwriter, or label.",
     "/projects": "On **Projects**, create a project, add contributors, validate 100% totals, then generate confirmation links. Check **Recommended Agreements** on a project for template suggestions.",
-    "/contracts": "On **Contracts**, open an existing agreement to edit, confirm, or export. To start from a scaffold, use **Templates**.",
-    "/templates": "On **Templates**, browse the Entertainment Agreement Template Library. Filter by category, rights, risk, or status, then Preview or Create Agreement. Ask me about any template by name.",
-    "/ownership": "On the **Rights Ledger**, register song assets and track ownership history over time.",
+    "/contracts": "On **Contracts**, open an existing agreement to edit, confirm, or export. To start from a scaffold, open **Agreements** (Entertainment Agreement Templates Library).",
+    "/templates": "On **Entertainment Agreement Templates**, browse the library. Filter by category, rights, risk, or status, then Preview or Create Agreement. Ask me about any template by name.",
+    "/ownership": "On the **Rights Ledger**, register song assets and track ownership history over time. Ledger data is stored product information, not a legal determination.",
     "/billing": "On **Billing**, view your plan, upgrade, or manage Stripe subscription.",
     "/analytics": "On **Analytics**, monitor confirmation rates and project activity.",
-    "/admin": "On **Admin → Templates**, operators with admin role can activate, version, archive, and update legal-review status for templates.",
+    "/admin": "On **Admin → Agreements**, operators with admin role can activate, version, archive, and update legal-review status for templates.",
   };
 
   if (pageKey && pageHints[pageKey]) {

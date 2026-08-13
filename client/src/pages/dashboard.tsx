@@ -194,7 +194,7 @@ export default function Dashboard() {
               <Button asChild variant="outline" className="w-full justify-start space-x-3 p-3" data-testid="button-create-contract">
                 <Link href="/templates">
                   <FileText className="h-4 w-4" />
-                  <span>Browse Agreement Templates</span>
+                  <span>Browse Entertainment Agreement Templates</span>
                 </Link>
               </Button>
             </div>

@@ -7,7 +7,13 @@ import {
   streamTextAsSSE,
   appendTextAsSSE,
 } from "./copilot-fallback";
-import { COPILOT_SYSTEM_PROMPT, resolveCopilotPageKey } from "./copilot-knowledge";
+import { COPILOT_SYSTEM_PROMPT, resolveCopilotPageKey, findCatalogTemplateHint } from "./copilot-knowledge";
+import {
+  buildGroundedSystemAugment,
+  classifyCopilotQuery,
+  sanitizeCopilotResponse,
+  tryDeterministicProductAnswer,
+} from "./copilot-product-grounding";
 import {
   getCopilotModel,
   isCopilotConfigured,
@@ -49,6 +55,13 @@ function getLastUserMessage(messages: { role: string; content: string }[]): stri
   return messages[messages.length - 1]?.content ?? "";
 }
 
+/** Page context is free text — keep short and strip control chars to reduce prompt injection. */
+function safePageContext(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 120);
+  return cleaned || undefined;
+}
+
 function respondWithFallback(
   res: Response,
   userMessage: string,
@@ -60,7 +73,10 @@ function respondWithFallback(
   if (!fallback) return false;
 
   const text = prefix ? `${prefix}\n\n${fallback}` : fallback;
-  streamTextAsSSE(res, text);
+  const { text: safe } = sanitizeCopilotResponse(text, {
+    templateMentioned: Boolean(findCatalogTemplateHint(userMessage)),
+  });
+  streamTextAsSSE(res, safe);
   return true;
 }
 
@@ -86,10 +102,23 @@ export function registerCopilotRoutes(app: Express): void {
 
     const userMessage = getLastUserMessage(body.messages);
     const pageKey = resolveCopilotPageKey(body.currentPage);
+    const pageCtx = safePageContext(body.pageContext);
     const pageNote = pageKey
-      ? `\n\n[User is on: ${pageKey}${body.pageContext ? ` — "${body.pageContext}"` : ""}]`
+      ? `\n\n[User is on: ${pageKey}${pageCtx ? ` — "${pageCtx}"` : ""}]`
       : "";
-    const systemContent = COPILOT_SYSTEM_PROMPT + pageNote;
+
+    // High-risk / product-fact queries: answer from catalog only (minimize invention risk)
+    const deterministic = tryDeterministicProductAnswer(userMessage);
+    if (deterministic) {
+      const { text: safe } = sanitizeCopilotResponse(deterministic, {
+        templateMentioned: classifyCopilotQuery(userMessage) === "template_fact",
+      });
+      streamTextAsSSE(res, safe);
+      return;
+    }
+
+    const systemContent =
+      COPILOT_SYSTEM_PROMPT + pageNote + buildGroundedSystemAugment(userMessage);
 
     if (!isCopilotConfigured()) {
       if (
@@ -97,7 +126,7 @@ export function registerCopilotRoutes(app: Express): void {
           res,
           userMessage,
           pageKey,
-          "CoPilot AI is not configured (missing OPENAI_API_KEY). Here's guidance from SplitSheet's built-in knowledge:",
+          "CoPilot AI is not configured (missing OPENAI_API_KEY). Here's guidance from SplitSheet's built-in product knowledge:",
         )
       ) {
         return;
@@ -116,35 +145,37 @@ export function registerCopilotRoutes(app: Express): void {
         })),
       );
 
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.flushHeaders();
-
+      // Buffer then sanitize so users never see unsanitized legal overclaims mid-stream
+      let assembled = "";
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta?.content;
-        if (delta) {
-          res.write(
-            `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`,
-          );
-        }
-        if (chunk.choices[0]?.finish_reason) {
-          res.write("data: [DONE]\n\n");
-        }
+        if (delta) assembled += delta;
       }
 
-      res.end();
+      const { text: safe, flagged } = sanitizeCopilotResponse(assembled, {
+        templateMentioned: Boolean(findCatalogTemplateHint(userMessage) || findCatalogTemplateHint(assembled)),
+      });
+      if (flagged) {
+        console.warn("[COPILOT] Response sanitized for product/legal risk", {
+          userId,
+          queryKind: classifyCopilotQuery(userMessage),
+        });
+      }
+
+      streamTextAsSSE(res, safe);
     } catch (err: unknown) {
       console.error("[COPILOT ERROR]", err);
 
       const errorIntro = getOpenAIErrorMessage(err);
       const fallback = getFallbackResponse(userMessage, pageKey);
       const combined = fallback ? `${errorIntro}\n\n${fallback}` : errorIntro;
+      const { text: safe } = sanitizeCopilotResponse(combined, {
+        templateMentioned: Boolean(findCatalogTemplateHint(userMessage)),
+      });
 
       if (!res.headersSent) {
         if (fallback) {
-          streamTextAsSSE(res, combined);
+          streamTextAsSSE(res, safe);
           return;
         }
         res.status(500).json({
@@ -154,7 +185,7 @@ export function registerCopilotRoutes(app: Express): void {
         return;
       }
 
-      appendTextAsSSE(res, `\n\n${combined}`);
+      appendTextAsSSE(res, `\n\n${safe}`);
     }
   });
 
@@ -164,6 +195,7 @@ export function registerCopilotRoutes(app: Express): void {
       model: getCopilotModel(),
       status: isCopilotConfigured() ? "ready" : "missing_api_key",
       fallback: "available",
+      grounding: "product_catalog",
     });
   });
 }

@@ -329,14 +329,11 @@ export class DatabaseStorage implements IStorage {
     const conditions = [];
 
     if (filters.productionOnly) {
-      // Operator library: active + internal/legal review (draftable) + approved
+      // Operator library: only active/approved (MVP-gated seeding sets the 12 as active)
       conditions.push(
         or(
           eq(contractTemplates.status, "active"),
           eq(contractTemplates.status, "approved"),
-          eq(contractTemplates.status, "internal_review"),
-          eq(contractTemplates.status, "legal_review"),
-          and(eq(contractTemplates.isActive, true), sql`${contractTemplates.status} IS NULL`),
         ),
       );
     } else if (!filters.includeInactive) {

@@ -71,7 +71,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/ownership", label: "Rights Ledger", icon: BookOpen, testId: "nav-ownership" },
       { href: "/analytics", label: "Analytics", icon: BarChart, testId: "nav-analytics" },
-      { href: "/templates", label: "Templates", icon: Layers, testId: "nav-templates" },
+      { href: "/templates", label: "Agreements", icon: Layers, testId: "nav-templates" },
       { href: "/billing", label: "Billing", icon: CreditCard, testId: "nav-billing" },
       { href: "/admin", label: "Admin", icon: Shield, testId: "nav-admin" },
     ],

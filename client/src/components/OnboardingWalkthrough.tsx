@@ -62,8 +62,8 @@ const STEPS: Step[] = [
   },
   {
     phase: "Phase 3 of 5 · Agreements",
-    title: "Music Agreements & Templates",
-    body: "Beyond split sheets, use Producer Agreements, Performance Agreements, and Management templates. Fill fields, add collaborators, export PDFs, and track signatures — all from Music Agreements.",
+    title: "Entertainment Agreement Templates",
+    body: "Use the Entertainment Agreement Templates Library for split sheets, producer deals, master rights, sync licenses, and more. Fill fields, add collaborators, export PDFs, and track confirmations — without treating templates as legal advice.",
     cta: "Go to Agreements",
     type: "center",
     targetPath: "/contracts",

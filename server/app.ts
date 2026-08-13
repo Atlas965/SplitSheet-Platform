@@ -76,9 +76,11 @@ async function buildApp(): Promise<AppBundle> {
 
   // Skip JSON/urlencoded for Stripe webhooks so route-level express.raw
   // can supply the raw Buffer required for signature verification.
+  // Voice turns may include base64 audio — allow a larger body on those paths.
   app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();
-    return express.json({ limit: "1mb" })(req, res, next);
+    const limit = req.path.startsWith("/api/copilot/voice") ? "6mb" : "1mb";
+    return express.json({ limit })(req, res, next);
   });
   app.use((req, res, next) => {
     if (isStripeWebhookPath(req)) return next();

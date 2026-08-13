@@ -158,7 +158,7 @@ export default function Contracts() {
     <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold">My Music Agreements</h2>
+          <h2 className="text-2xl font-bold">My Entertainment Agreements</h2>
           <Link href="/templates">
             <Button className="bg-primary text-primary-foreground hover:bg-primary/90" data-testid="button-new-contract">
               <i className="fas fa-plus mr-2"></i>Create New Agreement

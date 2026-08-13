@@ -1,6 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
-import { X, Send, Minimize2, Maximize2, Sparkles, RotateCcw, ChevronRight } from "lucide-react";
+import {
+  X,
+  Send,
+  Minimize2,
+  Maximize2,
+  Sparkles,
+  RotateCcw,
+  ChevronRight,
+  Mic,
+  MicOff,
+  Check,
+} from "lucide-react";
+import { useCopilotVoice } from "@/hooks/useCopilotVoice";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Message {
@@ -10,6 +22,9 @@ interface Message {
   timestamp: Date;
   isStreaming?: boolean;
   isGreeting?: boolean;
+  viaVoice?: boolean;
+  pendingActionId?: string;
+  proposedActionSummary?: string;
 }
 
 interface QuickPrompt {
@@ -46,12 +61,21 @@ const PAGE_PROMPTS: Record<string, { headline: string; prompts: QuickPrompt[] }>
     ],
   },
   "/contracts": {
-    headline: "Music Agreements",
+    headline: "Entertainment Agreements",
     prompts: [
       { label: "Split Sheet vs Producer Agreement",  prompt: "What is the difference between a Split Sheet and a Producer Agreement?" },
-      { label: "How do I create a new agreement?",  prompt: "Walk me through creating a new music agreement from a template." },
+      { label: "How do I create a new agreement?",  prompt: "Walk me through creating a new entertainment agreement from a template." },
       { label: "How does e-signing work?",           prompt: "How does the electronic signature process work for collaborators?" },
       { label: "When can I export a PDF?",           prompt: "When is the right time to export a PDF agreement?" },
+    ],
+  },
+  "/templates": {
+    headline: "Entertainment Agreement Templates",
+    prompts: [
+      { label: "What templates are available?", prompt: "What templates are in the Entertainment Agreement Templates Library?" },
+      { label: "When do I use a Sync License?", prompt: "When should I use a Synchronization License template?" },
+      { label: "Producer vs royalty agreement", prompt: "When should I use a Producer Agreement vs Producer Royalty Participation?" },
+      { label: "Are templates legal advice?", prompt: "Are SplitSheet agreement templates legal advice?" },
     ],
   },
   "/ownership": {
@@ -136,6 +160,34 @@ export default function SoundLedgerCopilot() {
   const pageKey = resolvePageKey(location);
   const pageCtx = PAGE_PROMPTS[pageKey] ?? DEFAULT_PROMPTS;
 
+  const voice = useCopilotVoice({
+    pageContext: pageCtx.headline,
+    onError: (message) => {
+      setError(message || "");
+    },
+    onTurn: (result) => {
+      setError("");
+      setHasGreeted(true);
+      const userMsg: Message = {
+        id: generateId(),
+        role: "user",
+        content: result.transcript,
+        timestamp: new Date(),
+        viaVoice: true,
+      };
+      const assistantMsg: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: result.responseText,
+        timestamp: new Date(),
+        viaVoice: true,
+        pendingActionId: result.pendingActionId,
+        proposedActionSummary: result.proposedActionSummary,
+      };
+      setMessages((prev) => [...prev.filter((m) => !m.isStreaming), userMsg, assistantMsg]);
+    },
+  });
+
   // Auto-scroll on new content
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -153,7 +205,7 @@ export default function SoundLedgerCopilot() {
       const greeting: Message = {
         id:        generateId(),
         role:      "assistant",
-        content:   `Hey — I'm **SoundLedger CoPilot**, your product guide for SplitSheet.\n\nI can explain the **Templates** library (all 56 workflow templates), walk you through projects, confirmations, billing, and the Rights Ledger.\n\nI'm **not a lawyer** and SplitSheet is **not a law firm** — I help with platform workflow and documentation, not legal advice.\n\nAsk me things like: “What is a Producer Agreement template for?” or “When should I use a Sync License?”`,
+        content:   `Hey — I'm **SoundLedger CoPilot**, your product guide for SplitSheet.\n\nI can explain the **Entertainment Agreement Templates Library**, walk you through projects, confirmations, billing, and the Rights Ledger.\n\nTap the **mic** to speak — Voice CoPilot can draft workflows from speech, but never silently creates or signs agreements.\n\nI'm **not a lawyer** and SplitSheet is **not a law firm** — I help with platform workflow and documentation, not legal advice.`,
         timestamp: new Date(),
         isGreeting: true,
       };
@@ -318,6 +370,7 @@ export default function SoundLedgerCopilot() {
   // Reset conversation
   const resetChat = () => {
     abortRef.current?.abort();
+    voice.resetSession();
     setMessages([]);
     setError("");
     setInput("");
@@ -326,9 +379,46 @@ export default function SoundLedgerCopilot() {
     setTimeout(() => setOpen(true), 50);
   };
 
+  const handleVoiceConfirm = async (decision: "confirmed" | "rejected", messageId: string) => {
+    const result = await voice.confirmPending(decision);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, pendingActionId: undefined, proposedActionSummary: undefined } : m,
+      ),
+    );
+    if (!result) return;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: generateId(),
+        role: "user",
+        content: decision === "confirmed" ? "Confirm" : "Cancel",
+        timestamp: new Date(),
+        viaVoice: true,
+      },
+      {
+        id: generateId(),
+        role: "assistant",
+        content: result.responseText,
+        timestamp: new Date(),
+        viaVoice: true,
+      },
+    ]);
+  };
+
   // Width/height based on expanded state
   const panelW = expanded ? "w-[520px]" : "w-[360px]";
   const panelH = expanded ? "h-[680px]" : "h-[520px]";
+
+  const micDisabled = loading || voice.isBusy || voice.status === "processing";
+  const micTitle =
+    voice.status === "listening"
+      ? "Stop listening"
+      : voice.status === "processing"
+        ? "Processing voice…"
+        : voice.status === "awaiting_confirm"
+          ? "Confirm or cancel the proposed action first"
+          : "Speak to CoPilot";
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -345,6 +435,13 @@ export default function SoundLedgerCopilot() {
             <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-accent animate-pulse" />
           </div>
           CoPilot
+          <span
+            className="ml-0.5 flex items-center justify-center w-6 h-6 rounded-full bg-accent-foreground/15"
+            title="Voice available"
+            aria-hidden
+          >
+            <Mic className="h-3 w-3" />
+          </span>
         </button>
       )}
 
@@ -365,7 +462,10 @@ export default function SoundLedgerCopilot() {
               </div>
               <div>
                 <p className="font-bold text-sm leading-none">SoundLedger CoPilot</p>
-                <p className="text-[10px] opacity-75 mt-0.5">{statusLabel}</p>
+                <p className="text-[10px] opacity-75 mt-0.5">
+                  {statusLabel}
+                  {voice.voiceReady ? " · Voice" : ""}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -427,10 +527,71 @@ export default function SoundLedgerCopilot() {
                   )}
                 </div>
                 <span className="text-[10px] text-muted-foreground px-1">
-                  {msg.role === "assistant" ? "CoPilot · " : ""}{formatTime(msg.timestamp)}
+                  {msg.role === "assistant" ? "CoPilot · " : ""}
+                  {msg.viaVoice ? "Voice · " : ""}
+                  {formatTime(msg.timestamp)}
                 </span>
+                {msg.role === "assistant" && msg.pendingActionId && (
+                  <div className="max-w-[88%] mt-1 space-y-1.5">
+                    {msg.proposedActionSummary && (
+                      <p className="text-[11px] text-muted-foreground px-1 leading-snug">
+                        Action needs confirmation (draft only — never silent execute).
+                      </p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={voice.isBusy}
+                        onClick={() => handleVoiceConfirm("confirmed", msg.id)}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-accent text-accent-foreground hover:opacity-90 disabled:opacity-50"
+                      >
+                        <Check className="h-3 w-3" />
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        disabled={voice.isBusy}
+                        onClick={() => handleVoiceConfirm("rejected", msg.id)}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-border bg-muted hover:bg-muted/80 disabled:opacity-50"
+                      >
+                        <X className="h-3 w-3" />
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
+
+            {/* Live voice interim transcript */}
+            {voice.isListening && (
+              <div className="flex flex-col items-end gap-1">
+                <div className="max-w-[88%] px-3.5 py-2.5 rounded-2xl rounded-tr-sm text-sm bg-accent/15 border border-accent/30 text-foreground">
+                  <span className="inline-flex items-center gap-2 text-accent font-medium mb-1">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+                    </span>
+                    Listening…
+                  </span>
+                  <p className="text-muted-foreground italic">
+                    {voice.interim || "Say something about a template, split, or workflow…"}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {voice.status === "processing" && (
+              <div className="flex flex-col items-start gap-1">
+                <div className="max-w-[88%] px-3.5 py-2.5 rounded-2xl rounded-tl-sm text-sm bg-muted text-foreground">
+                  <span className="flex gap-1 items-center py-0.5">
+                    <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Quick prompts — show after greeting, before conversation starts */}
             {messages.length === 1 && (
@@ -473,14 +634,33 @@ export default function SoundLedgerCopilot() {
           {/* Input area */}
           <div className="border-t border-border px-3 py-3 shrink-0">
             <div className="flex items-end gap-2">
+              <button
+                type="button"
+                onClick={() => voice.toggleListening()}
+                disabled={micDisabled}
+                aria-label={micTitle}
+                title={micTitle}
+                aria-pressed={voice.isListening}
+                className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                  voice.isListening
+                    ? "bg-red-500 text-white shadow-md shadow-red-500/30 scale-105"
+                    : "bg-muted border border-border text-foreground hover:border-accent/50 hover:text-accent"
+                }`}
+              >
+                {voice.isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </button>
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about split sheets, PROs, pricing…"
+                placeholder={
+                  voice.isListening
+                    ? "Listening… tap mic to send"
+                    : "Ask about split sheets, PROs, pricing…"
+                }
                 rows={1}
-                disabled={loading}
+                disabled={loading || voice.isListening || voice.isBusy}
                 aria-label="Message CoPilot"
                 className="flex-1 resize-none bg-muted border border-border rounded-xl px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition-colors disabled:opacity-50 leading-relaxed max-h-28 overflow-y-auto"
                 style={{ minHeight: "40px" }}
@@ -492,7 +672,7 @@ export default function SoundLedgerCopilot() {
               />
               <button
                 onClick={() => send(input)}
-                disabled={!input.trim() || loading}
+                disabled={!input.trim() || loading || voice.isListening || voice.isBusy}
                 aria-label="Send message"
                 className="shrink-0 w-9 h-9 bg-accent text-accent-foreground rounded-xl flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               >
@@ -502,7 +682,15 @@ export default function SoundLedgerCopilot() {
               </button>
             </div>
             <p className="text-[10px] text-muted-foreground text-center mt-2 leading-relaxed">
-              Press <kbd className="font-mono bg-muted border border-border rounded px-1">Enter</kbd> to send · <kbd className="font-mono bg-muted border border-border rounded px-1">Shift+Enter</kbd> for new line
+              {voice.isListening ? (
+                <>Listening — tap the mic again to process · Voice never silently creates agreements</>
+              ) : (
+                <>
+                  <Mic className="inline h-2.5 w-2.5 -mt-0.5" /> Voice ·{" "}
+                  <kbd className="font-mono bg-muted border border-border rounded px-1">Enter</kbd> to send
+                  {voice.voiceReady ? "" : " · voice API warming up"}
+                </>
+              )}
             </p>
           </div>
         </div>
