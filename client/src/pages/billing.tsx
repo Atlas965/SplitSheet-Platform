@@ -128,12 +128,20 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-lg p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 pt-5 pb-4 border-b border-border">
+      <DialogContent className="sm:max-w-lg p-0 gap-0 overflow-hidden flex flex-col max-h-[min(90dvh,720px)]">
+        <DialogHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
           <DialogTitle className="text-base font-semibold">Upgrade your plan</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-0.5">Choose the plan that fits your music career.</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Choose the plan that fits your music career. Scroll to compare all options.
+          </p>
         </DialogHeader>
-        <div className="p-6 space-y-4">
+
+        <div
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-4 scroll-smooth [scrollbar-gutter:stable]"
+          data-testid="upgrade-plans-scroll"
+          role="region"
+          aria-label="Available upgrade plans"
+        >
           {(["session", "pro", "creator_pro", "studio_pro"] as PlanKey[]).map((plan) => {
             const cfg = PLANS[plan];
             const isCurrent    = plan === currentPlan;
@@ -142,8 +150,8 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
 
             return (
               <div key={plan} className={`rounded-xl border p-5 ${plan === "session" ? "border-accent/60 bg-accent/5" : "border-border bg-card"}`}>
-                <div className="flex items-start justify-between mb-3">
-                  <div>
+                <div className="flex items-start justify-between mb-3 gap-3">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-lg text-foreground">{cfg.name}</span>
                       {plan === "session" && (
@@ -161,6 +169,7 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
                   {!isCurrent && (
                     <Button
                       size="sm"
+                      className="shrink-0"
                       onClick={() => handleUpgrade(plan)}
                       disabled={anyLoading}
                       data-testid={`btn-upgrade-${plan}`}
@@ -183,6 +192,9 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
               </div>
             );
           })}
+        </div>
+
+        <div className="shrink-0 px-6 py-3 border-t border-border bg-muted/20">
           <p className="text-xs text-muted-foreground text-center">
             Need more?{" "}
             <a href="mailto:enterprise@splitsheet.ca" className="text-accent hover:underline">
