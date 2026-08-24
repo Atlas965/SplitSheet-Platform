@@ -168,6 +168,8 @@ type OAuthCookiePayload = {
   state: string;
   /** PKCE verifier — required for Google/Microsoft on serverless (session often lost). */
   codeVerifier?: string;
+  /** Exact redirect_uri used at authorize time — must match token exchange. */
+  redirectUri?: string;
 };
 
 function oauthStateCookieName(provider: string) {
@@ -265,6 +267,67 @@ function loginFailure(res: Response, message: string) {
   res.redirect(`/login?error=${q}`);
 }
 
+/** Prefer provider error_description over opaque openid-client wrappers. */
+function oauthErrorMessage(err: unknown, fallback: string): string {
+  if (!err || typeof err !== "object") return fallback;
+  const e = err as Record<string, any>;
+  const code = e.error || e.cause?.error;
+  const desc = e.error_description || e.cause?.error_description;
+  if (code && desc) return `${code}: ${desc}`;
+  if (desc) return String(desc);
+  if (code) return String(code);
+  if (typeof e.message === "string" && e.message && !e.message.includes("response body")) {
+    return e.message;
+  }
+  return fallback;
+}
+
+async function exchangeGoogleAuthorizationCode(input: {
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+  clientId: string;
+  clientSecret: string;
+}): Promise<{
+  access_token?: string;
+  id_token?: string;
+  error?: string;
+  error_description?: string;
+}> {
+  const body = new URLSearchParams({
+    code: input.code,
+    client_id: input.clientId,
+    client_secret: input.clientSecret,
+    redirect_uri: input.redirectUri,
+    grant_type: "authorization_code",
+    code_verifier: input.codeVerifier,
+  });
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  return (await tokenRes.json()) as {
+    access_token?: string;
+    id_token?: string;
+    error?: string;
+    error_description?: string;
+  };
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(
+      "utf8",
+    );
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 // ── Google (OIDC + cookie PKCE — session store is unreliable across Vercel isolates) ──
 
 async function registerGoogle(app: Express) {
@@ -275,35 +338,28 @@ async function registerGoogle(app: Express) {
       "[auth/google] GOOGLE_CLIENT_ID does not look like a Web client ID (…apps.googleusercontent.com). Check Google Cloud Console + Vercel env.",
     );
   }
-  const config = await client.discovery(
-    new URL("https://accounts.google.com"),
-    clientId,
-    { client_secret: clientSecret },
-  );
 
   app.get("/api/auth/google", async (req, res) => {
     try {
       const codeVerifier = client.randomPKCECodeVerifier();
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
-      setOAuthState(res, "google", { state, codeVerifier });
-
       const redirectUri = callbackUrl("google", req);
-      const url = client.buildAuthorizationUrl(
-        config,
-        new URLSearchParams({
-          redirect_uri: redirectUri,
-          scope: "openid email profile",
-          code_challenge: codeChallenge,
-          code_challenge_method: "S256",
-          state,
-          prompt: "select_account",
-        }),
-      );
+      setOAuthState(res, "google", { state, codeVerifier, redirectUri });
+
+      const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+      url.searchParams.set("client_id", clientId);
+      url.searchParams.set("redirect_uri", redirectUri);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", "openid email profile");
+      url.searchParams.set("code_challenge", codeChallenge);
+      url.searchParams.set("code_challenge_method", "S256");
+      url.searchParams.set("state", state);
+      url.searchParams.set("prompt", "select_account");
       res.redirect(url.href);
     } catch (err: any) {
       console.error("[auth/google] start failed:", err);
-      loginFailure(res, err?.message || "Google sign-in failed to start");
+      loginFailure(res, oauthErrorMessage(err, "Google sign-in failed to start"));
     }
   });
 
@@ -321,6 +377,7 @@ async function registerGoogle(app: Express) {
 
       const code = typeof req.query.code === "string" ? req.query.code : undefined;
       const state = typeof req.query.state === "string" ? req.query.state : undefined;
+      const redirectUri = payload?.redirectUri || callbackUrl("google", req);
       if (!code || !payload?.codeVerifier || !payload.state || state !== payload.state) {
         return loginFailure(
           res,
@@ -328,17 +385,39 @@ async function registerGoogle(app: Express) {
         );
       }
 
-      const currentUrl = new URL(callbackUrl("google", req));
-      for (const [key, value] of Object.entries(req.query)) {
-        if (typeof value === "string") currentUrl.searchParams.set(key, value);
-      }
-
-      const tokens = await client.authorizationCodeGrant(config, currentUrl, {
-        pkceCodeVerifier: payload.codeVerifier,
-        expectedState: payload.state,
+      const tokenJson = await exchangeGoogleAuthorizationCode({
+        code,
+        redirectUri,
+        codeVerifier: payload.codeVerifier,
+        clientId,
+        clientSecret,
       });
 
-      const claims = tokens.claims() || {};
+      if (tokenJson.error || !tokenJson.access_token) {
+        console.error("[auth/google] token error:", tokenJson);
+        return loginFailure(
+          res,
+          tokenJson.error_description ||
+            tokenJson.error ||
+            "Google token exchange failed. Check GOOGLE_CLIENT_SECRET and redirect URI.",
+        );
+      }
+
+      let claims: Record<string, any> =
+        (tokenJson.id_token && decodeJwtPayload(tokenJson.id_token)) || {};
+
+      if (!claims.sub) {
+        const userRes = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+          headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+        });
+        if (!userRes.ok) {
+          const body = await userRes.text();
+          console.error("[auth/google] userinfo failed:", userRes.status, body);
+          return loginFailure(res, "Google userinfo request failed");
+        }
+        claims = (await userRes.json()) as Record<string, any>;
+      }
+
       const sub = String(claims.sub || "");
       if (!sub) {
         return loginFailure(res, "Google did not return a user id");
@@ -357,7 +436,7 @@ async function registerGoogle(app: Express) {
       });
     } catch (err: any) {
       console.error("[auth/google] callback failed:", err);
-      loginFailure(res, err?.message || "Google sign-in failed");
+      loginFailure(res, oauthErrorMessage(err, "Google sign-in failed"));
     }
   });
 }
@@ -379,12 +458,13 @@ async function registerMicrosoft(app: Express) {
       const codeVerifier = client.randomPKCECodeVerifier();
       const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
       const state = client.randomState();
-      setOAuthState(res, "microsoft", { state, codeVerifier });
+      const redirectUri = callbackUrl("microsoft", req);
+      setOAuthState(res, "microsoft", { state, codeVerifier, redirectUri });
 
       const url = client.buildAuthorizationUrl(
         config,
         new URLSearchParams({
-          redirect_uri: callbackUrl("microsoft", req),
+          redirect_uri: redirectUri,
           scope: "openid email profile offline_access",
           code_challenge: codeChallenge,
           code_challenge_method: "S256",
@@ -394,7 +474,7 @@ async function registerMicrosoft(app: Express) {
       res.redirect(url.href);
     } catch (err: any) {
       console.error("[auth/microsoft] start failed:", err);
-      loginFailure(res, err?.message || "Microsoft sign-in failed to start");
+      loginFailure(res, oauthErrorMessage(err, "Microsoft sign-in failed to start"));
     }
   });
 
@@ -419,7 +499,8 @@ async function registerMicrosoft(app: Express) {
         );
       }
 
-      const currentUrl = new URL(callbackUrl("microsoft", req));
+      const redirectUri = payload.redirectUri || callbackUrl("microsoft", req);
+      const currentUrl = new URL(redirectUri);
       for (const [key, value] of Object.entries(req.query)) {
         if (typeof value === "string") currentUrl.searchParams.set(key, value);
       }
@@ -451,7 +532,7 @@ async function registerMicrosoft(app: Express) {
       });
     } catch (err: any) {
       console.error("[auth/microsoft] callback failed:", err);
-      loginFailure(res, err?.message || "Microsoft sign-in failed");
+      loginFailure(res, oauthErrorMessage(err, "Microsoft sign-in failed"));
     }
   });
 }
