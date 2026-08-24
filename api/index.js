@@ -11235,10 +11235,53 @@ async function registerRoutes(app) {
           return res.status(404).json({ error: { message: "User not found" } });
         if (!user.email)
           return res.status(400).json({ error: { message: "No email address on file" } });
-        const { plan = "pro" } = req.body;
-        if (!["pro", "label"].includes(plan)) {
-          return res.status(400).json({ error: { message: `Invalid plan: ${plan}` } });
+        const rawPlan = String(req.body?.plan || "creator_pro");
+        const planAliases = {
+          pro: "pro",
+          // Multi-Creator (quote)
+          label: "studio_pro",
+          // legacy
+          session: "session",
+          creator_pro: "creator_pro",
+          studio_pro: "studio_pro"
+        };
+        const plan = planAliases[rawPlan];
+        if (!plan) {
+          return res.status(400).json({
+            error: {
+              message: `Invalid plan: ${rawPlan}. Use session, creator_pro, or studio_pro.`
+            }
+          });
         }
+        if (plan === "pro") {
+          return res.json({
+            quoteRequired: true,
+            plan,
+            message: "Multi-Creator is quote-based. Contact enterprise@splitsheet.ca for pricing."
+          });
+        }
+        const planPricing = {
+          session: {
+            amount: 2500,
+            name: "Pay-Per-Session",
+            envKey: "STRIPE_SESSION_PRICE_ID"
+          },
+          creator_pro: {
+            amount: 1500,
+            name: "Creator Pro",
+            envKey: "STRIPE_CREATOR_PRO_PRICE_ID"
+          },
+          studio_pro: {
+            amount: 4900,
+            name: "Studio Pro",
+            envKey: "STRIPE_STUDIO_PRO_PRICE_ID"
+          }
+        };
+        const priceEnvMap = {
+          session: process.env.STRIPE_SESSION_PRICE_ID,
+          creator_pro: process.env.STRIPE_CREATOR_PRO_PRICE_ID || process.env.STRIPE_PRO_PRICE_ID,
+          studio_pro: process.env.STRIPE_STUDIO_PRO_PRICE_ID || process.env.STRIPE_LABEL_PRICE_ID
+        };
         let customerId = user.stripeCustomerId;
         if (customerId) {
           try {
@@ -11297,24 +11340,20 @@ async function registerRoutes(app) {
             );
           }
         }
-        const priceEnvMap = {
-          pro: process.env.STRIPE_PRO_PRICE_ID,
-          label: process.env.STRIPE_LABEL_PRICE_ID
-        };
-        const amountMap = { pro: 1900, label: 4900 };
+        const pricing = planPricing[plan];
         let priceId;
         if (priceEnvMap[plan]) {
           priceId = priceEnvMap[plan];
         } else {
           console.warn(
-            `[SUBSCRIPTION] STRIPE_${plan.toUpperCase()}_PRICE_ID not set \u2014 creating inline price (demo mode).`
+            `[SUBSCRIPTION] ${pricing.envKey} not set \u2014 creating inline price (demo mode).`
           );
           const inlinePrice = await stripe4.prices.create({
-            unit_amount: amountMap[plan],
+            unit_amount: pricing.amount,
             currency: "cad",
             recurring: { interval: "month" },
             product_data: {
-              name: `SplitSheet ${plan.charAt(0).toUpperCase() + plan.slice(1)} Plan`
+              name: `SplitSheet ${pricing.name}`
             }
           });
           priceId = inlinePrice.id;

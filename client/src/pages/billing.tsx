@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import Footer from "@/components/Footer";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   CreditCard, CheckCircle2, AlertCircle,
   FileText, Users, HardDrive, Plus, Download, ArrowRight,
@@ -73,6 +73,17 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
   async function handleUpgrade(plan: string) {
     setLoadingPlan(plan);
     try {
+      // Quote-based Multi-Creator — no self-serve Stripe subscription yet
+      if (plan === "pro") {
+        window.location.href =
+          "mailto:enterprise@splitsheet.ca?subject=Multi-Creator%20plan%20quote";
+        toast({
+          title: "Request a quote",
+          description: "Multi-Creator is quote-based. We opened an email to enterprise@splitsheet.ca.",
+        });
+        return;
+      }
+
       // apiRequest returns the Response — parse JSON manually
       const res  = await apiRequest("POST", "/api/get-or-create-subscription", { plan });
       const data = await res.json();
@@ -83,6 +94,14 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
           title:       "Could not start upgrade",
           description: data.error.message,
           variant:     "destructive",
+        });
+        return;
+      }
+
+      if (data?.quoteRequired) {
+        toast({
+          title: "Request a quote",
+          description: data.message || "Contact enterprise@splitsheet.ca for this plan.",
         });
         return;
       }
@@ -116,9 +135,19 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
       onClose();
 
     } catch (err: any) {
+      let description = err?.message ?? "Please check your connection and try again.";
+      try {
+        const match = String(err?.message || "").match(/^\d+:\s*(\{[\s\S]*\})$/);
+        if (match) {
+          const parsed = JSON.parse(match[1]);
+          if (parsed?.error?.message) description = parsed.error.message;
+        }
+      } catch {
+        /* keep raw message */
+      }
       toast({
         title:       "Could not start upgrade",
-        description: err?.message ?? "Please check your connection and try again.",
+        description,
         variant:     "destructive",
       });
     } finally {
@@ -131,9 +160,9 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
       <DialogContent className="sm:max-w-lg p-0 gap-0 overflow-hidden flex flex-col max-h-[min(90dvh,720px)]">
         <DialogHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
           <DialogTitle className="text-base font-semibold">Upgrade your plan</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-0.5">
+          <DialogDescription className="text-xs text-muted-foreground mt-0.5">
             Choose the plan that fits your music career. Scroll to compare all options.
-          </p>
+          </DialogDescription>
         </DialogHeader>
 
         <div
@@ -264,7 +293,9 @@ function UpdatePaymentDialog({ open, onClose }: { open: boolean; onClose: () => 
             </div>
             <div>
               <DialogTitle className="text-sm font-semibold leading-none">Update Payment Method</DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">Your card details are encrypted and never stored on our servers.</p>
+              <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                Your card details are encrypted and never stored on our servers.
+              </DialogDescription>
             </div>
           </div>
         </DialogHeader>

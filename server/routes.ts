@@ -825,12 +825,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .status(400)
             .json({ error: { message: "No email address on file" } });
 
-        const { plan = "pro" } = req.body;
-        if (!["pro", "label"].includes(plan)) {
-          return res
-            .status(400)
-            .json({ error: { message: `Invalid plan: ${plan}` } });
+        // UI plan keys (billing.tsx) + legacy Stripe keys
+        const rawPlan = String(req.body?.plan || "creator_pro");
+        const planAliases: Record<string, string> = {
+          pro: "pro", // Multi-Creator (quote)
+          label: "studio_pro", // legacy
+          session: "session",
+          creator_pro: "creator_pro",
+          studio_pro: "studio_pro",
+        };
+        const plan = planAliases[rawPlan];
+        if (!plan) {
+          return res.status(400).json({
+            error: {
+              message: `Invalid plan: ${rawPlan}. Use session, creator_pro, or studio_pro.`,
+            },
+          });
         }
+
+        // Multi-Creator is quote-based — do not create a Stripe subscription here
+        if (plan === "pro") {
+          return res.json({
+            quoteRequired: true,
+            plan,
+            message:
+              "Multi-Creator is quote-based. Contact enterprise@splitsheet.ca for pricing.",
+          });
+        }
+
+        const planPricing: Record<
+          string,
+          { amount: number; name: string; envKey: string }
+        > = {
+          session: {
+            amount: 2500,
+            name: "Pay-Per-Session",
+            envKey: "STRIPE_SESSION_PRICE_ID",
+          },
+          creator_pro: {
+            amount: 1500,
+            name: "Creator Pro",
+            envKey: "STRIPE_CREATOR_PRO_PRICE_ID",
+          },
+          studio_pro: {
+            amount: 4900,
+            name: "Studio Pro",
+            envKey: "STRIPE_STUDIO_PRO_PRICE_ID",
+          },
+        };
+        // Legacy env fallbacks for Creator/Studio
+        const priceEnvMap: Record<string, string | undefined> = {
+          session: process.env.STRIPE_SESSION_PRICE_ID,
+          creator_pro:
+            process.env.STRIPE_CREATOR_PRO_PRICE_ID ||
+            process.env.STRIPE_PRO_PRICE_ID,
+          studio_pro:
+            process.env.STRIPE_STUDIO_PRO_PRICE_ID ||
+            process.env.STRIPE_LABEL_PRICE_ID,
+        };
 
         // ── Resolve or reuse existing Stripe customer ──────────────────────────
         let customerId = user.stripeCustomerId as string | undefined;
@@ -903,25 +955,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // ── Resolve price ID — create inline price if env var missing ──────────
-        const priceEnvMap: Record<string, string | undefined> = {
-          pro: process.env.STRIPE_PRO_PRICE_ID,
-          label: process.env.STRIPE_LABEL_PRICE_ID,
-        };
-        const amountMap: Record<string, number> = { pro: 1900, label: 4900 };
-
+        const pricing = planPricing[plan];
         let priceId: string;
         if (priceEnvMap[plan]) {
           priceId = priceEnvMap[plan] as string;
         } else {
           console.warn(
-            `[SUBSCRIPTION] STRIPE_${plan.toUpperCase()}_PRICE_ID not set — creating inline price (demo mode).`,
+            `[SUBSCRIPTION] ${pricing.envKey} not set — creating inline price (demo mode).`,
           );
           const inlinePrice = await stripe.prices.create({
-            unit_amount: amountMap[plan],
+            unit_amount: pricing.amount,
             currency: "cad",
             recurring: { interval: "month" },
             product_data: {
-              name: `SplitSheet ${plan.charAt(0).toUpperCase() + plan.slice(1)} Plan`,
+              name: `SplitSheet ${pricing.name}`,
             },
           });
           priceId = inlinePrice.id;
