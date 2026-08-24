@@ -1,10 +1,49 @@
 import fs from "fs";
 import path from "path";
 
+/** Strip accidental quotes/whitespace from env values (common Vercel paste mistake). */
+function sanitizeEnvValue(value: string): string {
+  let v = value.trim();
+  if (
+    (v.startsWith('"') && v.endsWith('"')) ||
+    (v.startsWith("'") && v.endsWith("'"))
+  ) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}
+
+const OAUTH_ENV_KEYS = [
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GITHUB_CLIENT_ID",
+  "GITHUB_CLIENT_SECRET",
+  "MICROSOFT_CLIENT_ID",
+  "MICROSOFT_CLIENT_SECRET",
+  "MICROSOFT_TENANT_ID",
+  "APPLE_CLIENT_ID",
+  "APPLE_TEAM_ID",
+  "APPLE_KEY_ID",
+  "APPLE_PRIVATE_KEY",
+  "APP_URL",
+  "AUTH_PROVIDER",
+] as const;
+
+function sanitizeOAuthEnv(): void {
+  for (const key of OAUTH_ENV_KEYS) {
+    const raw = process.env[key];
+    if (typeof raw === "string" && raw.length > 0) {
+      process.env[key] = sanitizeEnvValue(raw);
+    }
+  }
+}
+
 /**
  * Apply env defaults that must run on every host (including Vercel with no .env file).
  */
 function applyRuntimeDefaults(): void {
+  sanitizeOAuthEnv();
+
   if (!process.env.DATABASE_URL && process.env.NEON_DATABASE_URL) {
     process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
   }
@@ -53,13 +92,7 @@ export function loadEnv(): void {
       if (eq === -1) continue;
 
       const key = trimmed.slice(0, eq).trim();
-      let value = trimmed.slice(eq + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
+      const value = sanitizeEnvValue(trimmed.slice(eq + 1));
 
       if (!(key in process.env)) {
         process.env[key] = value;

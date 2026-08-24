@@ -232,12 +232,17 @@ function loginFailure(res: Response, message: string) {
 // ── Google (OIDC via openid-client) ───────────────────────────────────────────
 
 async function registerGoogle(app: Express) {
-  const clientId = process.env.GOOGLE_CLIENT_ID!;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+  const clientId = (process.env.GOOGLE_CLIENT_ID || "").trim();
+  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
+  if (!clientId.endsWith(".apps.googleusercontent.com")) {
+    console.warn(
+      "[auth/google] GOOGLE_CLIENT_ID does not look like a Web client ID (…apps.googleusercontent.com). Check Google Cloud Console + Vercel env.",
+    );
+  }
   const config = await client.discovery(
     new URL("https://accounts.google.com"),
     clientId,
-    clientSecret,
+    { client_secret: clientSecret },
   );
 
   const verify: VerifyFunction = async (tokens, verified) => {
