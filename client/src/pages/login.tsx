@@ -86,17 +86,45 @@ export default function Login() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/auth/providers", { credentials: "include" })
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+
+    fetch("/api/auth/providers", { credentials: "include", signal: controller.signal })
       .then(async (r) => {
-        if (!r.ok) throw new Error("Could not load sign-in options");
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(
+            body?.message ||
+              body?.error ||
+              `Could not load sign-in options (${r.status})`,
+          );
+        }
         return r.json();
       })
       .then((data) => {
+        if (cancelled) return;
         setProviders(Array.isArray(data.providers) ? data.providers : []);
         setLocalDev(Boolean(data.localDev));
       })
-      .catch((err) => setLoadError(err?.message || "Failed to load providers"))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (cancelled) return;
+        const msg =
+          err?.name === "AbortError"
+            ? "Sign-in options timed out. The API may still be starting — refresh in a moment."
+            : err?.message || "Failed to load providers";
+        setLoadError(msg);
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, []);
 
   const enabled = providers.filter((p) => p.enabled);

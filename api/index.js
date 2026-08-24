@@ -3321,6 +3321,13 @@ async function setupAuth(app) {
     return;
   }
   if (useSocialAuthProvider()) {
+    if (!hasAnySocialProvider()) {
+      console.warn(
+        "[auth] AUTH_PROVIDER=social but no provider credentials configured \u2014 falling back to local operator login so the site can boot. Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.) in Vercel, then redeploy."
+      );
+      await setupLocalDevAuth(app);
+      return;
+    }
     await setupSocialAuth(app);
     return;
   }
@@ -13929,12 +13936,13 @@ function assertRuntimeEnv() {
       );
     }
     if (useLocalAuth2) {
-    } else if (process.env.AUTH_PROVIDER === "social" || hasSocialCredentials()) {
+    } else if (process.env.AUTH_PROVIDER === "social") {
       if (!hasSocialCredentials()) {
-        missing.push(
-          "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (or GitHub / Microsoft / Apple credentials)"
+        console.warn(
+          "[boot] AUTH_PROVIDER=social but no OAuth credentials yet. Add GOOGLE_CLIENT_ID/SECRET (or GitHub/Microsoft/Apple) in Vercel. Falling back to local login until then."
         );
       }
+    } else if (hasSocialCredentials()) {
     } else {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {

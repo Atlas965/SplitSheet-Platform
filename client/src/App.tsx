@@ -92,10 +92,11 @@ function AuthenticatedRoutes() {
 }
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, error } = useAuth();
   const showCopilot = !isLoading && isAuthenticated;
 
-  if (isLoading) {
+  // Brief boot spinner only — never block the login page on API outages
+  if (isLoading && !error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" aria-label="Loading" />

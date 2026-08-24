@@ -285,6 +285,15 @@ export async function setupAuth(app: Express) {
   }
 
   if (useSocialAuthProvider()) {
+    if (!hasAnySocialProvider()) {
+      console.warn(
+        "[auth] AUTH_PROVIDER=social but no provider credentials configured — " +
+          "falling back to local operator login so the site can boot. " +
+          "Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.) in Vercel, then redeploy.",
+      );
+      await setupLocalDevAuth(app);
+      return;
+    }
     await setupSocialAuth(app);
     return;
   }

@@ -25,13 +25,17 @@ export function assertRuntimeEnv(): void {
 
     if (useLocalAuth) {
       // Operator login — no Replit OIDC vars required
-    } else if (process.env.AUTH_PROVIDER === "social" || hasSocialCredentials()) {
-      // Social OAuth — credentials validated when strategies register
+    } else if (process.env.AUTH_PROVIDER === "social") {
+      // Soft requirement: app still boots if credentials are missing so /login
+      // can render a clear "configure providers" message instead of a hard 503.
       if (!hasSocialCredentials()) {
-        missing.push(
-          "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (or GitHub / Microsoft / Apple credentials)",
+        console.warn(
+          "[boot] AUTH_PROVIDER=social but no OAuth credentials yet. " +
+            "Add GOOGLE_CLIENT_ID/SECRET (or GitHub/Microsoft/Apple) in Vercel. Falling back to local login until then.",
         );
       }
+    } else if (hasSocialCredentials()) {
+      // credentials present — social auth will be used
     } else {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {
