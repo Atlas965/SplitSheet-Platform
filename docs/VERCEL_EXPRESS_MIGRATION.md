@@ -29,6 +29,11 @@ Vercel
 3. Set Vercel Preview env from `.env.preview.example` (Stripe **TEST** only).
 4. Register OIDC redirect: `https://<preview>/api/callback`.
 5. Register Stripe TEST webhooks to `https://<preview>/api/stripe/webhook` (+ Connect if used).
+   - **Never** point Stripe at the homepage (`https://splitsheet.ca` / `https://<host>/`) — that returns 405/HTML and looks like a 404 in the Dashboard.
+   - Production endpoint: `https://splitsheet.ca/api/stripe/webhook`
+   - Connect (payouts) endpoint: `https://splitsheet.ca/api/stripe/connect-webhook`
+   - Required subscription events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_succeeded`, `invoice.payment_failed`
+   - Set `STRIPE_WEBHOOK_SECRET` (and `STRIPE_CONNECT_WEBHOOK_SECRET` for Connect) in Vercel. Production refuses unsigned webhooks without the secret.
 6. Protect the Preview deployment for review.
 7. Do **not** attach Production secrets or auto-promote to Production.
 

@@ -43,7 +43,16 @@ const STRIPE_WEBHOOK_PATHS = new Set([
 ]);
 
 function isStripeWebhookPath(req: Request): boolean {
-  return STRIPE_WEBHOOK_PATHS.has(req.path);
+  const path = req.path || "";
+  const original = (req.originalUrl || "").split("?")[0];
+  return (
+    STRIPE_WEBHOOK_PATHS.has(path) ||
+    STRIPE_WEBHOOK_PATHS.has(original) ||
+    path.endsWith("/stripe/webhook") ||
+    path.endsWith("/stripe/connect-webhook") ||
+    original.endsWith("/stripe/webhook") ||
+    original.endsWith("/stripe/connect-webhook")
+  );
 }
 
 async function runBootMigrations(): Promise<void> {
@@ -87,7 +96,11 @@ async function buildApp(): Promise<AppBundle> {
     return express.urlencoded({ extended: false })(req, res, next);
   });
 
-  app.use(sanitizeMiddleware);
+  app.use((req, res, next) => {
+    if (isStripeWebhookPath(req)) return next();
+    return sanitizeMiddleware(req, res, next);
+  });
+  // Stripe webhooks stay under the global /api limiter (300/min is ample for Stripe retries)
   app.use("/api", createPgRateLimiter(300, 60_000, "global-api"));
 
   app.use((req, res, next) => {

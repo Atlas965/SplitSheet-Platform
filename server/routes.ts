@@ -47,6 +47,7 @@ import { isAdmin } from "./adminAuth";
 import { registerRightsLedgerRoutes } from "./rights-ledger-routes";
 import { auditLog } from "./security";
 import { recalculateLicenseReadiness } from "./license-readiness";
+import { handleSubscriptionWebhook } from "./stripe-subscription-webhook";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -964,7 +965,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
-  // Stripe webhook handler
+  // Stripe subscription webhook — authoritative billing → PostgreSQL entitlements
+  // Dashboard URL must be: https://splitsheet.ca/api/stripe/webhook  (NOT the homepage)
   app.post(
     "/api/stripe/webhook",
     express.raw({ type: "application/json" }),
@@ -972,108 +974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!stripe) {
         return res.status(503).json({ message: "Stripe is not configured" });
       }
-
-      const sig = req.headers["stripe-signature"];
-      let event: any;
-
-      try {
-        // Verify webhook signature
-        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-        if (webhookSecret) {
-          event = stripe.webhooks.constructEvent(req.body, sig!, webhookSecret);
-        } else {
-          // For development - accept event without verification
-          event = req.body;
-          console.warn(
-            "Webhook signature verification skipped - STRIPE_WEBHOOK_SECRET not configured",
-          );
-        }
-      } catch (err) {
-        console.error("Webhook signature verification failed:", err);
-        return res.status(400).send(`Webhook Error: ${err}`);
-      }
-
-      try {
-        // Handle the event
-        switch (event.type) {
-          case "customer.subscription.created":
-          case "customer.subscription.updated":
-            const subscription = event.data.object;
-            console.log(`Subscription ${event.type}:`, subscription.id);
-
-            // Update user subscription status in database
-            if (subscription.customer) {
-              const user = await storage.getUserByStripeCustomerId(
-                subscription.customer,
-              );
-              if (user) {
-                const tier = subscription.metadata?.tier || "pro";
-                const subscriptionStatus =
-                  subscription.status === "active" ? tier : "free";
-
-                await storage.updateUser(user.id, {
-                  subscriptionStatus: subscription.status,
-                  subscriptionTier: subscriptionStatus,
-                  stripeSubscriptionId: subscription.id,
-                });
-
-                console.log(
-                  `Updated user ${user.id} subscription to ${tier} (${subscription.status})`,
-                );
-              } else {
-                console.warn(
-                  `User not found for Stripe customer: ${subscription.customer}`,
-                );
-              }
-            }
-            break;
-
-          case "customer.subscription.deleted":
-            const deletedSubscription = event.data.object;
-            console.log("Subscription deleted:", deletedSubscription.id);
-
-            // Update user to free tier
-            if (deletedSubscription.customer) {
-              const user = await storage.getUserByStripeCustomerId(
-                deletedSubscription.customer,
-              );
-              if (user) {
-                await storage.updateUser(user.id, {
-                  subscriptionStatus: "cancelled",
-                  subscriptionTier: "free",
-                  stripeSubscriptionId: null,
-                });
-
-                console.log(
-                  `Updated user ${user.id} to free tier after subscription deletion`,
-                );
-              } else {
-                console.warn(
-                  `User not found for Stripe customer: ${deletedSubscription.customer}`,
-                );
-              }
-            }
-            break;
-
-          case "invoice.payment_succeeded":
-            const invoice = event.data.object;
-            console.log("Payment succeeded for invoice:", invoice.id);
-            break;
-
-          case "invoice.payment_failed":
-            const failedInvoice = event.data.object;
-            console.log("Payment failed for invoice:", failedInvoice.id);
-            break;
-
-          default:
-            console.log(`Unhandled event type ${event.type}`);
-        }
-
-        res.json({ received: true });
-      } catch (error) {
-        console.error("Error processing webhook:", error);
-        res.status(500).json({ error: "Webhook processing failed" });
-      }
+      await handleSubscriptionWebhook(stripe, req, res);
     },
   );
 

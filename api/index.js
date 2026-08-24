@@ -8445,17 +8445,17 @@ function registerPaymentRoutes(app) {
         SELECT 1 FROM payment_events
         WHERE stripe_event_id = ${event.id} LIMIT 1
       `).catch(() => ({ rows: [] }));
-      const alreadyProcessed = (idempotencyRows.rows?.length ?? 0) > 0;
+      const alreadyProcessed2 = (idempotencyRows.rows?.length ?? 0) > 0;
       await db.execute(sql8`
         INSERT INTO payment_events
           (stripe_event_id, event_type, payload, processed)
         VALUES
           (${event.id}, ${event.type}, ${JSON.stringify(event.data.object)}::jsonb,
-           ${alreadyProcessed})
+           ${alreadyProcessed2})
         ON CONFLICT (stripe_event_id) DO NOTHING
       `).catch(() => {
       });
-      if (alreadyProcessed) {
+      if (alreadyProcessed2) {
         console.log(`[WEBHOOK] Skipping duplicate event ${event.id}`);
         return res.json({ received: true, duplicate: true });
       }
@@ -10431,6 +10431,235 @@ var init_rights_ledger_routes = __esm({
   }
 });
 
+// server/stripe-subscription-webhook.ts
+import { sql as sql11 } from "drizzle-orm";
+function isProductionLike() {
+  return isVercelRuntime() || process.env.NODE_ENV === "production" || process.env.LOCAL_DEV === "false";
+}
+async function alreadyProcessed(eventId) {
+  try {
+    const rows = await db.execute(sql11`
+      SELECT 1 FROM payment_events
+      WHERE stripe_event_id = ${eventId}
+      LIMIT 1
+    `);
+    return (rows.rows?.length ?? 0) > 0;
+  } catch (err) {
+    console.error("[stripe/webhook] idempotency lookup failed:", err);
+    return false;
+  }
+}
+async function recordEvent(event, processed) {
+  try {
+    await db.execute(sql11`
+      INSERT INTO payment_events
+        (stripe_event_id, event_type, payload, processed)
+      VALUES
+        (${event.id}, ${event.type}, ${JSON.stringify(event.data.object)}::jsonb, ${processed})
+      ON CONFLICT (stripe_event_id) DO NOTHING
+    `);
+  } catch (err) {
+    console.error("[stripe/webhook] failed to record payment_events row:", err);
+  }
+}
+async function markProcessed(eventId) {
+  try {
+    await db.execute(sql11`
+      UPDATE payment_events
+      SET processed = TRUE
+      WHERE stripe_event_id = ${eventId}
+    `);
+  } catch (err) {
+    console.error("[stripe/webhook] failed to mark processed:", err);
+  }
+}
+async function syncSubscriptionToUser(subscription) {
+  const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
+  if (!customerId) {
+    console.warn("[stripe/webhook] subscription missing customer", subscription.id);
+    return;
+  }
+  const user = await storage.getUserByStripeCustomerId(customerId);
+  if (!user) {
+    console.warn(`[stripe/webhook] no user for Stripe customer ${customerId}`);
+    return;
+  }
+  const tier = subscription.metadata?.tier || "pro";
+  const active = ["active", "trialing"].includes(subscription.status);
+  await storage.updateUser(user.id, {
+    subscriptionStatus: subscription.status,
+    subscriptionTier: active ? tier : "free",
+    stripeSubscriptionId: subscription.id,
+    stripeCustomerId: customerId
+  });
+  console.log(
+    `[stripe/webhook] user=${user.id} sub=${subscription.id} status=${subscription.status} tier=${active ? tier : "free"}`
+  );
+}
+async function handleCheckoutSessionCompleted(session2) {
+  const customerId = typeof session2.customer === "string" ? session2.customer : session2.customer?.id;
+  const subscriptionId = typeof session2.subscription === "string" ? session2.subscription : session2.subscription?.id;
+  const userId = session2.metadata?.userId || session2.client_reference_id;
+  if (userId && customerId) {
+    await storage.updateUserStripeInfo(userId, customerId, subscriptionId || "");
+    console.log(
+      `[stripe/webhook] checkout linked user=${userId} customer=${customerId} sub=${subscriptionId || "n/a"}`
+    );
+  } else if (customerId && subscriptionId) {
+    const user = await storage.getUserByStripeCustomerId(customerId);
+    if (user) {
+      await storage.updateUser(user.id, {
+        stripeSubscriptionId: subscriptionId,
+        subscriptionStatus: "active"
+      });
+    } else {
+      console.warn(
+        `[stripe/webhook] checkout.session.completed unmatched customer=${customerId}`
+      );
+    }
+  }
+}
+async function handleInvoicePaymentFailed(invoice) {
+  const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  if (!customerId) return;
+  const user = await storage.getUserByStripeCustomerId(customerId);
+  if (!user) {
+    console.warn(`[stripe/webhook] payment_failed unmatched customer=${customerId}`);
+    return;
+  }
+  await storage.updateUser(user.id, {
+    subscriptionStatus: "past_due"
+  });
+  console.log(
+    `[stripe/webhook] payment_failed user=${user.id} invoice=${invoice.id} \u2192 past_due`
+  );
+}
+async function handleInvoicePaid(invoice) {
+  const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  if (!customerId) return;
+  const user = await storage.getUserByStripeCustomerId(customerId);
+  if (!user) return;
+  const tier = user.subscriptionTier && user.subscriptionTier !== "free" ? user.subscriptionTier : "pro";
+  await storage.updateUser(user.id, {
+    subscriptionStatus: "active",
+    subscriptionTier: tier
+  });
+  console.log(`[stripe/webhook] invoice paid user=${user.id} invoice=${invoice.id}`);
+}
+async function handleSubscriptionWebhook(stripe5, req, res) {
+  const sig = req.headers["stripe-signature"];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
+  if (!webhookSecret && isProductionLike()) {
+    console.error(
+      "[stripe/webhook] STRIPE_WEBHOOK_SECRET is required in production. Refusing unsigned events."
+    );
+    res.status(503).json({
+      error: "Webhook not configured",
+      message: "Set STRIPE_WEBHOOK_SECRET in the production environment."
+    });
+    return;
+  }
+  let event;
+  try {
+    if (webhookSecret) {
+      if (!sig) {
+        res.status(400).json({ error: "Missing Stripe-Signature header" });
+        return;
+      }
+      event = stripe5.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } else {
+      const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+      event = JSON.parse(raw);
+      console.warn(
+        "[stripe/webhook] signature verification skipped (dev only \u2014 set STRIPE_WEBHOOK_SECRET)"
+      );
+    }
+  } catch (err) {
+    console.error("[stripe/webhook] signature verification failed:", err?.message || err);
+    res.status(400).send(`Webhook Error: ${err?.message || "invalid signature"}`);
+    return;
+  }
+  console.log(
+    `[stripe/webhook] received id=${event.id} type=${event.type} livemode=${event.livemode}`
+  );
+  if (await alreadyProcessed(event.id)) {
+    console.log(`[stripe/webhook] duplicate ignored id=${event.id}`);
+    res.json({ received: true, duplicate: true });
+    return;
+  }
+  await recordEvent(event, false);
+  try {
+    if (!SUBSCRIPTION_EVENTS.has(event.type)) {
+      console.log(`[stripe/webhook] ignored unhandled type=${event.type}`);
+      await markProcessed(event.id);
+      res.json({ received: true, ignored: true });
+      return;
+    }
+    switch (event.type) {
+      case "checkout.session.completed":
+        await handleCheckoutSessionCompleted(event.data.object);
+        break;
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+        await syncSubscriptionToUser(event.data.object);
+        break;
+      case "customer.subscription.deleted": {
+        const deleted = event.data.object;
+        const customerId = typeof deleted.customer === "string" ? deleted.customer : deleted.customer?.id;
+        if (customerId) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user) {
+            await storage.updateUser(user.id, {
+              subscriptionStatus: "cancelled",
+              subscriptionTier: "free",
+              stripeSubscriptionId: null
+            });
+            console.log(`[stripe/webhook] cancelled user=${user.id} sub=${deleted.id}`);
+          }
+        }
+        break;
+      }
+      case "invoice.paid":
+      case "invoice.payment_succeeded":
+        await handleInvoicePaid(event.data.object);
+        break;
+      case "invoice.payment_failed":
+        await handleInvoicePaymentFailed(event.data.object);
+        break;
+      default:
+        break;
+    }
+    await markProcessed(event.id);
+    res.json({ received: true });
+  } catch (error) {
+    console.error("[stripe/webhook] processing failed:", {
+      eventId: event.id,
+      type: event.type,
+      message: error?.message
+    });
+    res.status(500).json({ error: "Webhook processing failed" });
+  }
+}
+var SUBSCRIPTION_EVENTS, STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS;
+var init_stripe_subscription_webhook = __esm({
+  "server/stripe-subscription-webhook.ts"() {
+    "use strict";
+    init_db();
+    init_storage();
+    init_runtime();
+    SUBSCRIPTION_EVENTS = /* @__PURE__ */ new Set([
+      "checkout.session.completed",
+      "customer.subscription.created",
+      "customer.subscription.updated",
+      "customer.subscription.deleted",
+      "invoice.paid",
+      "invoice.payment_succeeded",
+      "invoice.payment_failed"
+    ]);
+    STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS = [...SUBSCRIPTION_EVENTS];
+  }
+});
+
 // server/routes.ts
 import express2 from "express";
 import { createServer } from "http";
@@ -11126,89 +11355,7 @@ async function registerRoutes(app) {
       if (!stripe4) {
         return res.status(503).json({ message: "Stripe is not configured" });
       }
-      const sig = req.headers["stripe-signature"];
-      let event;
-      try {
-        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-        if (webhookSecret) {
-          event = stripe4.webhooks.constructEvent(req.body, sig, webhookSecret);
-        } else {
-          event = req.body;
-          console.warn(
-            "Webhook signature verification skipped - STRIPE_WEBHOOK_SECRET not configured"
-          );
-        }
-      } catch (err) {
-        console.error("Webhook signature verification failed:", err);
-        return res.status(400).send(`Webhook Error: ${err}`);
-      }
-      try {
-        switch (event.type) {
-          case "customer.subscription.created":
-          case "customer.subscription.updated":
-            const subscription = event.data.object;
-            console.log(`Subscription ${event.type}:`, subscription.id);
-            if (subscription.customer) {
-              const user = await storage.getUserByStripeCustomerId(
-                subscription.customer
-              );
-              if (user) {
-                const tier = subscription.metadata?.tier || "pro";
-                const subscriptionStatus = subscription.status === "active" ? tier : "free";
-                await storage.updateUser(user.id, {
-                  subscriptionStatus: subscription.status,
-                  subscriptionTier: subscriptionStatus,
-                  stripeSubscriptionId: subscription.id
-                });
-                console.log(
-                  `Updated user ${user.id} subscription to ${tier} (${subscription.status})`
-                );
-              } else {
-                console.warn(
-                  `User not found for Stripe customer: ${subscription.customer}`
-                );
-              }
-            }
-            break;
-          case "customer.subscription.deleted":
-            const deletedSubscription = event.data.object;
-            console.log("Subscription deleted:", deletedSubscription.id);
-            if (deletedSubscription.customer) {
-              const user = await storage.getUserByStripeCustomerId(
-                deletedSubscription.customer
-              );
-              if (user) {
-                await storage.updateUser(user.id, {
-                  subscriptionStatus: "cancelled",
-                  subscriptionTier: "free",
-                  stripeSubscriptionId: null
-                });
-                console.log(
-                  `Updated user ${user.id} to free tier after subscription deletion`
-                );
-              } else {
-                console.warn(
-                  `User not found for Stripe customer: ${deletedSubscription.customer}`
-                );
-              }
-            }
-            break;
-          case "invoice.payment_succeeded":
-            const invoice = event.data.object;
-            console.log("Payment succeeded for invoice:", invoice.id);
-            break;
-          case "invoice.payment_failed":
-            const failedInvoice = event.data.object;
-            console.log("Payment failed for invoice:", failedInvoice.id);
-            break;
-          default:
-            console.log(`Unhandled event type ${event.type}`);
-        }
-        res.json({ received: true });
-      } catch (error) {
-        console.error("Error processing webhook:", error);
-        res.status(500).json({ error: "Webhook processing failed" });
-      }
+      await handleSubscriptionWebhook(stripe4, req, res);
     }
   );
   app.post(
@@ -12184,6 +12331,7 @@ var init_routes = __esm({
     init_rights_ledger_routes();
     init_security();
     init_license_readiness();
+    init_stripe_subscription_webhook();
     rateLimitStore2 = /* @__PURE__ */ new Map();
     stripe4 = null;
     stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;
@@ -12386,9 +12534,9 @@ var init_transport_security = __esm({
 });
 
 // server/db-migrations.ts
-import { sql as sql11 } from "drizzle-orm";
+import { sql as sql12 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
-  await db.execute(sql11`
+  await db.execute(sql12`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS stripe_connect_account_id varchar,
       ADD COLUMN IF NOT EXISTS stripe_connect_onboarded boolean DEFAULT false,
@@ -12397,7 +12545,7 @@ async function runCoreSchemaMigrations() {
       ADD COLUMN IF NOT EXISTS terms_accepted_at timestamp,
       ADD COLUMN IF NOT EXISTS terms_version varchar;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL REFERENCES contracts(id),
@@ -12413,7 +12561,7 @@ async function runCoreSchemaMigrations() {
       updated_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS song_assets (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       title       varchar NOT NULL,
@@ -12427,11 +12575,11 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS ownership_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id             varchar NOT NULL REFERENCES song_assets(id),
@@ -12445,13 +12593,13 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     ALTER TABLE ownership_records
       ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
       ADD COLUMN IF NOT EXISTS territory varchar,
       ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS revenue_events (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id     varchar NOT NULL REFERENCES song_assets(id),
@@ -12465,7 +12613,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS payout_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       revenue_event_id     varchar NOT NULL REFERENCES revenue_events(id),
@@ -12480,7 +12628,7 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS user_balances (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -12491,7 +12639,7 @@ async function runCoreSchemaMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS split_confirmations (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL REFERENCES contracts(id),
@@ -12510,7 +12658,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,
@@ -12520,7 +12668,7 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS error_logs (
       id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       level      varchar NOT NULL DEFAULT 'error',
@@ -12532,14 +12680,14 @@ async function runCoreSchemaMigrations() {
       created_at timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS rate_limit_buckets (
       bucket_key varchar PRIMARY KEY,
       count      integer NOT NULL DEFAULT 0,
       reset_at   timestamp NOT NULL
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS organizations (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_org_id   varchar NOT NULL UNIQUE,
@@ -12554,7 +12702,7 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS organization_members (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -12565,9 +12713,9 @@ async function runCoreSchemaMigrations() {
       UNIQUE (organization_id, user_id)
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS organization_api_keys (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -12581,8 +12729,8 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar REFERENCES users(id),
@@ -12598,7 +12746,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS rights_organizations (
       id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       name              varchar NOT NULL,
@@ -12609,7 +12757,7 @@ async function runCoreSchemaMigrations() {
       created_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS creators (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_creator_id varchar NOT NULL UNIQUE,
@@ -12626,8 +12774,8 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS creator_rights_profiles (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -12640,7 +12788,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS composition_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -12651,7 +12799,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS master_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -12665,7 +12813,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS license_readiness (
       id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -12678,7 +12826,7 @@ async function runCoreSchemaMigrations() {
       last_checked_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
     SELECT * FROM (VALUES
       ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
@@ -12699,7 +12847,7 @@ async function runCoreSchemaMigrations() {
   `);
 }
 async function runLegalDocumentMigrations() {
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS legal_documents (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       doc_type       varchar NOT NULL,
@@ -12711,7 +12859,7 @@ async function runLegalDocumentMigrations() {
       UNIQUE (doc_type, version)
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL REFERENCES users(id),
@@ -12722,18 +12870,18 @@ async function runLegalDocumentMigrations() {
       user_agent   varchar
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+  await db.execute(sql12`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
     FROM users u
@@ -12744,7 +12892,7 @@ async function runLegalDocumentMigrations() {
         WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
       );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
     FROM users u
@@ -12757,7 +12905,7 @@ async function runLegalDocumentMigrations() {
   `);
 }
 async function runSecurityEngineMigrations() {
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS split_versions (
       id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar NOT NULL,
@@ -12775,8 +12923,8 @@ async function runSecurityEngineMigrations() {
       UNIQUE (contract_id, version_number)
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS split_signatures (
       id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       split_version_id uuid NOT NULL REFERENCES split_versions(id) ON DELETE CASCADE,
@@ -12797,7 +12945,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (split_version_id, signer_email)
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS fraud_events (
       id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL,
@@ -12810,8 +12958,8 @@ async function runSecurityEngineMigrations() {
       created_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS contract_risk_profiles (
       contract_id        varchar PRIMARY KEY,
       current_score      integer NOT NULL DEFAULT 0,
@@ -12823,7 +12971,7 @@ async function runSecurityEngineMigrations() {
       updated_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS audit_log (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       varchar,
@@ -12839,8 +12987,8 @@ async function runSecurityEngineMigrations() {
       created_at    timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS api_keys (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       owner_id     varchar NOT NULL,
@@ -12855,8 +13003,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS login_events (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL,
@@ -12868,8 +13016,8 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS user_devices (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL,
@@ -12882,7 +13030,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (user_id, device_hash)
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS disputes (
       id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id       varchar NOT NULL,
@@ -12899,8 +13047,8 @@ async function runSecurityEngineMigrations() {
       updated_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS dispute_transitions (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       dispute_id  uuid NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
@@ -12911,7 +13059,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS zk_ownership_proofs (
       proof_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL,
@@ -12931,8 +13079,8 @@ async function runSecurityEngineMigrations() {
       created_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql12`
     ALTER TABLE contract_templates
       ADD COLUMN IF NOT EXISTS slug varchar,
       ADD COLUMN IF NOT EXISTS category varchar,
@@ -12952,14 +13100,14 @@ async function runSecurityEngineMigrations() {
       ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS parent_template_id varchar;
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+  await db.execute(sql12`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS template_version varchar;
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS template_audit_log (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       template_id varchar REFERENCES contract_templates(id),
@@ -12970,7 +13118,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS license_records (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar REFERENCES contracts(id),
@@ -12989,8 +13137,8 @@ async function runSecurityEngineMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS voice_sessions (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL REFERENCES users(id),
@@ -13007,8 +13155,8 @@ async function runSecurityEngineMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS voice_turns (
       id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id            varchar NOT NULL REFERENCES voice_sessions(id),
@@ -13027,8 +13175,8 @@ async function runSecurityEngineMigrations() {
       created_at            timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS voice_pending_actions (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id   varchar NOT NULL REFERENCES voice_sessions(id),
@@ -13045,8 +13193,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
-  await db.execute(sql11`
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS voice_provenance (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id           varchar REFERENCES voice_sessions(id),
@@ -13061,7 +13209,7 @@ async function runSecurityEngineMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`
+  await db.execute(sql12`
     CREATE TABLE IF NOT EXISTS voice_user_memory (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL REFERENCES users(id),
@@ -13074,7 +13222,7 @@ async function runSecurityEngineMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql11`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
+  await db.execute(sql12`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }
 var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
 var init_db_migrations = __esm({
@@ -13218,7 +13366,9 @@ __export(app_exports, {
 });
 import express4 from "express";
 function isStripeWebhookPath(req) {
-  return STRIPE_WEBHOOK_PATHS.has(req.path);
+  const path3 = req.path || "";
+  const original = (req.originalUrl || "").split("?")[0];
+  return STRIPE_WEBHOOK_PATHS.has(path3) || STRIPE_WEBHOOK_PATHS.has(original) || path3.endsWith("/stripe/webhook") || path3.endsWith("/stripe/connect-webhook") || original.endsWith("/stripe/webhook") || original.endsWith("/stripe/connect-webhook");
 }
 async function runBootMigrations() {
   await runCoreSchemaMigrations();
@@ -13251,7 +13401,10 @@ async function buildApp() {
     if (isStripeWebhookPath(req)) return next();
     return express4.urlencoded({ extended: false })(req, res, next);
   });
-  app.use(sanitizeMiddleware);
+  app.use((req, res, next) => {
+    if (isStripeWebhookPath(req)) return next();
+    return sanitizeMiddleware(req, res, next);
+  });
   app.use("/api", createPgRateLimiter(300, 6e4, "global-api"));
   app.use((req, res, next) => {
     const start = Date.now();
