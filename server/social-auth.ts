@@ -5,11 +5,9 @@
  * Session shape matches existing passport users: { claims, expires_at, provider }.
  */
 import type { Express, Request, Response, NextFunction } from "express";
-import passport from "passport";
 import crypto from "crypto";
 import { eq } from "drizzle-orm";
 import * as client from "openid-client";
-import { Strategy as OidcStrategy, type VerifyFunction } from "openid-client/passport";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { storage } from "./storage";
@@ -166,19 +164,37 @@ function createAppleClientSecret(): string {
   return `${data}.${base64url(signature)}`;
 }
 
+type OAuthCookiePayload = {
+  state: string;
+  /** PKCE verifier — required for Google/Microsoft on serverless (session often lost). */
+  codeVerifier?: string;
+};
+
 function oauthStateCookieName(provider: string) {
   return `oauth_state_${provider}`;
 }
 
-function setOAuthState(res: Response, provider: string, state: string) {
+function oauthCookieSecure(): string {
+  return process.env.NODE_ENV === "production" ||
+    process.env.VERCEL === "1" ||
+    process.env.VERCEL === "true"
+    ? "; Secure"
+    : "";
+}
+
+function setOAuthState(
+  res: Response,
+  provider: string,
+  stateOrPayload: string | OAuthCookiePayload,
+) {
   const name = oauthStateCookieName(provider);
-  const secure =
-    process.env.NODE_ENV === "production" || process.env.VERCEL === "1"
-      ? "; Secure"
-      : "";
+  const payload: OAuthCookiePayload =
+    typeof stateOrPayload === "string"
+      ? { state: stateOrPayload }
+      : stateOrPayload;
   res.append(
     "Set-Cookie",
-    `${name}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${secure}`,
+    `${name}=${encodeURIComponent(JSON.stringify(payload))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${oauthCookieSecure()}`,
   );
 }
 
@@ -186,12 +202,28 @@ function clearOAuthState(res: Response, provider: string) {
   const name = oauthStateCookieName(provider);
   res.append(
     "Set-Cookie",
-    `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${oauthCookieSecure()}`,
   );
 }
 
+function readOAuthStatePayload(
+  req: Request,
+  provider: string,
+): OAuthCookiePayload | undefined {
+  const raw = (req as any).cookies?.[oauthStateCookieName(provider)];
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as OAuthCookiePayload;
+    if (parsed && typeof parsed.state === "string") return parsed;
+  } catch {
+    // Legacy: cookie held bare state string (GitHub/Apple before PKCE bundle).
+    return { state: raw };
+  }
+  return { state: raw };
+}
+
 function readOAuthState(req: Request, provider: string): string | undefined {
-  return (req as any).cookies?.[oauthStateCookieName(provider)];
+  return readOAuthStatePayload(req, provider)?.state;
 }
 
 async function finishLogin(
@@ -219,7 +251,11 @@ async function finishLogin(
   );
 
   await new Promise<void>((resolve, reject) => {
-    req.login(user, (err) => (err ? reject(err) : resolve()));
+    req.login(user, (err) => {
+      if (err) return reject(err);
+      // Ensure connect-pg-simple persists before redirect (critical on Vercel).
+      req.session.save((saveErr) => (saveErr ? reject(saveErr) : resolve()));
+    });
   });
   res.redirect("/");
 }
@@ -229,7 +265,7 @@ function loginFailure(res: Response, message: string) {
   res.redirect(`/login?error=${q}`);
 }
 
-// ── Google (OIDC via openid-client) ───────────────────────────────────────────
+// ── Google (OIDC + cookie PKCE — session store is unreliable across Vercel isolates) ──
 
 async function registerGoogle(app: Express) {
   const clientId = (process.env.GOOGLE_CLIENT_ID || "").trim();
@@ -245,14 +281,73 @@ async function registerGoogle(app: Express) {
     { client_secret: clientSecret },
   );
 
-  const verify: VerifyFunction = async (tokens, verified) => {
+  app.get("/api/auth/google", async (req, res) => {
     try {
-      const claims = tokens.claims();
-      const sub = String(claims.sub);
+      const codeVerifier = client.randomPKCECodeVerifier();
+      const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
+      const state = client.randomState();
+      setOAuthState(res, "google", { state, codeVerifier });
+
+      const redirectUri = callbackUrl("google", req);
+      const url = client.buildAuthorizationUrl(
+        config,
+        new URLSearchParams({
+          redirect_uri: redirectUri,
+          scope: "openid email profile",
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          state,
+          prompt: "select_account",
+        }),
+      );
+      res.redirect(url.href);
+    } catch (err: any) {
+      console.error("[auth/google] start failed:", err);
+      loginFailure(res, err?.message || "Google sign-in failed to start");
+    }
+  });
+
+  app.get("/api/auth/google/callback", async (req, res) => {
+    try {
+      const payload = readOAuthStatePayload(req, "google");
+      clearOAuthState(res, "google");
+
+      if (typeof req.query.error === "string") {
+        return loginFailure(
+          res,
+          String(req.query.error_description || req.query.error),
+        );
+      }
+
+      const code = typeof req.query.code === "string" ? req.query.code : undefined;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+      if (!code || !payload?.codeVerifier || !payload.state || state !== payload.state) {
+        return loginFailure(
+          res,
+          "Google sign-in session expired. Close the tab and try again.",
+        );
+      }
+
+      const currentUrl = new URL(callbackUrl("google", req));
+      for (const [key, value] of Object.entries(req.query)) {
+        if (typeof value === "string") currentUrl.searchParams.set(key, value);
+      }
+
+      const tokens = await client.authorizationCodeGrant(config, currentUrl, {
+        pkceCodeVerifier: payload.codeVerifier,
+        expectedState: payload.state,
+      });
+
+      const claims = tokens.claims() || {};
+      const sub = String(claims.sub || "");
+      if (!sub) {
+        return loginFailure(res, "Google did not return a user id");
+      }
+
       const email = (claims.email as string) || null;
       const name = (claims.name as string) || "";
       const [firstName, ...rest] = name.split(" ");
-      const userId = await upsertSocialUser({
+      await finishLogin(req, res, {
         provider: "google",
         providerUserId: sub,
         email,
@@ -260,77 +355,93 @@ async function registerGoogle(app: Express) {
         lastName: rest.join(" ") || (claims.family_name as string) || null,
         profileImageUrl: (claims.picture as string) || null,
       });
-      verified(
-        null,
-        sessionUserFromClaims(
-          {
-            sub: userId,
-            email,
-            first_name: firstName || null,
-            last_name: rest.join(" ") || null,
-            profile_image_url: (claims.picture as string) || null,
-          },
-          "google",
-        ),
-      );
-    } catch (err) {
-      verified(err as Error);
+    } catch (err: any) {
+      console.error("[auth/google] callback failed:", err);
+      loginFailure(res, err?.message || "Google sign-in failed");
     }
-  };
-
-  // Register strategy per callback host using APP_URL when set
-  const strategyName = "google";
-  passport.use(
-    strategyName,
-    new OidcStrategy(
-      {
-        name: strategyName,
-        config,
-        scope: "openid email profile",
-        callbackURL: callbackUrl("google"),
-      },
-      verify,
-    ),
-  );
-
-  app.get("/api/auth/google", (req, res, next) => {
-    passport.authenticate(strategyName, {
-      scope: ["openid", "email", "profile"],
-      prompt: "select_account",
-    })(req, res, next);
-  });
-
-  app.get("/api/auth/google/callback", (req, res, next) => {
-    passport.authenticate(strategyName, {
-      successReturnToOrRedirect: "/",
-      failureRedirect: "/login?error=Google%20sign-in%20failed",
-    })(req, res, next);
   });
 }
 
-// ── Microsoft (OIDC) ──────────────────────────────────────────────────────────
+// ── Microsoft (OIDC + cookie PKCE) ────────────────────────────────────────────
 
 async function registerMicrosoft(app: Express) {
-  const clientId = process.env.MICROSOFT_CLIENT_ID!;
-  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET!;
+  const clientId = (process.env.MICROSOFT_CLIENT_ID || "").trim();
+  const clientSecret = (process.env.MICROSOFT_CLIENT_SECRET || "").trim();
   const tenant = process.env.MICROSOFT_TENANT_ID || "common";
   const config = await client.discovery(
     new URL(`https://login.microsoftonline.com/${tenant}/v2.0`),
     clientId,
-    clientSecret,
+    { client_secret: clientSecret },
   );
 
-  const verify: VerifyFunction = async (tokens, verified) => {
+  app.get("/api/auth/microsoft", async (req, res) => {
     try {
-      const claims = tokens.claims();
-      const sub = String(claims.sub || claims.oid);
+      const codeVerifier = client.randomPKCECodeVerifier();
+      const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
+      const state = client.randomState();
+      setOAuthState(res, "microsoft", { state, codeVerifier });
+
+      const url = client.buildAuthorizationUrl(
+        config,
+        new URLSearchParams({
+          redirect_uri: callbackUrl("microsoft", req),
+          scope: "openid email profile offline_access",
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          state,
+        }),
+      );
+      res.redirect(url.href);
+    } catch (err: any) {
+      console.error("[auth/microsoft] start failed:", err);
+      loginFailure(res, err?.message || "Microsoft sign-in failed to start");
+    }
+  });
+
+  app.get("/api/auth/microsoft/callback", async (req, res) => {
+    try {
+      const payload = readOAuthStatePayload(req, "microsoft");
+      clearOAuthState(res, "microsoft");
+
+      if (typeof req.query.error === "string") {
+        return loginFailure(
+          res,
+          String(req.query.error_description || req.query.error),
+        );
+      }
+
+      const code = typeof req.query.code === "string" ? req.query.code : undefined;
+      const state = typeof req.query.state === "string" ? req.query.state : undefined;
+      if (!code || !payload?.codeVerifier || !payload.state || state !== payload.state) {
+        return loginFailure(
+          res,
+          "Microsoft sign-in session expired. Close the tab and try again.",
+        );
+      }
+
+      const currentUrl = new URL(callbackUrl("microsoft", req));
+      for (const [key, value] of Object.entries(req.query)) {
+        if (typeof value === "string") currentUrl.searchParams.set(key, value);
+      }
+
+      const tokens = await client.authorizationCodeGrant(config, currentUrl, {
+        pkceCodeVerifier: payload.codeVerifier,
+        expectedState: payload.state,
+      });
+
+      const claims = tokens.claims() || {};
+      const sub = String(claims.sub || claims.oid || "");
+      if (!sub) {
+        return loginFailure(res, "Microsoft did not return a user id");
+      }
+
       const email =
         (claims.email as string) ||
         (claims.preferred_username as string) ||
         null;
       const name = (claims.name as string) || "";
       const [firstName, ...rest] = name.split(" ");
-      const userId = await upsertSocialUser({
+      await finishLogin(req, res, {
         provider: "microsoft",
         providerUserId: sub,
         email,
@@ -338,48 +449,10 @@ async function registerMicrosoft(app: Express) {
         lastName: rest.join(" ") || null,
         profileImageUrl: null,
       });
-      verified(
-        null,
-        sessionUserFromClaims(
-          {
-            sub: userId,
-            email,
-            first_name: firstName || null,
-            last_name: rest.join(" ") || null,
-          },
-          "microsoft",
-        ),
-      );
-    } catch (err) {
-      verified(err as Error);
+    } catch (err: any) {
+      console.error("[auth/microsoft] callback failed:", err);
+      loginFailure(res, err?.message || "Microsoft sign-in failed");
     }
-  };
-
-  const strategyName = "microsoft";
-  passport.use(
-    strategyName,
-    new OidcStrategy(
-      {
-        name: strategyName,
-        config,
-        scope: "openid email profile offline_access",
-        callbackURL: callbackUrl("microsoft"),
-      },
-      verify,
-    ),
-  );
-
-  app.get("/api/auth/microsoft", (req, res, next) => {
-    passport.authenticate(strategyName, {
-      scope: ["openid", "email", "profile", "offline_access"],
-    })(req, res, next);
-  });
-
-  app.get("/api/auth/microsoft/callback", (req, res, next) => {
-    passport.authenticate(strategyName, {
-      successReturnToOrRedirect: "/",
-      failureRedirect: "/login?error=Microsoft%20sign-in%20failed",
-    })(req, res, next);
   });
 }
 

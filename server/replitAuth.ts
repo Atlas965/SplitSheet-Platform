@@ -67,8 +67,10 @@ export function getSession() {
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
     resave: false,
-    saveUninitialized: false,
+    // OAuth + login must persist the session cookie on first write (Vercel).
+    saveUninitialized: true,
     proxy: true,
+    name: "splitsheet.sid",
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production" || isVercelRuntime(),
