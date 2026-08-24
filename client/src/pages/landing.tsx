@@ -108,7 +108,7 @@ function QuickSplitCalculator() {
           + Add collaborator
         </button>
         <a
-          href="/api/login"
+          href="/login"
           className={`flex-1 text-center text-sm py-2 rounded-lg font-semibold transition-opacity ${
             total === 100
               ? "bg-accent text-accent-foreground hover:opacity-90"
@@ -148,13 +148,13 @@ export default function Landing() {
               <a href="#features"     className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
               <a href="#how-it-works" className="text-muted-foreground hover:text-foreground transition-colors">How It Works</a>
               <a href="#pricing"      className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
-              <a href="/api/login"    className="text-muted-foreground hover:text-foreground transition-colors">Sign In</a>
-              <a href="/api/login"    className="bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 hover:shadow-md transition-all font-semibold">
+              <a href="/login"    className="text-muted-foreground hover:text-foreground transition-colors">Sign In</a>
+              <a href="/login"    className="bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 hover:shadow-md transition-all font-semibold">
                 Get Started Free
               </a>
             </div>
             <div className="md:hidden">
-              <a href="/api/login" className="bg-primary text-primary-foreground px-3 py-1.5 rounded-lg text-sm font-semibold">
+              <a href="/login" className="bg-primary text-primary-foreground px-3 py-1.5 rounded-lg text-sm font-semibold">
                 Get Started
               </a>
             </div>
@@ -186,7 +186,7 @@ export default function Landing() {
               </p>
               <div className="flex flex-col sm:flex-row gap-4 items-center mb-6">
                 <a
-                  href="/api/login"
+                  href="/login"
                   className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold shadow-lg shadow-primary/20 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/25 hover:-translate-y-0.5 transition-all w-full sm:w-auto text-center"
                 >
                   Start Creating Agreements
@@ -289,7 +289,7 @@ export default function Landing() {
 
             <div className="text-center">
               <a
-                href="/api/login"
+                href="/login"
                 className="bg-accent text-accent-foreground px-6 py-2.5 rounded-lg font-semibold text-sm hover:bg-accent/90 transition-colors inline-block"
               >
                 Create Your Split Sheet →
@@ -451,7 +451,7 @@ export default function Landing() {
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
-              <a href="/api/login" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Start Free</a>
+              <a href="/login" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Start Free</a>
             </div>
 
             {/* Pay Per Project $29 */}
@@ -467,7 +467,7 @@ export default function Landing() {
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
-              <a href="/api/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Project →</a>
+              <a href="/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Project →</a>
             </div>
           </div>
 
@@ -503,7 +503,7 @@ export default function Landing() {
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
-              <a href="/api/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
+              <a href="/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
             </div>
             {/* Studio Pro $59/mo */}
             <div className="bg-card p-8 rounded-xl border-2 border-primary/40 flex flex-col relative">
@@ -518,7 +518,7 @@ export default function Landing() {
                   <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
                 ))}
               </ul>
-              <a href="/api/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
+              <a href="/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
             </div>
           </div>
 
@@ -556,7 +556,7 @@ export default function Landing() {
             collaborations clear, organised, and properly documented.
           </p>
           <a
-            href="/api/login"
+            href="/login"
             className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary/90 transition-colors inline-block"
           >
             Create Your First Split Sheet Free →

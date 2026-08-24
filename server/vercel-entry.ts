@@ -20,7 +20,7 @@ function bootFailureApp(err: unknown): Express {
       error: "SERVICE_UNAVAILABLE",
       message,
       hint:
-        "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Then Redeploy.",
+        "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=social (with GOOGLE_CLIENT_ID/SECRET etc.) or AUTH_PROVIDER=local. Then Redeploy.",
     });
   });
   return app;

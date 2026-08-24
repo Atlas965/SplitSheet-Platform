@@ -48,6 +48,7 @@ export const GATED_DOC_TYPES: LegalDocType[] = ["tos", "privacy"];
  *  the acceptance flow, or log out). */
 const TERMS_ALLOWLIST = new Set<string>([
   "/api/auth/user",
+  "/api/auth/providers",
   "/api/login",
   "/api/logout",
   "/api/callback",
@@ -69,7 +70,18 @@ export function requireTermsAccepted(req: Request, res: Response, next: NextFunc
   // before they can accept it, and the same routes are also public marketing
   // pages (see server/legal-routes.ts).
   const isPublicLegalDocRoute = req.method === "GET" && path.startsWith("/api/legal/documents/");
-  if (!path.startsWith("/api/") || TERMS_ALLOWLIST.has(path) || isPublicLegalDocRoute) {
+  const isAuthProviderRoute =
+    path.startsWith("/api/auth/google") ||
+    path.startsWith("/api/auth/apple") ||
+    path.startsWith("/api/auth/github") ||
+    path.startsWith("/api/auth/microsoft") ||
+    path === "/api/auth/providers";
+  if (
+    !path.startsWith("/api/") ||
+    TERMS_ALLOWLIST.has(path) ||
+    isPublicLegalDocRoute ||
+    isAuthProviderRoute
+  ) {
     next();
     return;
   }

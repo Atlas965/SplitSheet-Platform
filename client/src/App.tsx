@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
 import Landing from "@/pages/landing";
+import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Contracts from "@/pages/contracts";
 import ContractDetails from "@/pages/contract-details";
@@ -94,15 +95,22 @@ function Router() {
   const { isAuthenticated, isLoading } = useAuth();
   const showCopilot = !isLoading && isAuthenticated;
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" aria-label="Loading" />
+      </div>
+    );
+  }
+
   return (
     <TermsGate>
       <Switch>
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
-        {isLoading || !isAuthenticated ? (
-          <Route path="/" component={Landing} />
-        ) : (
-          <Route component={AuthenticatedRoutes} />
-        )}
+        {!isAuthenticated && <Route path="/login" component={Login} />}
+        {!isAuthenticated && <Route path="/" component={Landing} />}
+        {isAuthenticated && <Route component={AuthenticatedRoutes} />}
+        {!isAuthenticated && <Route component={Landing} />}
         <Route component={NotFound} />
       </Switch>
       {showCopilot && <SoundLedgerCopilot />}

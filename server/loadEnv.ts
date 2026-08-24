@@ -9,12 +9,21 @@ function applyRuntimeDefaults(): void {
     process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
   }
 
-  // Vercel: default to operator local login unless AUTH_PROVIDER is set.
+  // Vercel: prefer social OAuth when credentials exist; otherwise local operator login.
   if (
     (process.env.VERCEL === "1" || process.env.VERCEL === "true") &&
     !process.env.AUTH_PROVIDER
   ) {
-    process.env.AUTH_PROVIDER = "local";
+    const hasSocial = Boolean(
+      (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) ||
+        (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) ||
+        (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) ||
+        (process.env.APPLE_CLIENT_ID &&
+          process.env.APPLE_TEAM_ID &&
+          process.env.APPLE_KEY_ID &&
+          process.env.APPLE_PRIVATE_KEY),
+    );
+    process.env.AUTH_PROVIDER = hasSocial ? "social" : "local";
   }
 
   // Corporate networks / SSL inspection can block Neon WebSocket TLS locally.

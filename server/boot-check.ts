@@ -2,7 +2,7 @@
  * Fail fast with a clear message when required runtime config is missing.
  * Prevents opaque Vercel FUNCTION_INVOCATION_FAILED crashes during getApp().
  */
-import { isVercelRuntime, useLocalAuthProvider } from "./runtime";
+import { isVercelRuntime, useLocalAuthProvider, hasSocialCredentials } from "./runtime";
 
 export function assertRuntimeEnv(): void {
   const missing: string[] = [];
@@ -25,11 +25,18 @@ export function assertRuntimeEnv(): void {
 
     if (useLocalAuth) {
       // Operator login — no Replit OIDC vars required
+    } else if (process.env.AUTH_PROVIDER === "social" || hasSocialCredentials()) {
+      // Social OAuth — credentials validated when strategies register
+      if (!hasSocialCredentials()) {
+        missing.push(
+          "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (or GitHub / Microsoft / Apple credentials)",
+        );
+      }
     } else {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {
         missing.push(
-          "REPLIT_DOMAINS (hostname only) — or set AUTH_PROVIDER=local",
+          "REPLIT_DOMAINS (hostname only) — or set AUTH_PROVIDER=social / local",
         );
       }
     }

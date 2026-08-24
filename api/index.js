@@ -16,7 +16,10 @@ function applyRuntimeDefaults() {
     process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
   }
   if ((process.env.VERCEL === "1" || process.env.VERCEL === "true") && !process.env.AUTH_PROVIDER) {
-    process.env.AUTH_PROVIDER = "local";
+    const hasSocial = Boolean(
+      process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET || process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET || process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET || process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY
+    );
+    process.env.AUTH_PROVIDER = hasSocial ? "social" : "local";
   }
   if (process.env.LOCAL_DEV === "true" && process.env.NODE_TLS_REJECT_UNAUTHORIZED === void 0) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -30,10 +33,10 @@ function loadEnv() {
     for (const line of contents.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq7 = trimmed.indexOf("=");
-      if (eq7 === -1) continue;
-      const key = trimmed.slice(0, eq7).trim();
-      let value = trimmed.slice(eq7 + 1).trim();
+      const eq8 = trimmed.indexOf("=");
+      if (eq8 === -1) continue;
+      const key = trimmed.slice(0, eq8).trim();
+      let value = trimmed.slice(eq8 + 1).trim();
       if (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'")) {
         value = value.slice(1, -1);
       }
@@ -2597,12 +2600,26 @@ var init_storage = __esm({
 function isVercelRuntime() {
   return process.env.VERCEL === "1" || process.env.VERCEL === "true";
 }
+function hasSocialCredentials() {
+  return Boolean(
+    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET || process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET || process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET || process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY
+  );
+}
 function useLocalAuthProvider() {
   if (process.env.AUTH_PROVIDER === "local") return true;
+  if (process.env.AUTH_PROVIDER === "replit" || process.env.AUTH_PROVIDER === "oidc" || process.env.AUTH_PROVIDER === "social") {
+    return false;
+  }
+  if (hasSocialCredentials()) return false;
+  return isVercelRuntime();
+}
+function useSocialAuthProvider() {
+  if (process.env.AUTH_PROVIDER === "social") return true;
+  if (process.env.AUTH_PROVIDER === "local") return false;
   if (process.env.AUTH_PROVIDER === "replit" || process.env.AUTH_PROVIDER === "oidc") {
     return false;
   }
-  return isVercelRuntime();
+  return hasSocialCredentials();
 }
 function shouldSkipBootMigrations() {
   return process.env.SKIP_BOOT_MIGRATIONS === "true" || isVercelRuntime();
@@ -2613,10 +2630,499 @@ var init_runtime = __esm({
   }
 });
 
-// server/replitAuth.ts
-import * as client from "openid-client";
-import { Strategy } from "openid-client/passport";
+// server/social-auth.ts
 import passport from "passport";
+import crypto2 from "crypto";
+import { eq as eq2 } from "drizzle-orm";
+import * as client from "openid-client";
+import { Strategy as OidcStrategy } from "openid-client/passport";
+function appBaseUrl(req) {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
+  if (req) {
+    const host = req.get("host") || req.hostname;
+    const proto = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
+    return `${proto}://${host}`;
+  }
+  return "http://localhost:5000";
+}
+function callbackUrl(provider, req) {
+  return `${appBaseUrl(req)}/api/auth/${provider}/callback`;
+}
+function listSocialProviders() {
+  return [
+    {
+      id: "google",
+      label: "Continue with Google",
+      enabled: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      authPath: "/api/auth/google"
+    },
+    {
+      id: "apple",
+      label: "Continue with Apple",
+      enabled: Boolean(
+        process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY
+      ),
+      authPath: "/api/auth/apple"
+    },
+    {
+      id: "github",
+      label: "Continue with GitHub",
+      enabled: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+      authPath: "/api/auth/github"
+    },
+    {
+      id: "microsoft",
+      label: "Continue with Microsoft",
+      enabled: Boolean(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
+      authPath: "/api/auth/microsoft"
+    }
+  ];
+}
+function hasAnySocialProvider() {
+  return listSocialProviders().some((p) => p.enabled);
+}
+async function getUserByEmail(email) {
+  const [row] = await db.select().from(users).where(eq2(users.email, email)).limit(1);
+  return row;
+}
+async function upsertSocialUser(input) {
+  const preferredId = `${input.provider}:${input.providerUserId}`;
+  const email = input.email?.trim().toLowerCase() || null;
+  let existing = await storage.getUser(preferredId);
+  if (!existing && email) {
+    existing = await getUserByEmail(email);
+  }
+  if (existing) {
+    await storage.updateUser(existing.id, {
+      email: email || existing.email,
+      firstName: input.firstName || existing.firstName,
+      lastName: input.lastName || existing.lastName,
+      profileImageUrl: input.profileImageUrl || existing.profileImageUrl
+    });
+    return existing.id;
+  }
+  await db.insert(users).values({
+    id: preferredId,
+    email,
+    firstName: input.firstName || null,
+    lastName: input.lastName || null,
+    profileImageUrl: input.profileImageUrl || null
+  });
+  return preferredId;
+}
+function sessionUserFromClaims(claims, provider) {
+  const exp = Math.floor(Date.now() / 1e3) + SESSION_TTL_SEC;
+  return {
+    claims: {
+      ...claims,
+      exp,
+      provider
+    },
+    expires_at: exp,
+    provider
+  };
+}
+function base64url(input) {
+  return Buffer.from(input).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function createAppleClientSecret() {
+  const teamId = process.env.APPLE_TEAM_ID;
+  const clientId = process.env.APPLE_CLIENT_ID;
+  const keyId = process.env.APPLE_KEY_ID;
+  const privateKey = (process.env.APPLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+  const now = Math.floor(Date.now() / 1e3);
+  const header = base64url(JSON.stringify({ alg: "ES256", kid: keyId }));
+  const payload = base64url(
+    JSON.stringify({
+      iss: teamId,
+      iat: now,
+      exp: now + 60 * 60 * 24 * 180,
+      aud: "https://appleid.apple.com",
+      sub: clientId
+    })
+  );
+  const data = `${header}.${payload}`;
+  const signer = crypto2.createSign("SHA256");
+  signer.update(data);
+  signer.end();
+  const signature = signer.sign({ key: privateKey, dsaEncoding: "ieee-p1363" });
+  return `${data}.${base64url(signature)}`;
+}
+function oauthStateCookieName(provider) {
+  return `oauth_state_${provider}`;
+}
+function setOAuthState(res, provider, state) {
+  const name = oauthStateCookieName(provider);
+  const secure = process.env.NODE_ENV === "production" || process.env.VERCEL === "1" ? "; Secure" : "";
+  res.append(
+    "Set-Cookie",
+    `${name}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${secure}`
+  );
+}
+function clearOAuthState(res, provider) {
+  const name = oauthStateCookieName(provider);
+  res.append(
+    "Set-Cookie",
+    `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+  );
+}
+function readOAuthState(req, provider) {
+  return req.cookies?.[oauthStateCookieName(provider)];
+}
+async function finishLogin(req, res, profile) {
+  const userId = await upsertSocialUser(profile);
+  const user = sessionUserFromClaims(
+    {
+      sub: userId,
+      email: profile.email,
+      first_name: profile.firstName,
+      last_name: profile.lastName,
+      profile_image_url: profile.profileImageUrl
+    },
+    profile.provider
+  );
+  await new Promise((resolve, reject) => {
+    req.login(user, (err) => err ? reject(err) : resolve());
+  });
+  res.redirect("/");
+}
+function loginFailure(res, message) {
+  const q = encodeURIComponent(message);
+  res.redirect(`/login?error=${q}`);
+}
+async function registerGoogle(app) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const config = await client.discovery(
+    new URL("https://accounts.google.com"),
+    clientId,
+    clientSecret
+  );
+  const verify = async (tokens, verified) => {
+    try {
+      const claims = tokens.claims();
+      const sub = String(claims.sub);
+      const email = claims.email || null;
+      const name = claims.name || "";
+      const [firstName, ...rest] = name.split(" ");
+      const userId = await upsertSocialUser({
+        provider: "google",
+        providerUserId: sub,
+        email,
+        firstName: firstName || claims.given_name || null,
+        lastName: rest.join(" ") || claims.family_name || null,
+        profileImageUrl: claims.picture || null
+      });
+      verified(
+        null,
+        sessionUserFromClaims(
+          {
+            sub: userId,
+            email,
+            first_name: firstName || null,
+            last_name: rest.join(" ") || null,
+            profile_image_url: claims.picture || null
+          },
+          "google"
+        )
+      );
+    } catch (err) {
+      verified(err);
+    }
+  };
+  const strategyName = "google";
+  passport.use(
+    strategyName,
+    new OidcStrategy(
+      {
+        name: strategyName,
+        config,
+        scope: "openid email profile",
+        callbackURL: callbackUrl("google")
+      },
+      verify
+    )
+  );
+  app.get("/api/auth/google", (req, res, next) => {
+    passport.authenticate(strategyName, {
+      scope: ["openid", "email", "profile"],
+      prompt: "select_account"
+    })(req, res, next);
+  });
+  app.get("/api/auth/google/callback", (req, res, next) => {
+    passport.authenticate(strategyName, {
+      successReturnToOrRedirect: "/",
+      failureRedirect: "/login?error=Google%20sign-in%20failed"
+    })(req, res, next);
+  });
+}
+async function registerMicrosoft(app) {
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET;
+  const tenant = process.env.MICROSOFT_TENANT_ID || "common";
+  const config = await client.discovery(
+    new URL(`https://login.microsoftonline.com/${tenant}/v2.0`),
+    clientId,
+    clientSecret
+  );
+  const verify = async (tokens, verified) => {
+    try {
+      const claims = tokens.claims();
+      const sub = String(claims.sub || claims.oid);
+      const email = claims.email || claims.preferred_username || null;
+      const name = claims.name || "";
+      const [firstName, ...rest] = name.split(" ");
+      const userId = await upsertSocialUser({
+        provider: "microsoft",
+        providerUserId: sub,
+        email,
+        firstName: firstName || null,
+        lastName: rest.join(" ") || null,
+        profileImageUrl: null
+      });
+      verified(
+        null,
+        sessionUserFromClaims(
+          {
+            sub: userId,
+            email,
+            first_name: firstName || null,
+            last_name: rest.join(" ") || null
+          },
+          "microsoft"
+        )
+      );
+    } catch (err) {
+      verified(err);
+    }
+  };
+  const strategyName = "microsoft";
+  passport.use(
+    strategyName,
+    new OidcStrategy(
+      {
+        name: strategyName,
+        config,
+        scope: "openid email profile offline_access",
+        callbackURL: callbackUrl("microsoft")
+      },
+      verify
+    )
+  );
+  app.get("/api/auth/microsoft", (req, res, next) => {
+    passport.authenticate(strategyName, {
+      scope: ["openid", "email", "profile", "offline_access"]
+    })(req, res, next);
+  });
+  app.get("/api/auth/microsoft/callback", (req, res, next) => {
+    passport.authenticate(strategyName, {
+      successReturnToOrRedirect: "/",
+      failureRedirect: "/login?error=Microsoft%20sign-in%20failed"
+    })(req, res, next);
+  });
+}
+function registerGitHub(app) {
+  app.get("/api/auth/github", (req, res) => {
+    const state = crypto2.randomBytes(16).toString("hex");
+    setOAuthState(res, "github", state);
+    const url = new URL("https://github.com/login/oauth/authorize");
+    url.searchParams.set("client_id", process.env.GITHUB_CLIENT_ID);
+    url.searchParams.set("redirect_uri", callbackUrl("github", req));
+    url.searchParams.set("scope", "read:user user:email");
+    url.searchParams.set("state", state);
+    res.redirect(url.toString());
+  });
+  app.get("/api/auth/github/callback", async (req, res) => {
+    try {
+      const { code, state } = req.query;
+      const expected = readOAuthState(req, "github");
+      clearOAuthState(res, "github");
+      if (!code || !state || !expected || state !== expected) {
+        return loginFailure(res, "GitHub sign-in state mismatch. Try again.");
+      }
+      const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          client_id: process.env.GITHUB_CLIENT_ID,
+          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          code,
+          redirect_uri: callbackUrl("github", req)
+        })
+      });
+      const tokenJson = await tokenRes.json();
+      if (!tokenJson.access_token) {
+        return loginFailure(res, tokenJson.error || "GitHub token exchange failed");
+      }
+      const userRes = await fetch("https://api.github.com/user", {
+        headers: {
+          Authorization: `Bearer ${tokenJson.access_token}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "SplitSheet"
+        }
+      });
+      const ghUser = await userRes.json();
+      let email = ghUser.email || null;
+      if (!email) {
+        const emailsRes = await fetch("https://api.github.com/user/emails", {
+          headers: {
+            Authorization: `Bearer ${tokenJson.access_token}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "SplitSheet"
+          }
+        });
+        const emails = await emailsRes.json();
+        const primary = emails.find((e) => e.primary && e.verified) || emails.find((e) => e.verified);
+        email = primary?.email || null;
+      }
+      const name = ghUser.name || ghUser.login || "";
+      const [firstName, ...rest] = name.split(" ");
+      await finishLogin(req, res, {
+        provider: "github",
+        providerUserId: String(ghUser.id),
+        email,
+        firstName: firstName || ghUser.login,
+        lastName: rest.join(" ") || null,
+        profileImageUrl: ghUser.avatar_url || null
+      });
+    } catch (err) {
+      console.error("[auth/github]", err);
+      loginFailure(res, err?.message || "GitHub sign-in failed");
+    }
+  });
+}
+function registerApple(app) {
+  app.get("/api/auth/apple", (req, res) => {
+    const state = crypto2.randomBytes(16).toString("hex");
+    setOAuthState(res, "apple", state);
+    const url = new URL("https://appleid.apple.com/auth/authorize");
+    url.searchParams.set("client_id", process.env.APPLE_CLIENT_ID);
+    url.searchParams.set("redirect_uri", callbackUrl("apple", req));
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("response_mode", "form_post");
+    url.searchParams.set("scope", "name email");
+    url.searchParams.set("state", state);
+    res.redirect(url.toString());
+  });
+  const handleAppleCallback = async (req, res) => {
+    try {
+      const body = req.body || {};
+      const query = req.query || {};
+      const code = body.code || query.code;
+      const state = body.state || query.state;
+      const userJson = body.user;
+      const expected = readOAuthState(req, "apple");
+      clearOAuthState(res, "apple");
+      if (!code || !state || !expected || state !== expected) {
+        return loginFailure(res, "Apple sign-in state mismatch. Try again.");
+      }
+      const clientSecret = createAppleClientSecret();
+      const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: process.env.APPLE_CLIENT_ID,
+          client_secret: clientSecret,
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: callbackUrl("apple", req)
+        })
+      });
+      const tokenJson = await tokenRes.json();
+      if (!tokenJson.id_token) {
+        return loginFailure(
+          res,
+          tokenJson.error_description || tokenJson.error || "Apple token exchange failed"
+        );
+      }
+      const payloadPart = tokenJson.id_token.split(".")[1];
+      const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
+      let firstName = null;
+      let lastName = null;
+      if (userJson) {
+        try {
+          const parsed = JSON.parse(userJson);
+          firstName = parsed.name?.firstName || null;
+          lastName = parsed.name?.lastName || null;
+        } catch {
+        }
+      }
+      await finishLogin(req, res, {
+        provider: "apple",
+        providerUserId: payload.sub,
+        email: payload.email || null,
+        firstName,
+        lastName,
+        profileImageUrl: null
+      });
+    } catch (err) {
+      console.error("[auth/apple]", err);
+      loginFailure(res, err?.message || "Apple sign-in failed");
+    }
+  };
+  app.post("/api/auth/apple/callback", handleAppleCallback);
+  app.get("/api/auth/apple/callback", handleAppleCallback);
+}
+async function registerSocialAuth(app) {
+  const providers = listSocialProviders();
+  const enabled = providers.filter((p) => p.enabled);
+  if (enabled.some((p) => p.id === "google")) {
+    await registerGoogle(app);
+    console.log("[auth] Google OAuth enabled");
+  }
+  if (enabled.some((p) => p.id === "microsoft")) {
+    await registerMicrosoft(app);
+    console.log("[auth] Microsoft OAuth enabled");
+  }
+  if (enabled.some((p) => p.id === "github")) {
+    registerGitHub(app);
+    console.log("[auth] GitHub OAuth enabled");
+  }
+  if (enabled.some((p) => p.id === "apple")) {
+    registerApple(app);
+    console.log("[auth] Apple Sign In enabled");
+  }
+  app.get("/api/auth/providers", (_req, res) => {
+    res.json({
+      providers: listSocialProviders(),
+      localDev: process.env.AUTH_PROVIDER === "local"
+    });
+  });
+  return enabled;
+}
+function simpleCookieParser(req, _res, next) {
+  const header = req.headers.cookie;
+  const out = {};
+  if (header) {
+    for (const part of header.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx === -1) continue;
+      const k = part.slice(0, idx).trim();
+      const v = decodeURIComponent(part.slice(idx + 1).trim());
+      out[k] = v;
+    }
+  }
+  req.cookies = out;
+  next();
+}
+var SESSION_TTL_SEC;
+var init_social_auth = __esm({
+  "server/social-auth.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_storage();
+    SESSION_TTL_SEC = 7 * 24 * 60 * 60;
+  }
+});
+
+// server/replitAuth.ts
+import * as client2 from "openid-client";
+import { Strategy } from "openid-client/passport";
+import passport2 from "passport";
 import session from "express-session";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
@@ -2629,7 +3135,6 @@ function getSession() {
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     conString: databaseUrl2,
-    // Serverless / fresh Neon: ensure sessions table exists
     createTableIfMissing: true,
     ttl: sessionTtl,
     tableName: "sessions"
@@ -2673,13 +3178,24 @@ async function upsertUser(claims) {
     });
   }
 }
-async function setupLocalDevAuth(app) {
+function mountSessionStack(app) {
   app.set("trust proxy", 1);
+  app.use(simpleCookieParser);
   app.use(getSession());
-  app.use(passport.initialize());
-  app.use(passport.session());
-  passport.serializeUser((user, cb) => cb(null, user));
-  passport.deserializeUser((user, cb) => cb(null, user));
+  app.use(passport2.initialize());
+  app.use(passport2.session());
+  passport2.serializeUser((user, cb) => cb(null, user));
+  passport2.deserializeUser((user, cb) => cb(null, user));
+}
+async function setupLocalDevAuth(app) {
+  mountSessionStack(app);
+  if (hasAnySocialProvider()) {
+    await registerSocialAuth(app);
+  } else {
+    app.get("/api/auth/providers", (_req, res) => {
+      res.json({ providers: listSocialProviders(), localDev: true });
+    });
+  }
   const devClaims = {
     sub: "local-dev-operator",
     email: "dev@localhost",
@@ -2689,6 +3205,9 @@ async function setupLocalDevAuth(app) {
     exp: Math.floor(Date.now() / 1e3) + 60 * 60 * 24 * 365
   };
   app.get("/api/login", async (req, res) => {
+    if (hasAnySocialProvider() && req.query.local !== "1") {
+      return res.redirect("/login");
+    }
     try {
       await upsertUser(devClaims);
       const user = {
@@ -2715,18 +3234,33 @@ async function setupLocalDevAuth(app) {
     req.logout(() => res.redirect("/"));
   });
 }
-async function setupAuth(app) {
-  if (useLocalAuth) {
-    console.log(
-      "[auth] Using AUTH_PROVIDER=local (operator login via /api/login)"
+async function setupSocialAuth(app) {
+  mountSessionStack(app);
+  const enabled = await registerSocialAuth(app);
+  if (enabled.length === 0) {
+    throw new Error(
+      "AUTH_PROVIDER=social (or auto) but no provider credentials found. Set GOOGLE_CLIENT_ID/SECRET, and/or GITHUB_*, MICROSOFT_*, APPLE_* env vars."
     );
-    await setupLocalDevAuth(app);
-    return;
   }
-  app.set("trust proxy", 1);
-  app.use(getSession());
-  app.use(passport.initialize());
-  app.use(passport.session());
+  console.log(
+    `[auth] Social login enabled: ${enabled.map((p) => p.id).join(", ")}`
+  );
+  app.get("/api/login", (_req, res) => {
+    res.redirect("/login");
+  });
+  app.get("/api/logout", (req, res) => {
+    req.logout(() => res.redirect("/"));
+  });
+}
+async function setupReplitOidcAuth(app) {
+  mountSessionStack(app);
+  if (hasAnySocialProvider()) {
+    await registerSocialAuth(app);
+  } else {
+    app.get("/api/auth/providers", (_req, res) => {
+      res.json({ providers: listSocialProviders(), localDev: false });
+    });
+  }
   const config = await getOidcConfig();
   const verify = async (tokens, verified) => {
     const user = {};
@@ -2737,7 +3271,7 @@ async function setupAuth(app) {
   const domains = process.env.REPLIT_DOMAINS?.split(",").map((d) => d.trim()).filter(Boolean) ?? [];
   if (domains.length === 0) {
     throw new Error(
-      "REPLIT_DOMAINS must be set for Replit OIDC auth (comma-separated hostnames). Or set AUTH_PROVIDER=local for operator login on Vercel."
+      "REPLIT_DOMAINS must be set for Replit OIDC auth (comma-separated hostnames). Or set AUTH_PROVIDER=social with Google/Apple/GitHub credentials, or AUTH_PROVIDER=local."
     );
   }
   for (const domain of domains) {
@@ -2750,32 +3284,48 @@ async function setupAuth(app) {
       },
       verify
     );
-    passport.use(strategy);
+    passport2.use(strategy);
   }
-  passport.serializeUser((user, cb) => cb(null, user));
-  passport.deserializeUser((user, cb) => cb(null, user));
   app.get("/api/login", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
+    if (hasAnySocialProvider() && req.query.replit !== "1") {
+      return res.redirect("/login");
+    }
+    passport2.authenticate(`replitauth:${req.hostname}`, {
       prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"]
     })(req, res, next);
   });
   app.get("/api/callback", (req, res, next) => {
-    passport.authenticate(`replitauth:${req.hostname}`, {
+    passport2.authenticate(`replitauth:${req.hostname}`, {
       successReturnToOrRedirect: "/",
-      failureRedirect: "/api/login"
+      failureRedirect: "/login?error=Sign-in%20failed"
     })(req, res, next);
   });
   app.get("/api/logout", (req, res) => {
     req.logout(() => {
       res.redirect(
-        client.buildEndSessionUrl(config, {
+        client2.buildEndSessionUrl(config, {
           client_id: process.env.REPL_ID,
           post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
         }).href
       );
     });
   });
+}
+async function setupAuth(app) {
+  if (useLocalAuth) {
+    console.log(
+      "[auth] Using AUTH_PROVIDER=local (operator login via /api/login?local=1)"
+    );
+    await setupLocalDevAuth(app);
+    return;
+  }
+  if (useSocialAuthProvider()) {
+    await setupSocialAuth(app);
+    return;
+  }
+  console.log("[auth] Using Replit OIDC");
+  await setupReplitOidcAuth(app);
 }
 var isLocalDev, useLocalAuth, databaseUrl2, getOidcConfig, isAuthenticated;
 var init_replitAuth = __esm({
@@ -2785,12 +3335,13 @@ var init_replitAuth = __esm({
     init_db();
     init_schema();
     init_runtime();
+    init_social_auth();
     isLocalDev = process.env.NODE_ENV === "development" && process.env.LOCAL_DEV === "true";
     useLocalAuth = isLocalDev || useLocalAuthProvider();
     databaseUrl2 = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
     getOidcConfig = memoize(
       async () => {
-        return await client.discovery(
+        return await client2.discovery(
           new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
           process.env.REPL_ID
         );
@@ -2806,7 +3357,7 @@ var init_replitAuth = __esm({
       if (now <= user.expires_at) {
         return next();
       }
-      if (useLocalAuth) {
+      if (useLocalAuth || user.provider) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const refreshToken = user.refresh_token;
@@ -2816,7 +3367,7 @@ var init_replitAuth = __esm({
       }
       try {
         const config = await getOidcConfig();
-        const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
+        const tokenResponse = await client2.refreshTokenGrant(config, refreshToken);
         updateUserSession(user, tokenResponse);
         return next();
       } catch (error) {
@@ -3287,10 +3838,10 @@ var init_email_service = __esm({
 });
 
 // server/confirmation-routes.ts
-import crypto2 from "crypto";
+import crypto3 from "crypto";
 import { sql as sql4 } from "drizzle-orm";
 function generateToken() {
-  return crypto2.randomBytes(32).toString("hex");
+  return crypto3.randomBytes(32).toString("hex");
 }
 function expiresAt72h() {
   return new Date(Date.now() + 72 * 60 * 60 * 1e3);
@@ -6311,7 +6862,7 @@ var init_rights_context = __esm({
 });
 
 // server/voice/store.ts
-import { and as and2, desc as desc2, eq as eq2 } from "drizzle-orm";
+import { and as and2, desc as desc2, eq as eq3 } from "drizzle-orm";
 async function createVoiceSession(input) {
   const expiresAt = new Date(Date.now() + VOICE_RETENTION.sessionHours * 36e5);
   const [session2] = await db.insert(voiceSessions).values({
@@ -6328,7 +6879,7 @@ async function createVoiceSession(input) {
   return session2;
 }
 async function getVoiceSession(sessionId, userId) {
-  const [session2] = await db.select().from(voiceSessions).where(and2(eq2(voiceSessions.id, sessionId), eq2(voiceSessions.userId, userId)));
+  const [session2] = await db.select().from(voiceSessions).where(and2(eq3(voiceSessions.id, sessionId), eq3(voiceSessions.userId, userId)));
   return session2;
 }
 async function recordVoiceTurn(input) {
@@ -6383,7 +6934,7 @@ async function createPendingAction(input) {
   return row;
 }
 async function getPendingAction(id, userId) {
-  const [row] = await db.select().from(voicePendingActions).where(and2(eq2(voicePendingActions.id, id), eq2(voicePendingActions.userId, userId)));
+  const [row] = await db.select().from(voicePendingActions).where(and2(eq3(voicePendingActions.id, id), eq3(voicePendingActions.userId, userId)));
   return row;
 }
 async function resolvePendingAction(id, userId, decision) {
@@ -6393,11 +6944,11 @@ async function resolvePendingAction(id, userId, decision) {
     return { ok: false, error: `Action already ${pending.status}` };
   }
   if (pending.expiresAt && pending.expiresAt.getTime() < Date.now()) {
-    await db.update(voicePendingActions).set({ status: "expired" }).where(eq2(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "expired" }).where(eq3(voicePendingActions.id, id));
     return { ok: false, error: "Pending action expired \u2014 please repeat the request" };
   }
   if (decision === "rejected") {
-    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq2(voicePendingActions.id, id)).returning();
+    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq3(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: null };
   }
   const payload = pending.payload || {};
@@ -6447,24 +6998,24 @@ async function resolvePendingAction(id, userId, decision) {
       confirmedAt: /* @__PURE__ */ new Date(),
       executedAt: /* @__PURE__ */ new Date(),
       result
-    }).where(eq2(voicePendingActions.id, id)).returning();
+    }).where(eq3(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: result };
   } catch (err) {
-    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq2(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq3(voicePendingActions.id, id));
     return { ok: false, error: "Failed to execute confirmed action" };
   }
 }
 async function listAuthorizedMemory(userId) {
-  return db.select().from(voiceUserMemory).where(and2(eq2(voiceUserMemory.userId, userId), eq2(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
+  return db.select().from(voiceUserMemory).where(and2(eq3(voiceUserMemory.userId, userId), eq3(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
 }
 async function upsertAuthorizedMemory(input) {
   const blocked = /password|ssn|sin|bank|card|secret|signature/i;
   if (blocked.test(input.key) || blocked.test(JSON.stringify(input.value))) {
     throw new Error("That information cannot be stored in Copilot memory");
   }
-  const existing = await db.select().from(voiceUserMemory).where(and2(eq2(voiceUserMemory.userId, input.userId), eq2(voiceUserMemory.key, input.key)));
+  const existing = await db.select().from(voiceUserMemory).where(and2(eq3(voiceUserMemory.userId, input.userId), eq3(voiceUserMemory.key, input.key)));
   if (existing[0]) {
-    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq2(voiceUserMemory.id, existing[0].id)).returning();
+    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq3(voiceUserMemory.id, existing[0].id)).returning();
     return row2;
   }
   const [row] = await db.insert(voiceUserMemory).values({
@@ -6855,11 +7406,11 @@ var init_voice_routes = __esm({
 });
 
 // server/service-routes.ts
-import crypto3 from "crypto";
+import crypto4 from "crypto";
 import { z as z5 } from "zod";
 import { sql as sql5 } from "drizzle-orm";
 function generateToken2() {
-  return crypto3.randomBytes(32).toString("hex");
+  return crypto4.randomBytes(32).toString("hex");
 }
 function expiresAt72h2() {
   return new Date(Date.now() + 72 * 60 * 60 * 1e3);
@@ -6986,12 +7537,12 @@ function registerServiceRoutes(app) {
   app.get("/api/clients/:id", isAuthenticated, async (req, res) => {
     try {
       const clients = await buildClientList(req.user.claims.sub);
-      const client2 = clients.find((c) => c.id === req.params.id);
-      if (!client2) {
+      const client3 = clients.find((c) => c.id === req.params.id);
+      if (!client3) {
         res.status(404).json({ message: "Client not found" });
         return;
       }
-      res.json(client2);
+      res.json(client3);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch client" });
     }
@@ -7000,14 +7551,14 @@ function registerServiceRoutes(app) {
     try {
       const userId = req.user.claims.sub;
       const clients = await buildClientList(userId);
-      const client2 = clients.find((c) => c.id === req.params.id);
-      if (!client2) {
+      const client3 = clients.find((c) => c.id === req.params.id);
+      if (!client3) {
         res.status(404).json({ message: "Client not found" });
         return;
       }
       const userContracts = await storage.getContracts(userId);
-      const email = client2.email;
-      const name = client2.name;
+      const email = client3.email;
+      const name = client3.name;
       const projects = [];
       for (const contract of userContracts) {
         const collabs = await storage.getContractCollaborators(contract.id);
@@ -7315,10 +7866,10 @@ var init_service_routes = __esm({
 
 // server/organization-routes.ts
 import { z as z6 } from "zod";
-import crypto4 from "crypto";
+import crypto5 from "crypto";
 async function generateUniqueSlOrgId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto4.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto5.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slOrgId = `SL-ORG-${shortId}`;
     const existing = await storage.getOrganizationBySlOrgId(slOrgId);
     if (!existing) return slOrgId;
@@ -8993,11 +9544,12 @@ var init_security_routes = __esm({
 
 // server/compliance-routes.ts
 import { z as z10 } from "zod";
-import { eq as eq3 } from "drizzle-orm";
+import { eq as eq4 } from "drizzle-orm";
 function requireTermsAccepted(req, res, next) {
   const path3 = req.path;
   const isPublicLegalDocRoute = req.method === "GET" && path3.startsWith("/api/legal/documents/");
-  if (!path3.startsWith("/api/") || TERMS_ALLOWLIST.has(path3) || isPublicLegalDocRoute) {
+  const isAuthProviderRoute = path3.startsWith("/api/auth/google") || path3.startsWith("/api/auth/apple") || path3.startsWith("/api/auth/github") || path3.startsWith("/api/auth/microsoft") || path3 === "/api/auth/providers";
+  if (!path3.startsWith("/api/") || TERMS_ALLOWLIST.has(path3) || isPublicLegalDocRoute || isAuthProviderRoute) {
     next();
     return;
   }
@@ -9087,7 +9639,7 @@ function registerComplianceRoutes(app) {
       );
       const tosResult = results.find((r) => r.docType === "tos");
       if (tosResult) {
-        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq3(users.id, userId));
+        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq4(users.id, userId));
       }
       await storage.trackUserActivity(userId, "terms_accepted", {
         docTypes: results.map((r) => r.docType),
@@ -9121,16 +9673,16 @@ function registerComplianceRoutes(app) {
         sentOrReceivedMessages
       ] = await Promise.all([
         storage.getUser(userId),
-        db.select().from(contracts).where(eq3(contracts.createdBy, userId)),
-        db.select().from(contractCollaborators).where(eq3(contractCollaborators.userId, userId)),
-        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq3(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq3(contractCollaborators.userId, userId)),
-        db.select().from(songAssets).where(eq3(songAssets.createdBy, userId)),
-        db.select().from(ownershipRecords).where(eq3(ownershipRecords.userId, userId)),
-        db.select().from(payoutRecords).where(eq3(payoutRecords.userId, userId)),
-        db.select().from(userBalances).where(eq3(userBalances.userId, userId)),
-        db.select().from(userActivity).where(eq3(userActivity.userId, userId)),
-        db.select().from(notifications).where(eq3(notifications.userId, userId)),
-        db.select().from(messages).where(eq3(messages.senderId, userId))
+        db.select().from(contracts).where(eq4(contracts.createdBy, userId)),
+        db.select().from(contractCollaborators).where(eq4(contractCollaborators.userId, userId)),
+        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq4(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq4(contractCollaborators.userId, userId)),
+        db.select().from(songAssets).where(eq4(songAssets.createdBy, userId)),
+        db.select().from(ownershipRecords).where(eq4(ownershipRecords.userId, userId)),
+        db.select().from(payoutRecords).where(eq4(payoutRecords.userId, userId)),
+        db.select().from(userBalances).where(eq4(userBalances.userId, userId)),
+        db.select().from(userActivity).where(eq4(userActivity.userId, userId)),
+        db.select().from(notifications).where(eq4(notifications.userId, userId)),
+        db.select().from(messages).where(eq4(messages.senderId, userId))
       ]);
       await storage.trackUserActivity(userId, "data_export_requested", { requestedAt: (/* @__PURE__ */ new Date()).toISOString() });
       res.setHeader("Content-Disposition", `attachment; filename="splitsheet-data-export-${userId}.json"`);
@@ -9171,7 +9723,7 @@ function registerComplianceRoutes(app) {
         contactInfo: null,
         isActive: false,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq3(users.id, userId));
+      }).where(eq4(users.id, userId));
       await storage.trackUserActivity(userId, "account_deletion_requested", {
         requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
         ipAddress: req.ip
@@ -9206,6 +9758,7 @@ var init_compliance_routes = __esm({
     GATED_DOC_TYPES = ["tos", "privacy"];
     TERMS_ALLOWLIST = /* @__PURE__ */ new Set([
       "/api/auth/user",
+      "/api/auth/providers",
       "/api/login",
       "/api/logout",
       "/api/callback",
@@ -9217,11 +9770,11 @@ var init_compliance_routes = __esm({
 });
 
 // server/verification-routes.ts
-import crypto5 from "crypto";
+import crypto6 from "crypto";
 import { z as z11 } from "zod";
-import { and as and3, desc as desc3, eq as eq4, gt, isNull } from "drizzle-orm";
+import { and as and3, desc as desc3, eq as eq5, gt, isNull } from "drizzle-orm";
 function generateSixDigitCode() {
-  return crypto5.randomInt(0, 1e6).toString().padStart(6, "0");
+  return crypto6.randomInt(0, 1e6).toString().padStart(6, "0");
 }
 function registerVerificationRoutes(app) {
   app.post("/api/verify/send-code", isAuthenticated, async (req, res) => {
@@ -9273,9 +9826,9 @@ function registerVerificationRoutes(app) {
       const body = confirmCodeSchema.parse(req.body);
       const [pending] = await db.select().from(verificationCodes).where(
         and3(
-          eq4(verificationCodes.userId, userId),
-          eq4(verificationCodes.destination, body.destination),
-          eq4(verificationCodes.purpose, body.purpose),
+          eq5(verificationCodes.userId, userId),
+          eq5(verificationCodes.destination, body.destination),
+          eq5(verificationCodes.purpose, body.purpose),
           isNull(verificationCodes.consumedAt),
           gt(verificationCodes.expiresAt, /* @__PURE__ */ new Date())
         )
@@ -9289,16 +9842,16 @@ function registerVerificationRoutes(app) {
         return;
       }
       const codeHash = sha256(body.code);
-      const matches = crypto5.timingSafeEqual(
+      const matches = crypto6.timingSafeEqual(
         Buffer.from(codeHash, "hex"),
         Buffer.from(pending.codeHash, "hex")
       );
-      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq4(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq5(verificationCodes.id, pending.id));
       if (!matches) {
         res.status(400).json({ error: "Incorrect code." });
         return;
       }
-      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq4(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq5(verificationCodes.id, pending.id));
       await storage.trackUserActivity(userId, "identity_verified", {
         legalName: pending.legalName,
         idType: pending.idType,
@@ -9322,7 +9875,7 @@ function registerVerificationRoutes(app) {
   });
   app.get("/api/verify/status", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const [latest] = await db.select().from(userActivity).where(and3(eq4(userActivity.userId, userId), eq4(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
+    const [latest] = await db.select().from(userActivity).where(and3(eq5(userActivity.userId, userId), eq5(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
     res.json({ verified: Boolean(latest), verifiedAt: latest?.createdAt ?? null });
   });
 }
@@ -9356,10 +9909,10 @@ var init_verification_routes = __esm({
 
 // server/creator-routes.ts
 import { z as z12 } from "zod";
-import crypto6 from "crypto";
+import crypto7 from "crypto";
 async function generateUniqueSlCreatorId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto6.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto7.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slCreatorId = `SL-CREATOR-${shortId}`;
     const existing = await storage.getCreatorBySlCreatorId(slCreatorId);
     if (!existing) return slCreatorId;
@@ -9685,7 +10238,7 @@ var init_legal_routes = __esm({
 });
 
 // server/agreement-ledger.ts
-import { eq as eq5, sql as sql10 } from "drizzle-orm";
+import { eq as eq6, sql as sql10 } from "drizzle-orm";
 function generateSlSongId() {
   const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
   return `SL-SONG-${hex}`;
@@ -9752,7 +10305,7 @@ async function syncAgreementToRightsLedger(contractId, actorId) {
       const existingAssets = await storage.getSongAssetsByContract(contractId);
       assetId = existingAssets[0]?.id;
     }
-    const [latest] = await db.select({ maxVersion: sql10`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq5(licenseRecords.contractId, contractId));
+    const [latest] = await db.select({ maxVersion: sql10`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq6(licenseRecords.contractId, contractId));
     const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
     const [row] = await db.insert(licenseRecords).values({
       contractId,
@@ -10209,10 +10762,10 @@ var init_license_readiness = __esm({
 
 // server/rights-ledger-routes.ts
 import { z as z15 } from "zod";
-import crypto7 from "crypto";
+import crypto8 from "crypto";
 async function generateUniqueSlSongId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto7.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto8.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slSongId = `SL-SONG-${shortId}`;
     const existing = await storage.getSongAssetBySlSongId(slSongId);
     if (!existing) return slSongId;
@@ -12218,14 +12771,14 @@ async function registerRoutes(app) {
       const collaborators = await storage.getContractCollaborators(req.params.id);
       const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
       const newConfirmations = [];
-      const crypto8 = await import("crypto");
+      const crypto9 = await import("crypto");
       for (const collaborator of collaborators) {
         const existing = existingConfirmations.find((c) => c.collaboratorId === collaborator.id);
         if (existing) {
           newConfirmations.push(existing);
           continue;
         }
-        const token = crypto8.randomBytes(32).toString("hex");
+        const token = crypto9.randomBytes(32).toString("hex");
         const confirmation = await storage.createConfirmation({
           contractId: req.params.id,
           collaboratorId: collaborator.id,
@@ -12459,7 +13012,7 @@ var init_static_serve = __esm({
 });
 
 // server/seedData.ts
-import { eq as eq6 } from "drizzle-orm";
+import { eq as eq7 } from "drizzle-orm";
 async function seedContractTemplates() {
   try {
     console.log("Seeding entertainment agreement template library (MVP-gated)...");
@@ -12509,7 +13062,7 @@ async function seedContractTemplates() {
         isActive: row.isActive,
         template: preserveLegacyJson ? current.template : row.template,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq6(contractTemplates.id, current.id));
+      }).where(eq7(contractTemplates.id, current.id));
       updated += 1;
     }
     console.log(
@@ -13376,11 +13929,17 @@ function assertRuntimeEnv() {
       );
     }
     if (useLocalAuth2) {
+    } else if (process.env.AUTH_PROVIDER === "social" || hasSocialCredentials()) {
+      if (!hasSocialCredentials()) {
+        missing.push(
+          "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (or GitHub / Microsoft / Apple credentials)"
+        );
+      }
     } else {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {
         missing.push(
-          "REPLIT_DOMAINS (hostname only) \u2014 or set AUTH_PROVIDER=local"
+          "REPLIT_DOMAINS (hostname only) \u2014 or set AUTH_PROVIDER=social / local"
         );
       }
     }
@@ -13565,7 +14124,7 @@ function bootFailureApp(err) {
     res.status(503).json({
       error: "SERVICE_UNAVAILABLE",
       message,
-      hint: "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=local. Then Redeploy."
+      hint: "Set Production env: DATABASE_URL or NEON_DATABASE_URL, SESSION_SECRET, LOCAL_DEV=false, AUTH_PROVIDER=social (with GOOGLE_CLIENT_ID/SECRET etc.) or AUTH_PROVIDER=local. Then Redeploy."
     });
   });
   return app;
