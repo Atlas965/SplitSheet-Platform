@@ -12,18 +12,16 @@
  * Mounted from server/routes.ts via registerOrganizationRoutes(app).
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { storage } from "./storage";
-import { isAuthenticated } from "./replitAuth";
 import { insertOrganizationSchema, ORGANIZATION_TYPES, ORGANIZATION_ROLES } from "@shared/schema";
 import {
   ORG_ROLES,
   normalizeOrgRole,
   roleAtLeast,
   permissionsForRole,
-  type OrgRole,
 } from "@shared/org-rbac";
 import { generateApiKey, auditLog } from "./security";
 import {
@@ -31,8 +29,13 @@ import {
   resolveActiveOrganization,
   setActiveOrganization,
 } from "./org-context";
-
-type LegacyOrgRole = (typeof ORGANIZATION_ROLES)[number];
+import {
+  requireAuth,
+  requireOrganizationMembership,
+  requireRole,
+  requirePermission,
+  type OrgAuthedRequest,
+} from "./rbac-middleware";
 
 /** Permanent external ID: SL-ORG-XXXXXXXX (never reused, generated server-side only). */
 async function generateUniqueSlOrgId(): Promise<string> {
@@ -45,55 +48,13 @@ async function generateUniqueSlOrgId(): Promise<string> {
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 
-function hasRole(role: string | undefined, minimum: OrgRole): boolean {
-  return roleAtLeast(role, minimum);
-}
-
-interface OrgScopedRequest extends Request {
-  orgMember?: { id: string; role: string; userId: string; organizationId: string };
-}
-
-/** Attaches req.orgMember if the current user belongs to :id, else 403/404. */
-async function requireOrgMember(req: OrgScopedRequest, res: Response, next: NextFunction): Promise<void> {
-  const userId = (req as any).user?.claims?.sub;
-  const organizationId = req.params.id;
-  try {
-    const org = await storage.getOrganization(organizationId);
-    if (!org) {
-      res.status(404).json({ message: "Organization not found" });
-      return;
-    }
-    const member = await storage.getOrganizationMember(organizationId, userId);
-    if (!member) {
-      res.status(403).json({ message: "You are not a member of this organization" });
-      return;
-    }
-    req.orgMember = { ...member, organizationId };
-    next();
-  } catch (error) {
-    console.error("[ORG AUTH ERROR]", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-}
-
-/** Builds a middleware requiring at least `minimum` role within the org (run after requireOrgMember). */
-function requireOrgRole(minimum: OrgRole) {
-  return (req: OrgScopedRequest, res: Response, next: NextFunction): void => {
-    if (!hasRole(req.orgMember?.role, minimum)) {
-      res.status(403).json({ message: `Requires ${minimum} role or higher in this organization` });
-      return;
-    }
-    next();
-  };
-}
-
 export function registerOrganizationRoutes(app: Express): void {
   // ══════════════════════════════════════════════════════════════════════════
   // ORGANIZATIONS
   // ══════════════════════════════════════════════════════════════════════════
 
   // List organizations the current user belongs to (array — backward compatible)
-  app.get("/api/organizations", isAuthenticated, async (req: Request, res: Response) => {
+  app.get("/api/organizations", requireAuth, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
     try {
       await ensurePersonalOrganization(userId);
@@ -106,7 +67,7 @@ export function registerOrganizationRoutes(app: Express): void {
   });
 
   // Active tenant for the current operator session context
-  app.get("/api/me/organization", isAuthenticated, async (req: Request, res: Response) => {
+  app.get("/api/me/organization", requireAuth, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
     try {
       const active = await resolveActiveOrganization(userId);
@@ -125,7 +86,7 @@ export function registerOrganizationRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/me/organization", isAuthenticated, async (req: Request, res: Response) => {
+  app.post("/api/me/organization", requireAuth, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
     try {
       const organizationId = String(req.body?.organizationId || "");
@@ -145,7 +106,7 @@ export function registerOrganizationRoutes(app: Express): void {
   });
 
   // Create a new organization — creator is automatically added as "owner"
-  app.post("/api/organizations", isAuthenticated, async (req: Request, res: Response) => {
+  app.post("/api/organizations", requireAuth, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
     try {
       const body = insertOrganizationSchema
@@ -190,8 +151,8 @@ export function registerOrganizationRoutes(app: Express): void {
   // Get a single organization (any member may view)
   app.get(
     "/api/organizations/:id",
-    isAuthenticated,
-    requireOrgMember,
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
     async (req: Request, res: Response) => {
       const org = await storage.getOrganization(req.params.id);
       res.json(org);
@@ -201,9 +162,9 @@ export function registerOrganizationRoutes(app: Express): void {
   // Update organization details (admin+)
   app.patch(
     "/api/organizations/:id",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req: Request, res: Response) => {
       try {
         const updates = insertOrganizationSchema
@@ -229,8 +190,8 @@ export function registerOrganizationRoutes(app: Express): void {
 
   app.get(
     "/api/organizations/:id/members",
-    isAuthenticated,
-    requireOrgMember,
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
     async (req: Request, res: Response) => {
       const members = await storage.getOrganizationMembers(req.params.id);
       res.json(members);
@@ -241,9 +202,9 @@ export function registerOrganizationRoutes(app: Express): void {
   // the target user id out-of-band (e.g. they've already signed up).
   app.post(
     "/api/organizations/:id/members",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requirePermission("org.members.manage"),
     async (req: Request, res: Response) => {
       const actingUserId = (req as any).user.claims.sub;
       try {
@@ -293,9 +254,9 @@ export function registerOrganizationRoutes(app: Express): void {
   // Change a member's role — only owners can grant/revoke owner or admin
   app.patch(
     "/api/organizations/:id/members/:memberId",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("owner"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("owner"),
     async (req: Request, res: Response) => {
       try {
         const { role: rawRole } = z.object({ role: z.enum(ORGANIZATION_ROLES) }).parse(req.body);
@@ -320,17 +281,17 @@ export function registerOrganizationRoutes(app: Express): void {
   // Remove a member (admin+); members may also remove themselves (leave org)
   app.delete(
     "/api/organizations/:id/members/:memberId",
-    isAuthenticated,
-    requireOrgMember,
-    async (req: OrgScopedRequest, res: Response) => {
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    async (req: OrgAuthedRequest, res: Response) => {
       const members = await storage.getOrganizationMembers(req.params.id);
       const target = members.find((m) => m.id === req.params.memberId);
       if (!target) {
         res.status(404).json({ message: "Member not found" });
         return;
       }
-      const isSelf = target.userId === req.orgMember?.userId;
-      if (!isSelf && !hasRole(req.orgMember?.role, "admin")) {
+      const isSelf = target.userId === req.orgAuth?.userId;
+      if (!isSelf && !roleAtLeast(req.orgAuth?.role, "admin")) {
         res.status(403).json({ message: "Requires admin role or higher to remove other members" });
         return;
       }
@@ -345,9 +306,9 @@ export function registerOrganizationRoutes(app: Express): void {
 
   app.get(
     "/api/organizations/:id/api-keys",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req: Request, res: Response) => {
       const keys = await storage.getOrganizationApiKeys(req.params.id);
       // key_hash is never modeled/returned client-side — only prefix + metadata
@@ -357,9 +318,9 @@ export function registerOrganizationRoutes(app: Express): void {
 
   app.post(
     "/api/organizations/:id/api-keys",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req: Request, res: Response) => {
       const userId = (req as any).user.claims.sub;
       try {
@@ -404,9 +365,9 @@ export function registerOrganizationRoutes(app: Express): void {
 
   app.delete(
     "/api/organizations/:id/api-keys/:keyId",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req: Request, res: Response) => {
       const userId = (req as any).user.claims.sub;
       await storage.revokeOrganizationApiKey(req.params.keyId, req.params.id);

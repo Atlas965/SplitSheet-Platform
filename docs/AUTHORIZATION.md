@@ -1,4 +1,4 @@
-# Authorization & tenancy (Phase 3 — as implemented)
+# Authorization & tenancy (Phases 3–4 — as implemented)
 
 SplitSheet is B2B/RaaS. Operators act **inside an organization (tenant)**. Contributors stay accountless.
 
@@ -14,6 +14,7 @@ SplitSheet is B2B/RaaS. Operators act **inside an organization (tenant)**. Contr
 | Active tenant | `users.active_organization_id` |
 | Resource tenancy | `contracts.organization_id`, `song_assets.organization_id` |
 | Personal workspace | Auto-created on first org resolve / login (`ensurePersonalOrganization`) |
+| RBAC middleware | `server/rbac-middleware.ts` |
 
 ## Roles (minimum)
 
@@ -28,6 +29,19 @@ SplitSheet is B2B/RaaS. Operators act **inside an organization (tenant)**. Contr
 
 Exact permission lists: `permissionsForRole()` in `shared/org-rbac.ts`.
 
+## Phase 4 middleware
+
+| Export | Purpose |
+| --- | --- |
+| `requireAuth` | Session required (alias of `isAuthenticated`) |
+| `requireOrganizationMembership` | Membership for `:id` or active org → `req.orgAuth` |
+| `requireRole(min)` | Role rank gate after membership |
+| `requirePermission(...perms)` | Permission gate after membership |
+| `requireActivePermission(...perms)` | Auth + active org + permission(s) |
+| `requireActiveOrg()` | Auth + active org (no specific permission) |
+
+Wired onto: org member/API-key routes, contracts/assets (create/read/update/delete), projects/clients, confirmation send, Stripe Connect/refund (billing), payment flow (active org).
+
 ## APIs
 
 | Route | Purpose |
@@ -41,9 +55,8 @@ New contracts/assets are stamped with the active `organizationId`.
 
 ## Not done yet (later phases)
 
-- `requirePermission()` on every resource route (Phase 4)
-- Strict org-scoped IDOR on all reads/writes (Phase 5) — many routes still use `createdBy`
+- Strict org-scoped IDOR on all reads/writes (Phase 5) — many routes still use `createdBy` after permission checks
 - Stripe customer per organization (Phase 12)
 - Enterprise SSO / SCIM (Phases 9–10)
 
-Do not treat Phase 3 as complete multi-tenant enforcement.
+Do not treat Phase 4 as complete multi-tenant resource isolation.

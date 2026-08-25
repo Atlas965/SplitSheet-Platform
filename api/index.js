@@ -2781,6 +2781,11 @@ function roleAtLeast(role, minimum) {
   if (!normalized) return false;
   return ORG_ROLE_RANK[normalized] >= ORG_ROLE_RANK[minimum];
 }
+function roleHasPermission(role, permission) {
+  const normalized = normalizeOrgRole(role);
+  if (!normalized) return false;
+  return ROLE_PERMISSIONS[normalized].includes(permission);
+}
 function permissionsForRole(role) {
   const normalized = normalizeOrgRole(role);
   if (!normalized) return [];
@@ -2821,6 +2826,7 @@ var init_org_rbac = __esm({
       "project.delete",
       "agreement.create",
       "agreement.read",
+      "agreement.update",
       "agreement.send",
       "rights.read",
       "rights.update",
@@ -2837,6 +2843,7 @@ var init_org_rbac = __esm({
         "project.delete",
         "agreement.create",
         "agreement.read",
+        "agreement.update",
         "agreement.send",
         "rights.read",
         "rights.update",
@@ -2848,6 +2855,7 @@ var init_org_rbac = __esm({
         "project.update",
         "agreement.create",
         "agreement.read",
+        "agreement.update",
         "agreement.send",
         "rights.read",
         "rights.update",
@@ -4755,6 +4763,140 @@ var init_authz_helpers = __esm({
   }
 });
 
+// server/rbac-middleware.ts
+function deny(res, status, message) {
+  res.status(status).json({ message });
+}
+function requireOrganizationMembership(options = {}) {
+  const paramKey = options.paramKey ?? "id";
+  const fromActive = options.fromActive === true;
+  return async (req, res, next) => {
+    const userId = sessionUserId(req);
+    if (!userId) {
+      deny(res, 401, "Unauthorized");
+      return;
+    }
+    try {
+      if (fromActive) {
+        const active = await resolveActiveOrganization(userId);
+        if (!active) {
+          deny(res, 403, "No active organization");
+          return;
+        }
+        const member2 = await storage.getOrganizationMember(
+          active.organizationId,
+          userId
+        );
+        if (!member2) {
+          deny(res, 403, "You are not a member of this organization");
+          return;
+        }
+        const role2 = normalizeOrgRole(member2.role) || active.role;
+        req.orgAuth = {
+          organizationId: active.organizationId,
+          role: role2,
+          userId,
+          membershipId: member2.id,
+          name: active.name,
+          slOrgId: active.slOrgId,
+          source: "active",
+          permissions: permissionsForRole(role2)
+        };
+        return next();
+      }
+      const organizationId = String(req.params[paramKey] || "");
+      if (!organizationId) {
+        deny(res, 400, "Organization id is required");
+        return;
+      }
+      const org = await storage.getOrganization(organizationId);
+      if (!org) {
+        deny(res, 404, "Organization not found");
+        return;
+      }
+      const member = await storage.getOrganizationMember(organizationId, userId);
+      if (!member) {
+        deny(res, 403, "You are not a member of this organization");
+        return;
+      }
+      const role = normalizeOrgRole(member.role);
+      if (!role) {
+        deny(res, 403, "Invalid organization role");
+        return;
+      }
+      req.orgAuth = {
+        organizationId: org.id,
+        role,
+        userId,
+        membershipId: member.id,
+        name: org.name,
+        slOrgId: org.slOrgId,
+        source: "param",
+        permissions: permissionsForRole(role)
+      };
+      next();
+    } catch (error) {
+      console.error("[rbac] membership", error);
+      deny(res, 500, "Internal server error");
+    }
+  };
+}
+function requireRole(minimum) {
+  return (req, res, next) => {
+    if (!req.orgAuth) {
+      deny(res, 403, "Organization context required");
+      return;
+    }
+    if (!roleAtLeast(req.orgAuth.role, minimum)) {
+      deny(res, 403, `Requires ${minimum} role or higher in this organization`);
+      return;
+    }
+    next();
+  };
+}
+function requirePermission(...permissions) {
+  return (req, res, next) => {
+    if (!req.orgAuth) {
+      deny(res, 403, "Organization context required");
+      return;
+    }
+    if (!permissions.length) {
+      next();
+      return;
+    }
+    const missing = permissions.filter(
+      (p) => !roleHasPermission(req.orgAuth.role, p)
+    );
+    if (missing.length) {
+      deny(res, 403, `Missing permission: ${missing.join(", ")}`);
+      return;
+    }
+    next();
+  };
+}
+function requireActivePermission(...permissions) {
+  return [
+    requireAuth,
+    requireOrganizationMembership({ fromActive: true }),
+    requirePermission(...permissions)
+  ];
+}
+function requireActiveOrg() {
+  return [requireAuth, requireOrganizationMembership({ fromActive: true })];
+}
+var requireAuth;
+var init_rbac_middleware = __esm({
+  "server/rbac-middleware.ts"() {
+    "use strict";
+    init_replitAuth();
+    init_storage();
+    init_org_context();
+    init_org_rbac();
+    init_authz_helpers();
+    requireAuth = isAuthenticated;
+  }
+});
+
 // server/confirmation-routes.ts
 import crypto4 from "crypto";
 import { sql as sql6 } from "drizzle-orm";
@@ -4772,7 +4914,7 @@ function registerConfirmationRoutes(app) {
   app.use("/api/confirm", confirmPublicLimiter);
   app.post(
     "/api/contracts/:id/generate-confirmations",
-    isAuthenticated,
+    ...requireActivePermission("agreement.send"),
     async (req, res) => {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
@@ -4881,7 +5023,7 @@ function registerConfirmationRoutes(app) {
   );
   app.get(
     "/api/contracts/:id/confirmations",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req, res) => {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
@@ -4969,7 +5111,7 @@ function registerConfirmationRoutes(app) {
   );
   app.post(
     "/api/contracts/:id/confirmations/:confirmId/mark-sent",
-    isAuthenticated,
+    ...requireActivePermission("agreement.send"),
     async (req, res) => {
       const { id: contractId, confirmId } = req.params;
       try {
@@ -5142,11 +5284,11 @@ var init_confirmation_routes = __esm({
   "server/confirmation-routes.ts"() {
     "use strict";
     init_db();
-    init_replitAuth();
     init_email_service();
     init_storage();
     init_security();
     init_authz_helpers();
+    init_rbac_middleware();
   }
 });
 
@@ -5222,11 +5364,11 @@ function isDraftableStatus(status) {
 function recommendAgreements(input) {
   const recs = [];
   const roles = (input.roles ?? []).map((r) => r.toLowerCase());
-  const hasRole2 = (...names) => names.some((n) => roles.some((r) => r.includes(n)));
+  const hasRole = (...names) => names.some((n) => roles.some((r) => r.includes(n)));
   const push = (r) => {
     if (!recs.some((x) => x.template === r.template)) recs.push(r);
   };
-  if ((input.songwriterCount ?? 0) >= 2 || hasRole2("writer", "songwriter", "composer")) {
+  if ((input.songwriterCount ?? 0) >= 2 || hasRole("writer", "songwriter", "composer")) {
     push({
       template: "split-sheet",
       priority: "high",
@@ -5242,7 +5384,7 @@ function recommendAgreements(input) {
       riskLevel: "medium"
     });
   }
-  if (input.hasProducer || hasRole2("producer")) {
+  if (input.hasProducer || hasRole("producer")) {
     push({
       template: "producer",
       priority: "high",
@@ -5258,7 +5400,7 @@ function recommendAgreements(input) {
       riskLevel: "high"
     });
   }
-  if (input.hasExternalBeat || hasRole2("beatmaker", "beat")) {
+  if (input.hasExternalBeat || hasRole("beatmaker", "beat")) {
     push({
       template: "producer",
       priority: "high",
@@ -5267,7 +5409,7 @@ function recommendAgreements(input) {
       riskLevel: "medium"
     });
   }
-  if (input.hasMaster || hasRole2("label", "engineer")) {
+  if (input.hasMaster || hasRole("label", "engineer")) {
     push({
       template: "master-ownership",
       priority: "high",
@@ -5283,7 +5425,7 @@ function recommendAgreements(input) {
       riskLevel: "high"
     });
   }
-  if (hasRole2("featured", "feature")) {
+  if (hasRole("featured", "feature")) {
     push({
       template: "featured-artist",
       priority: "high",
@@ -5292,7 +5434,7 @@ function recommendAgreements(input) {
       riskLevel: "medium"
     });
   }
-  if (hasRole2("session", "musician", "instrument")) {
+  if (hasRole("session", "musician", "instrument")) {
     push({
       template: "session-musician",
       priority: "medium",
@@ -5301,7 +5443,7 @@ function recommendAgreements(input) {
       riskLevel: "low"
     });
   }
-  if (hasRole2("vocal", "singer")) {
+  if (hasRole("vocal", "singer")) {
     push({
       template: "vocalist",
       priority: "medium",
@@ -5310,7 +5452,7 @@ function recommendAgreements(input) {
       riskLevel: "low"
     });
   }
-  if (input.hasSyncUse || hasRole2("sync", "film", "tv", "ad", "game", "podcast")) {
+  if (input.hasSyncUse || hasRole("sync", "film", "tv", "ad", "game", "podcast")) {
     push({
       template: "sync-license",
       priority: "high",
@@ -5326,7 +5468,7 @@ function recommendAgreements(input) {
       riskLevel: "high"
     });
   }
-  if (hasRole2("commission", "work for hire", "wfh", "brand")) {
+  if (hasRole("commission", "work for hire", "wfh", "brand")) {
     push({
       template: "work-for-hire-music",
       priority: "high",
@@ -8456,7 +8598,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to load workflow status" });
     }
   });
-  app.get("/api/clients", isAuthenticated, async (req, res) => {
+  app.get("/api/clients", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
       res.json(await buildClientList(req.user.claims.sub));
     } catch (error) {
@@ -8464,7 +8606,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch clients" });
     }
   });
-  app.get("/api/clients/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
       const clients = await buildClientList(req.user.claims.sub);
       const client4 = clients.find((c) => c.id === req.params.id);
@@ -8477,7 +8619,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch client" });
     }
   });
-  app.get("/api/clients/:id/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const clients = await buildClientList(userId);
@@ -8502,7 +8644,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch client projects" });
     }
   });
-  app.patch("/api/clients/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/clients/:id", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
       const owned = await requireOwnedCollaborator(req, res, req.params.id);
       if (!owned) return;
@@ -8529,7 +8671,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to update client" });
     }
   });
-  app.get("/api/projects", isAuthenticated, async (req, res) => {
+  app.get("/api/projects", ...requireActivePermission("project.read"), async (req, res) => {
     try {
       const userContracts = await storage.getContracts(req.user.claims.sub);
       const projects = await Promise.all(
@@ -8552,7 +8694,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch projects" });
     }
   });
-  app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id", ...requireActivePermission("project.read"), async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -8564,7 +8706,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch project" });
     }
   });
-  app.patch("/api/projects/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/projects/:id", ...requireActivePermission("project.update"), async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -8585,7 +8727,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to update project" });
     }
   });
-  app.get("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id/contributors", ...requireActivePermission("project.read"), async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -8625,7 +8767,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to fetch contributors" });
     }
   });
-  app.post("/api/projects/:id/contributors", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/contributors", ...requireActivePermission("project.update"), async (req, res) => {
     try {
       const parsed = contributorSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -8670,7 +8812,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to add contributor" });
     }
   });
-  app.patch("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
+  app.patch("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -8699,7 +8841,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to update contributor" });
     }
   });
-  app.delete("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req, res) => {
+  app.delete("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req, res) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -8712,7 +8854,7 @@ function registerServiceRoutes(app) {
       res.status(500).json({ message: "Failed to remove contributor" });
     }
   });
-  app.post("/api/projects/:id/send-confirmations", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/send-confirmations", ...requireActivePermission("agreement.send"), async (req, res) => {
     const contractId = req.params.id;
     const userId = req.user?.claims?.sub;
     try {
@@ -8784,6 +8926,7 @@ var init_service_routes = __esm({
     "use strict";
     init_replitAuth();
     init_authz_helpers();
+    init_rbac_middleware();
     init_storage();
     init_db();
     contributorSchema = z5.object({
@@ -8809,41 +8952,8 @@ async function generateUniqueSlOrgId2() {
   }
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
-function hasRole(role, minimum) {
-  return roleAtLeast(role, minimum);
-}
-async function requireOrgMember(req, res, next) {
-  const userId = req.user?.claims?.sub;
-  const organizationId = req.params.id;
-  try {
-    const org = await storage.getOrganization(organizationId);
-    if (!org) {
-      res.status(404).json({ message: "Organization not found" });
-      return;
-    }
-    const member = await storage.getOrganizationMember(organizationId, userId);
-    if (!member) {
-      res.status(403).json({ message: "You are not a member of this organization" });
-      return;
-    }
-    req.orgMember = { ...member, organizationId };
-    next();
-  } catch (error) {
-    console.error("[ORG AUTH ERROR]", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-}
-function requireOrgRole(minimum) {
-  return (req, res, next) => {
-    if (!hasRole(req.orgMember?.role, minimum)) {
-      res.status(403).json({ message: `Requires ${minimum} role or higher in this organization` });
-      return;
-    }
-    next();
-  };
-}
 function registerOrganizationRoutes(app) {
-  app.get("/api/organizations", isAuthenticated, async (req, res) => {
+  app.get("/api/organizations", requireAuth, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       await ensurePersonalOrganization(userId);
@@ -8854,7 +8964,7 @@ function registerOrganizationRoutes(app) {
       res.status(500).json({ message: "Failed to fetch organizations" });
     }
   });
-  app.get("/api/me/organization", isAuthenticated, async (req, res) => {
+  app.get("/api/me/organization", requireAuth, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const active = await resolveActiveOrganization(userId);
@@ -8872,7 +8982,7 @@ function registerOrganizationRoutes(app) {
       res.status(500).json({ message: "Failed to resolve active organization" });
     }
   });
-  app.post("/api/me/organization", isAuthenticated, async (req, res) => {
+  app.post("/api/me/organization", requireAuth, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const organizationId = String(req.body?.organizationId || "");
@@ -8890,7 +9000,7 @@ function registerOrganizationRoutes(app) {
       res.status(status).json({ message: error?.message || "Failed to set active organization" });
     }
   });
-  app.post("/api/organizations", isAuthenticated, async (req, res) => {
+  app.post("/api/organizations", requireAuth, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertOrganizationSchema.pick({ name: true, type: true, email: true, website: true, country: true }).extend({ type: z6.enum(ORGANIZATION_TYPES) }).parse(req.body);
@@ -8926,8 +9036,8 @@ function registerOrganizationRoutes(app) {
   });
   app.get(
     "/api/organizations/:id",
-    isAuthenticated,
-    requireOrgMember,
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
     async (req, res) => {
       const org = await storage.getOrganization(req.params.id);
       res.json(org);
@@ -8935,9 +9045,9 @@ function registerOrganizationRoutes(app) {
   );
   app.patch(
     "/api/organizations/:id",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req, res) => {
       try {
         const updates = insertOrganizationSchema.pick({ name: true, email: true, website: true, country: true }).partial().parse(req.body);
@@ -8955,8 +9065,8 @@ function registerOrganizationRoutes(app) {
   );
   app.get(
     "/api/organizations/:id/members",
-    isAuthenticated,
-    requireOrgMember,
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
     async (req, res) => {
       const members = await storage.getOrganizationMembers(req.params.id);
       res.json(members);
@@ -8964,9 +9074,9 @@ function registerOrganizationRoutes(app) {
   );
   app.post(
     "/api/organizations/:id/members",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requirePermission("org.members.manage"),
     async (req, res) => {
       const actingUserId = req.user.claims.sub;
       try {
@@ -9007,9 +9117,9 @@ function registerOrganizationRoutes(app) {
   );
   app.patch(
     "/api/organizations/:id/members/:memberId",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("owner"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("owner"),
     async (req, res) => {
       try {
         const { role: rawRole } = z6.object({ role: z6.enum(ORGANIZATION_ROLES) }).parse(req.body);
@@ -9032,8 +9142,8 @@ function registerOrganizationRoutes(app) {
   );
   app.delete(
     "/api/organizations/:id/members/:memberId",
-    isAuthenticated,
-    requireOrgMember,
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
     async (req, res) => {
       const members = await storage.getOrganizationMembers(req.params.id);
       const target = members.find((m) => m.id === req.params.memberId);
@@ -9041,8 +9151,8 @@ function registerOrganizationRoutes(app) {
         res.status(404).json({ message: "Member not found" });
         return;
       }
-      const isSelf = target.userId === req.orgMember?.userId;
-      if (!isSelf && !hasRole(req.orgMember?.role, "admin")) {
+      const isSelf = target.userId === req.orgAuth?.userId;
+      if (!isSelf && !roleAtLeast(req.orgAuth?.role, "admin")) {
         res.status(403).json({ message: "Requires admin role or higher to remove other members" });
         return;
       }
@@ -9052,9 +9162,9 @@ function registerOrganizationRoutes(app) {
   );
   app.get(
     "/api/organizations/:id/api-keys",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req, res) => {
       const keys = await storage.getOrganizationApiKeys(req.params.id);
       res.json(keys.map(({ keyHash, ...safe }) => safe));
@@ -9062,9 +9172,9 @@ function registerOrganizationRoutes(app) {
   );
   app.post(
     "/api/organizations/:id/api-keys",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req, res) => {
       const userId = req.user.claims.sub;
       try {
@@ -9103,9 +9213,9 @@ function registerOrganizationRoutes(app) {
   );
   app.delete(
     "/api/organizations/:id/api-keys/:keyId",
-    isAuthenticated,
-    requireOrgMember,
-    requireOrgRole("admin"),
+    requireAuth,
+    requireOrganizationMembership({ paramKey: "id" }),
+    requireRole("admin"),
     async (req, res) => {
       const userId = req.user.claims.sub;
       await storage.revokeOrganizationApiKey(req.params.keyId, req.params.id);
@@ -9125,11 +9235,11 @@ var init_organization_routes = __esm({
   "server/organization-routes.ts"() {
     "use strict";
     init_storage();
-    init_replitAuth();
     init_schema();
     init_org_rbac();
     init_security();
     init_org_context();
+    init_rbac_middleware();
   }
 });
 
@@ -9710,7 +9820,7 @@ function uid(req) {
   return req.user?.claims?.sub ?? "";
 }
 function registerPaymentRoutes(app) {
-  app.post("/api/connect-account", isAuthenticated, async (req, res) => {
+  app.post("/api/connect-account", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await createConnectAccount(req, res);
     } catch (err) {
@@ -9718,7 +9828,7 @@ function registerPaymentRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/connect-status", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-status", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await getConnectStatus(req, res);
     } catch (err) {
@@ -9726,14 +9836,14 @@ function registerPaymentRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/connect-dashboard", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-dashboard", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await getConnectDashboardLink(req, res);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
   });
-  app.post("/api/payments/intent", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/intent", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
     try {
       const body = createPaymentSchema.parse(req.body);
@@ -9760,7 +9870,7 @@ function registerPaymentRoutes(app) {
       res.status(400).json({ error: err.message });
     }
   });
-  app.post("/api/payments/execute-splits", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/execute-splits", ...requireActiveOrg(), async (req, res) => {
     try {
       const body = executeSplitsSchema.parse(req.body);
       const intent = await stripe3.paymentIntents.retrieve(body.paymentIntentId);
@@ -9788,7 +9898,7 @@ function registerPaymentRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/payments/transactions", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/transactions", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
@@ -9839,7 +9949,7 @@ function registerPaymentRoutes(app) {
       initiated: initiated.rows
     });
   });
-  app.get("/api/payments/balance", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/balance", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
     const rows = await db.execute(sql10`
       SELECT
@@ -9877,7 +9987,7 @@ function registerPaymentRoutes(app) {
       updatedAt: bal.updated_at
     });
   });
-  app.post("/api/payments/refund", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/refund", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);
@@ -10090,7 +10200,7 @@ var init_payment_routes = __esm({
   "server/payment-routes.ts"() {
     "use strict";
     init_db();
-    init_replitAuth();
+    init_rbac_middleware();
     init_stripe_connect();
     init_payment_service();
     stripe3 = new Stripe3(process.env.STRIPE_SECRET_KEY ?? "", {
@@ -10525,7 +10635,7 @@ async function registerSecurityRoutes(app) {
     `);
     res.json(rows.rows);
   });
-  app.get("/api/audit-log", isAuthenticated, async (req, res) => {
+  app.get("/api/audit-log", ...requireActiveOrg(), async (req, res) => {
     const userId = req.user?.claims?.sub;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const rows = await db.execute(sql11`
@@ -10545,6 +10655,7 @@ var init_security_routes = __esm({
     init_db();
     init_replitAuth();
     init_adminAuth();
+    init_rbac_middleware();
     init_security();
     splitRateLimit = createRateLimiter(10, 6e4);
     signRateLimit = createRateLimiter(5, 6e4);
@@ -12331,7 +12442,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch contract template" });
     }
   });
-  app.get("/api/contracts", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contracts2 = await storage.getContracts(userId);
@@ -12341,7 +12452,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch contracts" });
     }
   });
-  app.get("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts/:id", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -12363,9 +12474,10 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch contract" });
     }
   });
-  app.post("/api/contracts", isAuthenticated, async (req, res) => {
+  app.post("/api/contracts", ...requireActivePermission("agreement.create"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
+      const organizationId = req.orgAuth?.organizationId ?? null;
       let templateId = req.body.templateId;
       let templateVersion = req.body.templateVersion;
       let template = templateId ? await storage.getContractTemplate(templateId) : await storage.getContractTemplateByType(req.body.type);
@@ -12389,19 +12501,18 @@ async function registerRoutes(app) {
           }
         }
       }
-      const activeOrg = await resolveActiveOrganization(userId);
       const contractData = insertContractSchema.parse({
         ...req.body,
         templateId: templateId ?? req.body.templateId ?? null,
         templateVersion: templateVersion ?? null,
         createdBy: userId,
-        organizationId: activeOrg?.organizationId ?? null,
+        organizationId,
         metadata: {
           ...req.body.metadata || {},
           createdFrom: req.body.metadata?.createdFrom || "template",
           templateType: req.body.type,
           templateVersion: templateVersion ?? null,
-          organizationId: activeOrg?.organizationId ?? null
+          organizationId
         }
       });
       const contract = await storage.createContract(contractData);
@@ -12414,7 +12525,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to create contract" });
     }
   });
-  app.patch("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -12441,7 +12552,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to update contract" });
     }
   });
-  app.delete("/api/contracts/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -13494,7 +13605,7 @@ async function registerRoutes(app) {
       }
     }
   );
-  app.get("/api/assets", isAuthenticated, async (req, res) => {
+  app.get("/api/assets", ...requireActivePermission("rights.read"), async (req, res) => {
     try {
       const assets = await storage.getSongAssets(req.user.claims.sub);
       res.json(assets);
@@ -13503,14 +13614,13 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch assets" });
     }
   });
-  app.post("/api/assets", isAuthenticated, async (req, res) => {
+  app.post("/api/assets", ...requireActivePermission("rights.update"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const activeOrg = await resolveActiveOrganization(userId);
       const data = {
         ...req.body,
         createdBy: userId,
-        organizationId: activeOrg?.organizationId ?? null
+        organizationId: req.orgAuth?.organizationId ?? null
       };
       const asset = await storage.createSongAsset(data);
       await storage.trackUserActivity(userId, "asset_created", {
@@ -13522,7 +13632,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to create asset" });
     }
   });
-  app.get("/api/assets/:id", isAuthenticated, async (req, res) => {
+  app.get("/api/assets/:id", ...requireActivePermission("rights.read"), async (req, res) => {
     try {
       const asset = await requireOwnedAsset(req, res, req.params.id);
       if (!asset) return;
@@ -13531,7 +13641,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch asset" });
     }
   });
-  app.patch("/api/assets/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/assets/:id", ...requireActivePermission("rights.update"), async (req, res) => {
     try {
       const asset = await storage.getSongAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
@@ -13775,7 +13885,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: error.message || "Failed to fetch payouts" });
     }
   });
-  app.post("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
+  app.post("/api/contracts/:id/confirmations", ...requireActivePermission("agreement.send"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -13808,7 +13918,7 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to generate confirmations" });
     }
   });
-  app.get("/api/contracts/:id/confirmations", isAuthenticated, async (req, res) => {
+  app.get("/api/contracts/:id/confirmations", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -13892,6 +14002,7 @@ var init_routes = __esm({
     init_stripe_subscription_webhook();
     init_authz_helpers();
     init_org_context();
+    init_rbac_middleware();
     rateLimitStore2 = /* @__PURE__ */ new Map();
     stripe4 = null;
     stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;

@@ -16,6 +16,7 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
 import { isAdmin } from "./adminAuth";
+import { requireActiveOrg } from "./rbac-middleware";
 import {
   splitSheetSchema,
   computeContentHash,
@@ -490,7 +491,7 @@ export async function registerSecurityRoutes(app: Express): Promise<void> {
   // AUDIT LOG (self-view)
   // ══════════════════════════════════════════════════════════════════════════
 
-  app.get("/api/audit-log", isAuthenticated, async (req: Request, res: Response): Promise<void> => {
+  app.get("/api/audit-log", ...requireActiveOrg(), async (req: Request, res: Response): Promise<void> => {
     const userId = (req as any).user?.claims?.sub;
     const limit  = Math.min(Number(req.query.limit ?? 50), 200);
     const rows = await db.execute(sql`

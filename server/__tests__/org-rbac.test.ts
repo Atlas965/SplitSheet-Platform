@@ -27,5 +27,6 @@ describe("org-rbac (Phase 3)", () => {
     const perms = permissionsForRole("owner");
     expect(perms).toContain("org.manage");
     expect(perms).toContain("project.delete");
+    expect(perms).toContain("agreement.update");
   });
 });

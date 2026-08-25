@@ -54,6 +54,10 @@ import {
   requireOwnedRevenueEvent,
 } from "./authz-helpers";
 import { resolveActiveOrganization } from "./org-context";
+import {
+  requireActivePermission,
+  type OrgAuthedRequest,
+} from "./rbac-middleware";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -287,7 +291,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contract routes
-  app.get("/api/contracts", isAuthenticated, async (req: any, res) => {
+  app.get("/api/contracts", ...requireActivePermission("agreement.read"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contracts = await storage.getContracts(userId);
@@ -298,7 +302,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/contracts/:id", isAuthenticated, async (req: any, res) => {
+  app.get("/api/contracts/:id", ...requireActivePermission("agreement.read"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -324,9 +328,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/contracts", isAuthenticated, async (req: any, res) => {
+  app.post("/api/contracts", ...requireActivePermission("agreement.create"), async (req: OrgAuthedRequest, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req as any).user.claims.sub;
+      const organizationId = req.orgAuth?.organizationId ?? null;
 
       // Resolve template by id or type and snapshot version for auditability
       let templateId = req.body.templateId as string | undefined;
@@ -360,19 +365,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const activeOrg = await resolveActiveOrganization(userId);
       const contractData = insertContractSchema.parse({
         ...req.body,
         templateId: templateId ?? req.body.templateId ?? null,
         templateVersion: templateVersion ?? null,
         createdBy: userId,
-        organizationId: activeOrg?.organizationId ?? null,
+        organizationId,
         metadata: {
           ...(req.body.metadata || {}),
           createdFrom: req.body.metadata?.createdFrom || "template",
           templateType: req.body.type,
           templateVersion: templateVersion ?? null,
-          organizationId: activeOrg?.organizationId ?? null,
+          organizationId,
         },
       });
 
@@ -389,7 +393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/contracts/:id", isAuthenticated, async (req: any, res) => {
+  app.patch("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -420,7 +424,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/contracts/:id", isAuthenticated, async (req: any, res) => {
+  app.delete("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -1777,7 +1781,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
 
-  app.get("/api/assets", isAuthenticated, async (req: any, res) => {
+  app.get("/api/assets", ...requireActivePermission("rights.read"), async (req: any, res) => {
     try {
       const assets = await storage.getSongAssets(req.user.claims.sub);
       res.json(assets);
@@ -1787,14 +1791,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/assets", isAuthenticated, async (req: any, res) => {
+  app.post("/api/assets", ...requireActivePermission("rights.update"), async (req: OrgAuthedRequest, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const activeOrg = await resolveActiveOrganization(userId);
+      const userId = (req as any).user.claims.sub;
       const data = {
         ...req.body,
         createdBy: userId,
-        organizationId: activeOrg?.organizationId ?? null,
+        organizationId: req.orgAuth?.organizationId ?? null,
       };
       const asset = await storage.createSongAsset(data);
       await storage.trackUserActivity(userId, "asset_created", {
@@ -1807,7 +1810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/assets/:id", isAuthenticated, async (req: any, res) => {
+  app.get("/api/assets/:id", ...requireActivePermission("rights.read"), async (req: any, res) => {
     try {
       const asset = await requireOwnedAsset(req, res, req.params.id);
       if (!asset) return;
@@ -1817,7 +1820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/assets/:id", isAuthenticated, async (req: any, res) => {
+  app.patch("/api/assets/:id", ...requireActivePermission("rights.update"), async (req: any, res) => {
     try {
       const asset = await storage.getSongAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
@@ -2108,7 +2111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ─── CONFIRMATIONS ────────────────────────────────────────────────────────
 
   // Generate confirmation links for a contract
-  app.post('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+  app.post('/api/contracts/:id/confirmations', ...requireActivePermission("agreement.send"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);
@@ -2148,7 +2151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get confirmations for a contract (operator view)
-  app.get('/api/contracts/:id/confirmations', isAuthenticated, async (req: any, res) => {
+  app.get('/api/contracts/:id/confirmations', ...requireActivePermission("agreement.read"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const contract = await storage.getContract(req.params.id);

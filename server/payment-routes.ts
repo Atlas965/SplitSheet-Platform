@@ -26,6 +26,7 @@ import { z } from "zod";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
+import { requireActivePermission, requireActiveOrg } from "./rbac-middleware";
 import {
   createConnectAccount,
   getConnectStatus,
@@ -83,7 +84,7 @@ export function registerPaymentRoutes(app: Express): void {
    * Creates Stripe Express account + returns onboarding URL.
    * Safe to call multiple times — idempotent.
    */
-  app.post("/api/connect-account", isAuthenticated, async (req, res) => {
+  app.post("/api/connect-account", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await createConnectAccount(req, res);
     } catch (err: any) {
@@ -96,7 +97,7 @@ export function registerPaymentRoutes(app: Express): void {
    * GET /api/connect-status
    * Returns live Stripe account status: onboarded, chargesEnabled, payoutsEnabled.
    */
-  app.get("/api/connect-status", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-status", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await getConnectStatus(req, res);
     } catch (err: any) {
@@ -109,7 +110,7 @@ export function registerPaymentRoutes(app: Express): void {
    * GET /api/connect-dashboard
    * Returns a time-limited Stripe Express dashboard login URL.
    */
-  app.get("/api/connect-dashboard", isAuthenticated, async (req, res) => {
+  app.get("/api/connect-dashboard", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     try {
       await getConnectDashboardLink(req, res);
     } catch (err: any) {
@@ -127,7 +128,7 @@ export function registerPaymentRoutes(app: Express): void {
    * Body: { contractId, assetId, source, grossAmount, currency, description }
    * Returns: { paymentIntentId, clientSecret, netCents, feeCents, revenueEventId }
    */
-  app.post("/api/payments/intent", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/intent", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
     try {
       const body = createPaymentSchema.parse(req.body);
@@ -173,7 +174,7 @@ export function registerPaymentRoutes(app: Express): void {
    * payment_intent.succeeded event for reliability. Calling both
    * is safe — idempotency keys prevent double-transfers.
    */
-  app.post("/api/payments/execute-splits", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/execute-splits", ...requireActiveOrg(), async (req, res) => {
     try {
       const body = executeSplitsSchema.parse(req.body);
 
@@ -213,7 +214,7 @@ export function registerPaymentRoutes(app: Express): void {
    * Returns full revenue event + payout history for the authenticated user.
    * Includes both earnings (as collaborator) and initiated payments (as creator).
    */
-  app.get("/api/payments/transactions", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/transactions", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
     const limit  = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
@@ -273,7 +274,7 @@ export function registerPaymentRoutes(app: Express): void {
    * GET /api/payments/balance
    * Returns user's current balance, total earned, total paid, pending.
    */
-  app.get("/api/payments/balance", isAuthenticated, async (req, res) => {
+  app.get("/api/payments/balance", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
 
     const rows = await db.execute(sql`
@@ -323,7 +324,7 @@ export function registerPaymentRoutes(app: Express): void {
    *
    * Body: { revenueEventId, reason }
    */
-  app.post("/api/payments/refund", isAuthenticated, async (req, res) => {
+  app.post("/api/payments/refund", ...requireActivePermission("org.billing.manage"), async (req, res) => {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);

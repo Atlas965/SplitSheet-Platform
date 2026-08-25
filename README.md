@@ -81,7 +81,7 @@ Do these before or during the counsel phase — nothing more unless counsel asks
 | Backend | Express (TypeScript), deployed as Vercel serverless (`api/index.js`) |
 | Database | PostgreSQL (Neon) + Drizzle ORM — schema in `shared/schema.ts` |
 | Auth | Session cookies (Postgres); **Auth0 Universal Login** (`AUTH_PROVIDER=auth0`) or direct social OAuth; local break-glass only |
-| Tenancy | Organizations + memberships; active org on user; contracts/assets carry `organization_id` |
+| Tenancy | Organizations + memberships; active org; contracts/assets carry `organization_id`; RBAC via `requirePermission` / roles (`docs/AUTHORIZATION.md`) |
 | Payments | Stripe Checkout + webhooks (`/api/stripe/webhook`) |
 | PDFs | Client-side jsPDF |
 

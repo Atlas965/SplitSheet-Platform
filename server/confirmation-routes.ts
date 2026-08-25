@@ -18,11 +18,11 @@ import type { Express, Request, Response } from "express";
 import crypto from "crypto";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
-import { isAuthenticated } from "./replitAuth";
 import { sendEmail, confirmationLinkEmail } from "./email-service";
 import { storage } from "./storage";
 import { createPgRateLimiter } from "./security";
 import { requireOwnedContract } from "./authz-helpers";
+import { requireActivePermission } from "./rbac-middleware";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ export function registerConfirmationRoutes(app: Express): void {
   // ══════════════════════════════════════════════════════════════════════════
   app.post(
     "/api/contracts/:id/generate-confirmations",
-    isAuthenticated,
+    ...requireActivePermission("agreement.send"),
     async (req: Request, res: Response): Promise<void> => {
       const contractId = req.params.id;
       const userId = (req as any).user?.claims?.sub;
@@ -178,7 +178,7 @@ export function registerConfirmationRoutes(app: Express): void {
   // ══════════════════════════════════════════════════════════════════════════
   app.get(
     "/api/contracts/:id/confirmations",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req: Request, res: Response): Promise<void> => {
       const contractId = req.params.id;
       const userId = (req as any).user?.claims?.sub;
@@ -273,7 +273,7 @@ export function registerConfirmationRoutes(app: Express): void {
   // ══════════════════════════════════════════════════════════════════════════
   app.post(
     "/api/contracts/:id/confirmations/:confirmId/mark-sent",
-    isAuthenticated,
+    ...requireActivePermission("agreement.send"),
     async (req: Request, res: Response): Promise<void> => {
       const { id: contractId, confirmId } = req.params;
       try {

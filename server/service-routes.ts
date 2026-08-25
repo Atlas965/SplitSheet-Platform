@@ -8,6 +8,7 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
 import { requireOwnedCollaborator } from "./authz-helpers";
+import { requireActivePermission } from "./rbac-middleware";
 import { storage } from "./storage";
 import { db } from "./db";
 import type { Contract } from "@shared/schema";
@@ -154,7 +155,7 @@ export function registerServiceRoutes(app: Express): void {
   });
 
   // ── Clients (derived from collaborators) ────────────────────────────────────
-  app.get("/api/clients", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/clients", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
     try {
       res.json(await buildClientList(req.user.claims.sub));
     } catch (error) {
@@ -163,7 +164,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/clients/:id", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
     try {
       const clients = await buildClientList(req.user.claims.sub);
       const client = clients.find((c) => c.id === req.params.id);
@@ -177,7 +178,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/clients/:id/projects", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
     try {
       const userId = req.user.claims.sub;
       const clients = await buildClientList(userId);
@@ -203,7 +204,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/clients/:id", isAuthenticated, async (req: any, res: Response) => {
+  app.patch("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
     try {
       const owned = await requireOwnedCollaborator(req, res, req.params.id);
       if (!owned) return;
@@ -233,7 +234,7 @@ export function registerServiceRoutes(app: Express): void {
   });
 
   // ── Projects (contract alias) ───────────────────────────────────────────────
-  app.get("/api/projects", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/projects", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
     try {
       const userContracts = await storage.getContracts(req.user.claims.sub);
       const projects = await Promise.all(
@@ -257,7 +258,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/projects/:id", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/projects/:id", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -270,7 +271,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/projects/:id", isAuthenticated, async (req: any, res: Response) => {
+  app.patch("/api/projects/:id", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -292,7 +293,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/projects/:id/contributors", isAuthenticated, async (req: any, res: Response) => {
+  app.get("/api/projects/:id/contributors", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -333,7 +334,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/projects/:id/contributors", isAuthenticated, async (req: any, res: Response) => {
+  app.post("/api/projects/:id/contributors", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
       const parsed = contributorSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -379,7 +380,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req: any, res: Response) => {
+  app.patch("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -409,7 +410,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/projects/:id/contributors/:contribId", isAuthenticated, async (req: any, res: Response) => {
+  app.delete("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
       const result = await assertContractOwner(req.params.id, req.user.claims.sub);
       if ("error" in result) {
@@ -423,7 +424,7 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/projects/:id/send-confirmations", isAuthenticated, async (req: Request, res: Response) => {
+  app.post("/api/projects/:id/send-confirmations", ...requireActivePermission("agreement.send"), async (req: Request, res: Response) => {
     const contractId = req.params.id;
     const userId = (req as any).user?.claims?.sub;
     try {

@@ -386,3 +386,18 @@ Phase 1 hardening is implemented in code. Redeploy Production, then manually ver
 | Docs | `docs/AUTHORIZATION.md` |
 
 **Not claimed:** Full permission middleware on all APIs (Phase 4) or org-only IDOR (Phase 5). `createdBy` checks still apply for many routes.
+
+---
+
+## 21. Phase 4 — Central RBAC middleware (implemented)
+
+| Item | Result |
+| --- | --- |
+| Module | `server/rbac-middleware.ts` — `requireAuth`, `requireOrganizationMembership`, `requireRole`, `requirePermission`, `requireActivePermission`, `requireActiveOrg` |
+| Org routes | Use shared membership/role/permission gates (no local duplicates) |
+| Product routes | Contracts, assets, projects, clients, confirmations, billing Connect/refund gated by permission or active org |
+| Catalog | Added `agreement.update` for operator/admin/owner |
+| Tests | `server/__tests__/rbac-middleware.test.ts` |
+| Docs | `docs/AUTHORIZATION.md` |
+
+**Not claimed:** Org-scoped IDOR on every by-id resource (Phase 5). Permission checks do not replace `createdBy` ownership yet.
