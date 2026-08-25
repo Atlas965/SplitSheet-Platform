@@ -6,6 +6,19 @@ export function isVercelRuntime(): boolean {
   return process.env.VERCEL === "1" || process.env.VERCEL === "true";
 }
 
+/** Production-like host: public deployment must not use passwordless local auth by accident. */
+export function isProductionLike(): boolean {
+  return process.env.NODE_ENV === "production" || isVercelRuntime();
+}
+
+/**
+ * Explicit break-glass for operator local login on production-like hosts.
+ * Requires AUTH_PROVIDER=local AND ALLOW_LOCAL_AUTH_IN_PRODUCTION=true.
+ */
+export function allowLocalAuthInProduction(): boolean {
+  return process.env.ALLOW_LOCAL_AUTH_IN_PRODUCTION === "true";
+}
+
 /** True when at least one social OAuth provider has credentials configured. */
 export function hasSocialCredentials(): boolean {
   return Boolean(
@@ -21,10 +34,16 @@ export function hasSocialCredentials(): boolean {
 
 /**
  * Operator / passwordless local login.
- * Prefer social OAuth when provider credentials are configured.
+ * Never auto-enabled on Vercel/production — only AUTH_PROVIDER=local
+ * (plus ALLOW_LOCAL_AUTH_IN_PRODUCTION on prod-like hosts).
  */
 export function useLocalAuthProvider(): boolean {
-  if (process.env.AUTH_PROVIDER === "local") return true;
+  if (process.env.AUTH_PROVIDER === "local") {
+    if (isProductionLike() && !allowLocalAuthInProduction()) {
+      return false;
+    }
+    return true;
+  }
   if (
     process.env.AUTH_PROVIDER === "replit" ||
     process.env.AUTH_PROVIDER === "oidc" ||
@@ -33,7 +52,8 @@ export function useLocalAuthProvider(): boolean {
     return false;
   }
   if (hasSocialCredentials()) return false;
-  return isVercelRuntime();
+  // Do NOT fall back to passwordless local on Vercel when misconfigured.
+  return false;
 }
 
 export function useSocialAuthProvider(): boolean {

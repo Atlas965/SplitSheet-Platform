@@ -11,6 +11,8 @@ import * as client from "openid-client";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { storage } from "./storage";
+import { establishSession } from "./session-security";
+import { createPgRateLimiter } from "./security";
 
 export type SocialProviderId = "google" | "apple" | "github" | "microsoft";
 
@@ -88,16 +90,38 @@ async function upsertSocialUser(input: {
   firstName?: string | null;
   lastName?: string | null;
   profileImageUrl?: string | null;
+  emailVerified?: boolean;
 }) {
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
 
   let existing = await storage.getUser(preferredId);
-  if (!existing && email) {
-    existing = await getUserByEmail(email);
+
+  // Do not auto-link by email across identities (account-takeover risk).
+  // Optional explicit opt-in: ALLOW_EMAIL_ACCOUNT_LINKING=true AND verified email
+  // AND existing user already uses the same provider prefix.
+  if (
+    !existing &&
+    email &&
+    input.emailVerified &&
+    process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true"
+  ) {
+    const byEmail = await getUserByEmail(email);
+    if (byEmail?.id?.startsWith(`${input.provider}:`)) {
+      existing = byEmail;
+    } else if (byEmail) {
+      console.warn(
+        `[auth] Refusing email link for ${input.provider}: existing account uses a different identity id`,
+      );
+    }
   }
 
   if (existing) {
+    if (existing.id !== preferredId && !existing.id.startsWith(`${input.provider}:`)) {
+      throw new Error(
+        "This email is already linked to a different sign-in method. Use the original provider or contact support.",
+      );
+    }
     await storage.updateUser(existing.id, {
       email: email || existing.email,
       firstName: input.firstName || existing.firstName,
@@ -238,6 +262,7 @@ async function finishLogin(
     firstName?: string | null;
     lastName?: string | null;
     profileImageUrl?: string | null;
+    emailVerified?: boolean;
   },
 ) {
   const userId = await upsertSocialUser(profile);
@@ -252,13 +277,7 @@ async function finishLogin(
     profile.provider,
   );
 
-  await new Promise<void>((resolve, reject) => {
-    req.login(user, (err) => {
-      if (err) return reject(err);
-      // Ensure connect-pg-simple persists before redirect (critical on Vercel).
-      req.session.save((saveErr) => (saveErr ? reject(saveErr) : resolve()));
-    });
-  });
+  await establishSession(req, user as Express.User);
   res.redirect("/");
 }
 
@@ -433,6 +452,7 @@ async function registerGoogle(app: Express) {
         firstName: firstName || (claims.given_name as string) || null,
         lastName: rest.join(" ") || (claims.family_name as string) || null,
         profileImageUrl: (claims.picture as string) || null,
+        emailVerified: claims.email_verified === true || claims.email_verified === "true",
       });
     } catch (err: any) {
       console.error("[auth/google] callback failed:", err);

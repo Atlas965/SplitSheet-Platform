@@ -48,6 +48,11 @@ import { registerRightsLedgerRoutes } from "./rights-ledger-routes";
 import { auditLog } from "./security";
 import { recalculateLicenseReadiness } from "./license-readiness";
 import { handleSubscriptionWebhook } from "./stripe-subscription-webhook";
+import {
+  requireOwnedAsset,
+  requireOwnedContract,
+  requireOwnedRevenueEvent,
+} from "./authz-helpers";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -1177,21 +1182,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Global analytics route - admin only
-  app.get("/api/analytics/global", isAuthenticated, async (req: any, res) => {
+  app.get("/api/analytics/global", isAuthenticated, isAdmin, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-
-      // Check if user is admin (you can adjust this logic based on your admin system)
-      if (!user || user.subscriptionTier !== "admin") {
-        return res.status(403).json({ message: "Admin access required" });
-      }
-
-      // Track admin analytics access
       await storage.trackUserActivity(userId, "admin_analytics_access");
-
-      // Get global platform analytics
-      const analyticsData = await storage.getAnalyticsData(); // No userId = global analytics
+      const analyticsData = await storage.getAnalyticsData();
       res.json(analyticsData);
     } catch (error) {
       console.error("Error fetching global analytics data:", error);
@@ -1799,8 +1794,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/assets/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       res.json(asset);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch asset" });
@@ -1828,6 +1823,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     isAuthenticated,
     async (req: any, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const ownership = await storage.getCurrentOwnership(req.params.id);
         res.json(ownership);
       } catch (error) {
@@ -1842,6 +1839,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     isAuthenticated,
     async (req: any, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const ownership = await storage.getCurrentOwnershipWithNames(req.params.id);
         res.json(ownership);
       } catch (error) {
@@ -1856,6 +1855,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     isAuthenticated,
     async (req: any, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const history = await storage.getOwnershipHistory(req.params.id);
         res.json(history);
       } catch (error) {
@@ -1963,6 +1964,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/assets/:id/revenue", isAuthenticated, async (req: any, res) => {
     try {
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       const events = await storage.getRevenueEvents(req.params.id);
       res.json(events);
     } catch (error) {
@@ -1998,6 +2001,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     isAuthenticated,
     async (req: any, res) => {
       try {
+        const owned = await requireOwnedRevenueEvent(req, res, req.params.eventId);
+        if (!owned) return;
         const payouts = await storage.calculatePayouts(req.params.eventId);
         res.json(payouts);
       } catch (error: any) {
@@ -2014,6 +2019,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     isAuthenticated,
     async (req: any, res) => {
       try {
+        const owned = await requireOwnedRevenueEvent(req, res, req.params.eventId);
+        if (!owned) return;
         const payouts = await storage.executePayouts(req.params.eventId);
         res.json(payouts);
       } catch (error: any) {
@@ -2039,6 +2046,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
+      const contract = await requireOwnedContract(req, res, projectId);
+      if (!contract) return;
       const assets = await storage.getSongAssetsByContract(projectId);
       const entriesByAsset = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
       const entries = entriesByAsset.flat().map((e) => ({
@@ -2060,6 +2069,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
+      const contract = await requireOwnedContract(req, res, projectId);
+      if (!contract) return;
       const assets = await storage.getSongAssetsByContract(projectId);
       const revenueEventLists = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
       const payoutLists = await Promise.all(
@@ -2136,80 +2147,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Public: Get confirmation details by token
-  app.get('/api/confirmations/:token', async (req, res) => {
-    try {
-      const confirmation = await storage.getConfirmationByToken(req.params.token);
-      if (!confirmation) return res.status(404).json({ message: "Invalid or expired link" });
-
-      if (confirmation.expiresAt && confirmation.expiresAt < new Date()) {
-        return res.status(410).json({ message: "This link has expired" });
-      }
-
-      const [contract, collaborator, allCollaborators] = await Promise.all([
-        storage.getContract(confirmation.contractId),
-        storage.getContractCollaborators(confirmation.contractId).then(cols => cols.find(c => c.id === confirmation.collaboratorId)),
-        storage.getContractCollaborators(confirmation.contractId)
-      ]);
-
-      if (!contract || !collaborator) return res.status(404).json({ message: "Contract details not found" });
-
-      res.json({
-        confirmation,
-        contract: {
-          title: contract.title,
-          type: contract.type,
-          data: contract.data,
-        },
-        collaborator,
-        allCollaborators
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch confirmation details" });
-    }
+  // Legacy public confirmation API — locked down (use /api/confirm/:contractId/:token).
+  app.get('/api/confirmations/:token', (_req, res) => {
+    res.status(410).json({
+      message:
+        "This confirmation API is retired. Use /api/confirm/:contractId/:token from the operator-issued link.",
+      code: "CONFIRMATION_API_RETIRED",
+    });
   });
 
-  // Public: Submit confirmation
-  app.post('/api/confirmations/:token/submit', async (req, res) => {
-    try {
-      const confirmation = await storage.getConfirmationByToken(req.params.token);
-      if (!confirmation) return res.status(404).json({ message: "Invalid link" });
-      
-      const { status, notes, name, email } = req.body; // status: 'confirmed' or 'requested_change'
-      
-      const updates: any = {
-        status,
-        notes,
-        confirmedAt: new Date(),
-        ipAddress: req.ip,
-        userAgent: req.get('user-agent'),
-      };
-
-      const updatedConfirmation = await storage.updateConfirmation(confirmation.id, updates);
-
-      // If confirmed, also update the collaborator status in the main table
-      if (status === 'confirmed') {
-        await storage.updateCollaboratorStatus(confirmation.collaboratorId, 'signed');
-        
-        // Check if all collaborators have confirmed
-        const allConfirmations = await storage.getConfirmationsByContract(confirmation.contractId);
-        const allConfirmed = allConfirmations.every(c => c.status === 'confirmed');
-        
-        if (allConfirmed) {
-          await storage.updateContract(confirmation.contractId, { status: 'signed' });
-          // Non-blocking Rights Ledger sync for ownership/license agreements
-          try {
-            await syncAgreementToRightsLedger(confirmation.contractId);
-          } catch (syncErr) {
-            console.error("Rights ledger sync after confirmation failed:", syncErr);
-          }
-        }
-      }
-
-      res.json(updatedConfirmation);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to submit confirmation" });
-    }
+  app.post('/api/confirmations/:token/submit', (_req, res) => {
+    res.status(410).json({
+      message:
+        "This confirmation API is retired. Use POST /api/confirm/:contractId/:token.",
+      code: "CONFIRMATION_API_RETIRED",
+    });
   });
 
   // ─── USER EARNINGS ────────────────────────────────────────────────────────

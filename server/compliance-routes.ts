@@ -110,8 +110,18 @@ export function requireTermsAccepted(req: Request, res: Response, next: NextFunc
     })
     .catch((err) => {
       logger.error("compliance.terms_check_failed", { error: err?.message, route: path });
-      // Fail open on infrastructure errors — a DB hiccup should not lock
-      // every user out of the app.
+      // Production-like: fail closed. Local/dev: fail open so a DB hiccup does not lock operators out.
+      const prodLike =
+        process.env.NODE_ENV === "production" ||
+        process.env.VERCEL === "1" ||
+        process.env.VERCEL === "true";
+      if (prodLike) {
+        res.status(503).json({
+          error: "TERMS_CHECK_UNAVAILABLE",
+          message: "Unable to verify terms acceptance. Try again shortly.",
+        });
+        return;
+      }
       next();
     });
 }

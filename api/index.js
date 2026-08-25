@@ -49,10 +49,10 @@ function loadEnv() {
     for (const line of contents.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq8 = trimmed.indexOf("=");
-      if (eq8 === -1) continue;
-      const key = trimmed.slice(0, eq8).trim();
-      const value = sanitizeEnvValue(trimmed.slice(eq8 + 1));
+      const eq9 = trimmed.indexOf("=");
+      if (eq9 === -1) continue;
+      const key = trimmed.slice(0, eq9).trim();
+      const value = sanitizeEnvValue(trimmed.slice(eq9 + 1));
       if (!(key in process.env)) {
         process.env[key] = value;
       }
@@ -2629,18 +2629,29 @@ var init_storage = __esm({
 function isVercelRuntime() {
   return process.env.VERCEL === "1" || process.env.VERCEL === "true";
 }
+function isProductionLike() {
+  return process.env.NODE_ENV === "production" || isVercelRuntime();
+}
+function allowLocalAuthInProduction() {
+  return process.env.ALLOW_LOCAL_AUTH_IN_PRODUCTION === "true";
+}
 function hasSocialCredentials() {
   return Boolean(
     process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET || process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET || process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET || process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY
   );
 }
 function useLocalAuthProvider() {
-  if (process.env.AUTH_PROVIDER === "local") return true;
+  if (process.env.AUTH_PROVIDER === "local") {
+    if (isProductionLike() && !allowLocalAuthInProduction()) {
+      return false;
+    }
+    return true;
+  }
   if (process.env.AUTH_PROVIDER === "replit" || process.env.AUTH_PROVIDER === "oidc" || process.env.AUTH_PROVIDER === "social") {
     return false;
   }
   if (hasSocialCredentials()) return false;
-  return isVercelRuntime();
+  return false;
 }
 function useSocialAuthProvider() {
   if (process.env.AUTH_PROVIDER === "social") return true;
@@ -2656,6 +2667,60 @@ function shouldSkipBootMigrations() {
 var init_runtime = __esm({
   "server/runtime.ts"() {
     "use strict";
+  }
+});
+
+// server/session-security.ts
+function cookieSecure() {
+  return process.env.NODE_ENV === "production" || isVercelRuntime();
+}
+function establishSession(req, user) {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      req.login(user, (loginErr) => {
+        if (loginErr) return reject(loginErr);
+        req.session.save((saveErr) => saveErr ? reject(saveErr) : resolve());
+      });
+    };
+    if (typeof req.session.regenerate !== "function") {
+      finish();
+      return;
+    }
+    req.session.regenerate((regenErr) => {
+      if (regenErr) return reject(regenErr);
+      finish();
+    });
+  });
+}
+function destroySession(req, res) {
+  return new Promise((resolve) => {
+    const clear = () => {
+      res.clearCookie("splitsheet.sid", {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: cookieSecure()
+      });
+      resolve();
+    };
+    const destroyStore = () => {
+      if (!req.session || typeof req.session.destroy !== "function") {
+        clear();
+        return;
+      }
+      req.session.destroy(() => clear());
+    };
+    if (typeof req.logout === "function") {
+      req.logout(() => destroyStore());
+    } else {
+      destroyStore();
+    }
+  });
+}
+var init_session_security = __esm({
+  "server/session-security.ts"() {
+    "use strict";
+    init_runtime();
   }
 });
 
@@ -2716,10 +2781,22 @@ async function upsertSocialUser(input) {
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
   let existing = await storage.getUser(preferredId);
-  if (!existing && email) {
-    existing = await getUserByEmail(email);
+  if (!existing && email && input.emailVerified && process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true") {
+    const byEmail = await getUserByEmail(email);
+    if (byEmail?.id?.startsWith(`${input.provider}:`)) {
+      existing = byEmail;
+    } else if (byEmail) {
+      console.warn(
+        `[auth] Refusing email link for ${input.provider}: existing account uses a different identity id`
+      );
+    }
   }
   if (existing) {
+    if (existing.id !== preferredId && !existing.id.startsWith(`${input.provider}:`)) {
+      throw new Error(
+        "This email is already linked to a different sign-in method. Use the original provider or contact support."
+      );
+    }
     await storage.updateUser(existing.id, {
       email: email || existing.email,
       firstName: input.firstName || existing.firstName,
@@ -2822,12 +2899,7 @@ async function finishLogin(req, res, profile) {
     },
     profile.provider
   );
-  await new Promise((resolve, reject) => {
-    req.login(user, (err) => {
-      if (err) return reject(err);
-      req.session.save((saveErr) => saveErr ? reject(saveErr) : resolve());
-    });
-  });
+  await establishSession(req, user);
   res.redirect("/");
 }
 function loginFailure(res, message) {
@@ -2963,7 +3035,8 @@ async function registerGoogle(app) {
         email,
         firstName: firstName || claims.given_name || null,
         lastName: rest.join(" ") || claims.family_name || null,
-        profileImageUrl: claims.picture || null
+        profileImageUrl: claims.picture || null,
+        emailVerified: claims.email_verified === true || claims.email_verified === "true"
       });
     } catch (err) {
       console.error("[auth/google] callback failed:", err);
@@ -3246,6 +3319,7 @@ var init_social_auth = __esm({
     init_db();
     init_schema();
     init_storage();
+    init_session_security();
     SESSION_TTL_SEC = 7 * 24 * 60 * 60;
   }
 });
@@ -3321,7 +3395,14 @@ function mountSessionStack(app) {
   passport.deserializeUser((user, cb) => cb(null, user));
 }
 async function setupLocalDevAuth(app) {
+  if (isProductionLike() && process.env.ALLOW_LOCAL_AUTH_IN_PRODUCTION !== "true") {
+    throw new Error(
+      "Local passwordless auth is blocked on production-like hosts without ALLOW_LOCAL_AUTH_IN_PRODUCTION=true"
+    );
+  }
   mountSessionStack(app);
+  const authLimiter = createPgRateLimiter(20, 6e4, "auth-local");
+  app.use("/api/login", authLimiter);
   if (hasAnySocialProvider()) {
     await registerSocialAuth(app);
   } else {
@@ -3345,34 +3426,33 @@ async function setupLocalDevAuth(app) {
       await upsertUser(devClaims);
       const user = {
         claims: devClaims,
-        expires_at: devClaims.exp
+        expires_at: devClaims.exp,
+        provider: "local"
       };
-      req.login(user, (err) => {
-        if (err) {
-          console.error("[auth] local login failed:", err);
-          res.status(500).json({ message: "Login failed" });
-          return;
-        }
-        res.redirect("/");
-      });
+      await establishSession(req, user);
+      res.redirect("/");
     } catch (err) {
-      console.error("[auth] local login upsert failed:", err);
+      console.error("[auth] local login failed:", err);
       res.status(500).json({
         message: "Login failed",
         detail: err instanceof Error ? err.message : String(err)
       });
     }
   });
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => res.redirect("/"));
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect("/");
   });
 }
 async function setupSocialAuth(app) {
   mountSessionStack(app);
+  const authLimiter = createPgRateLimiter(30, 6e4, "auth-social");
+  app.use("/api/auth", authLimiter);
+  app.use("/api/login", authLimiter);
   const enabled = await registerSocialAuth(app);
   if (enabled.length === 0) {
     throw new Error(
-      "AUTH_PROVIDER=social (or auto) but no provider credentials found. Set GOOGLE_CLIENT_ID/SECRET, and/or GITHUB_*, MICROSOFT_*, APPLE_* env vars."
+      "AUTH_PROVIDER=social (or auto) but no provider credentials found. Set GOOGLE_CLIENT_ID/SECRET, and/or GITHUB_*, MICROSOFT_*, APPLE_* env vars. Passwordless local fallback is disabled on production-like hosts."
     );
   }
   console.log(
@@ -3381,8 +3461,9 @@ async function setupSocialAuth(app) {
   app.get("/api/login", (_req, res) => {
     res.redirect("/login");
   });
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => res.redirect("/"));
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect("/");
   });
 }
 async function setupReplitOidcAuth(app) {
@@ -3434,15 +3515,14 @@ async function setupReplitOidcAuth(app) {
       failureRedirect: "/login?error=Sign-in%20failed"
     })(req, res, next);
   });
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => {
-      res.redirect(
-        client2.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
-        }).href
-      );
-    });
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect(
+      client2.buildEndSessionUrl(config, {
+        client_id: process.env.REPL_ID,
+        post_logout_redirect_uri: `${req.protocol}://${req.hostname}`
+      }).href
+    );
   });
 }
 async function setupAuth(app) {
@@ -3455,8 +3535,13 @@ async function setupAuth(app) {
   }
   if (useSocialAuthProvider()) {
     if (!hasAnySocialProvider()) {
+      if (isProductionLike()) {
+        throw new Error(
+          "AUTH_PROVIDER=social but no OAuth credentials configured. Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.). Local passwordless fallback is disabled."
+        );
+      }
       console.warn(
-        "[auth] AUTH_PROVIDER=social but no provider credentials configured \u2014 falling back to local operator login so the site can boot. Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.) in Vercel, then redeploy."
+        "[auth] Social credentials missing in non-production \u2014 enabling local operator login for development only."
       );
       await setupLocalDevAuth(app);
       return;
@@ -3476,6 +3561,8 @@ var init_replitAuth = __esm({
     init_schema();
     init_runtime();
     init_social_auth();
+    init_session_security();
+    init_security();
     isLocalDev = process.env.NODE_ENV === "development" && process.env.LOCAL_DEV === "true";
     useLocalAuth = isLocalDev || useLocalAuthProvider();
     databaseUrl2 = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
@@ -3977,6 +4064,93 @@ var init_email_service = __esm({
   }
 });
 
+// server/authz-helpers.ts
+import { eq as eq3 } from "drizzle-orm";
+function sessionUserId(req) {
+  return req.user?.claims?.sub;
+}
+async function requireOwnedContract(req, res, contractId) {
+  const userId = sessionUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return null;
+  }
+  const contract = await storage.getContract(contractId);
+  if (!contract) {
+    res.status(404).json({ message: "Contract not found" });
+    return null;
+  }
+  if (contract.createdBy !== userId) {
+    res.status(403).json({ message: "Access denied" });
+    return null;
+  }
+  return contract;
+}
+async function requireOwnedAsset(req, res, assetId) {
+  const userId = sessionUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return null;
+  }
+  const asset = await storage.getSongAsset(assetId);
+  if (!asset) {
+    res.status(404).json({ message: "Asset not found" });
+    return null;
+  }
+  if (asset.createdBy !== userId) {
+    res.status(403).json({ message: "Access denied" });
+    return null;
+  }
+  return asset;
+}
+async function requireOwnedRevenueEvent(req, res, eventId) {
+  const userId = sessionUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return null;
+  }
+  const [row] = await db.select({
+    eventId: revenueEvents.id,
+    assetId: revenueEvents.assetId,
+    createdBy: songAssets.createdBy
+  }).from(revenueEvents).innerJoin(songAssets, eq3(revenueEvents.assetId, songAssets.id)).where(eq3(revenueEvents.id, eventId)).limit(1);
+  if (!row) {
+    res.status(404).json({ message: "Revenue event not found" });
+    return null;
+  }
+  if (row.createdBy !== userId) {
+    res.status(403).json({ message: "Access denied" });
+    return null;
+  }
+  return row;
+}
+async function requireOwnedCollaborator(req, res, collaboratorId) {
+  const userId = sessionUserId(req);
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return null;
+  }
+  const [row] = await db.select().from(contractCollaborators).where(eq3(contractCollaborators.id, collaboratorId)).limit(1);
+  if (!row) {
+    res.status(404).json({ message: "Client not found" });
+    return null;
+  }
+  const contract = await storage.getContract(row.contractId);
+  if (!contract || contract.createdBy !== userId) {
+    res.status(403).json({ message: "Access denied" });
+    return null;
+  }
+  return { collaborator: row, contract };
+}
+var init_authz_helpers = __esm({
+  "server/authz-helpers.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_storage();
+  }
+});
+
 // server/confirmation-routes.ts
 import crypto3 from "crypto";
 import { sql as sql4 } from "drizzle-orm";
@@ -3990,6 +4164,8 @@ function getIp(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
 }
 function registerConfirmationRoutes(app) {
+  const confirmPublicLimiter = createPgRateLimiter(40, 6e4, "confirm-public");
+  app.use("/api/confirm", confirmPublicLimiter);
   app.post(
     "/api/contracts/:id/generate-confirmations",
     isAuthenticated,
@@ -4191,14 +4367,22 @@ function registerConfirmationRoutes(app) {
     "/api/contracts/:id/confirmations/:confirmId/mark-sent",
     isAuthenticated,
     async (req, res) => {
-      const { confirmId } = req.params;
+      const { id: contractId, confirmId } = req.params;
       try {
-        await db.execute(sql4`
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const result = await db.execute(sql4`
           UPDATE split_confirmations
           SET status = 'sent', sent_at = NOW(), updated_at = NOW()
           WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
             AND status IN ('not_sent', 'sent')
+          RETURNING id
         `);
+        if (!result.rows.length) {
+          res.status(404).json({ error: "Confirmation not found for this contract" });
+          return;
+        }
         res.json({ success: true });
       } catch (err) {
         res.status(500).json({ error: err.message });
@@ -4357,6 +4541,8 @@ var init_confirmation_routes = __esm({
     init_replitAuth();
     init_email_service();
     init_storage();
+    init_security();
+    init_authz_helpers();
   }
 });
 
@@ -7002,7 +7188,7 @@ var init_rights_context = __esm({
 });
 
 // server/voice/store.ts
-import { and as and2, desc as desc2, eq as eq3 } from "drizzle-orm";
+import { and as and2, desc as desc2, eq as eq4 } from "drizzle-orm";
 async function createVoiceSession(input) {
   const expiresAt = new Date(Date.now() + VOICE_RETENTION.sessionHours * 36e5);
   const [session2] = await db.insert(voiceSessions).values({
@@ -7019,7 +7205,7 @@ async function createVoiceSession(input) {
   return session2;
 }
 async function getVoiceSession(sessionId, userId) {
-  const [session2] = await db.select().from(voiceSessions).where(and2(eq3(voiceSessions.id, sessionId), eq3(voiceSessions.userId, userId)));
+  const [session2] = await db.select().from(voiceSessions).where(and2(eq4(voiceSessions.id, sessionId), eq4(voiceSessions.userId, userId)));
   return session2;
 }
 async function recordVoiceTurn(input) {
@@ -7074,7 +7260,7 @@ async function createPendingAction(input) {
   return row;
 }
 async function getPendingAction(id, userId) {
-  const [row] = await db.select().from(voicePendingActions).where(and2(eq3(voicePendingActions.id, id), eq3(voicePendingActions.userId, userId)));
+  const [row] = await db.select().from(voicePendingActions).where(and2(eq4(voicePendingActions.id, id), eq4(voicePendingActions.userId, userId)));
   return row;
 }
 async function resolvePendingAction(id, userId, decision) {
@@ -7084,11 +7270,11 @@ async function resolvePendingAction(id, userId, decision) {
     return { ok: false, error: `Action already ${pending.status}` };
   }
   if (pending.expiresAt && pending.expiresAt.getTime() < Date.now()) {
-    await db.update(voicePendingActions).set({ status: "expired" }).where(eq3(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "expired" }).where(eq4(voicePendingActions.id, id));
     return { ok: false, error: "Pending action expired \u2014 please repeat the request" };
   }
   if (decision === "rejected") {
-    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq3(voicePendingActions.id, id)).returning();
+    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq4(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: null };
   }
   const payload = pending.payload || {};
@@ -7138,24 +7324,24 @@ async function resolvePendingAction(id, userId, decision) {
       confirmedAt: /* @__PURE__ */ new Date(),
       executedAt: /* @__PURE__ */ new Date(),
       result
-    }).where(eq3(voicePendingActions.id, id)).returning();
+    }).where(eq4(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: result };
   } catch (err) {
-    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq3(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq4(voicePendingActions.id, id));
     return { ok: false, error: "Failed to execute confirmed action" };
   }
 }
 async function listAuthorizedMemory(userId) {
-  return db.select().from(voiceUserMemory).where(and2(eq3(voiceUserMemory.userId, userId), eq3(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
+  return db.select().from(voiceUserMemory).where(and2(eq4(voiceUserMemory.userId, userId), eq4(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
 }
 async function upsertAuthorizedMemory(input) {
   const blocked = /password|ssn|sin|bank|card|secret|signature/i;
   if (blocked.test(input.key) || blocked.test(JSON.stringify(input.value))) {
     throw new Error("That information cannot be stored in Copilot memory");
   }
-  const existing = await db.select().from(voiceUserMemory).where(and2(eq3(voiceUserMemory.userId, input.userId), eq3(voiceUserMemory.key, input.key)));
+  const existing = await db.select().from(voiceUserMemory).where(and2(eq4(voiceUserMemory.userId, input.userId), eq4(voiceUserMemory.key, input.key)));
   if (existing[0]) {
-    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq3(voiceUserMemory.id, existing[0].id)).returning();
+    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq4(voiceUserMemory.id, existing[0].id)).returning();
     return row2;
   }
   const [row] = await db.insert(voiceUserMemory).values({
@@ -7714,6 +7900,8 @@ function registerServiceRoutes(app) {
   });
   app.patch("/api/clients/:id", isAuthenticated, async (req, res) => {
     try {
+      const owned = await requireOwnedCollaborator(req, res, req.params.id);
+      if (!owned) return;
       const { name, email, role, type } = req.body ?? {};
       const updates = {};
       if (name) updates.name = name;
@@ -7991,6 +8179,7 @@ var init_service_routes = __esm({
   "server/service-routes.ts"() {
     "use strict";
     init_replitAuth();
+    init_authz_helpers();
     init_storage();
     init_db();
     contributorSchema = z5.object({
@@ -9280,6 +9469,37 @@ var init_payment_routes = __esm({
   }
 });
 
+// server/adminAuth.ts
+async function isAdmin(req, res, next) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ message: "Authentication required" });
+    return;
+  }
+  try {
+    const dbUser = await storage.getUser(user.claims.sub);
+    if (!dbUser) {
+      res.status(401).json({ message: "User not found" });
+      return;
+    }
+    const isAdminUser = dbUser.role === "admin";
+    if (!isAdminUser) {
+      res.status(403).json({ message: "Admin access required" });
+      return;
+    }
+    next();
+  } catch (error) {
+    console.error("Error checking admin status:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+var init_adminAuth = __esm({
+  "server/adminAuth.ts"() {
+    "use strict";
+    init_storage();
+  }
+});
+
 // server/security-routes.ts
 import { z as z9 } from "zod";
 import { sql as sql9 } from "drizzle-orm";
@@ -9536,7 +9756,7 @@ async function registerSecurityRoutes(app) {
     `);
     res.json(rows.rows);
   });
-  app.patch("/api/disputes/:id/resolve", isAuthenticated, async (req, res) => {
+  app.patch("/api/disputes/:id/resolve", isAuthenticated, isAdmin, async (req, res) => {
     const adminId = req.user?.claims?.sub;
     const schema = z9.object({
       resolution: z9.enum(["accepted", "rejected"]),
@@ -9632,7 +9852,7 @@ async function registerSecurityRoutes(app) {
       res.json(result);
     }
   );
-  app.get("/api/admin/fraud-events", isAuthenticated, async (_req, res) => {
+  app.get("/api/admin/fraud-events", isAuthenticated, isAdmin, async (_req, res) => {
     const rows = await db.execute(sql9`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe
@@ -9675,6 +9895,7 @@ var init_security_routes = __esm({
     "use strict";
     init_db();
     init_replitAuth();
+    init_adminAuth();
     init_security();
     splitRateLimit = createRateLimiter(10, 6e4);
     signRateLimit = createRateLimiter(5, 6e4);
@@ -9684,7 +9905,7 @@ var init_security_routes = __esm({
 
 // server/compliance-routes.ts
 import { z as z10 } from "zod";
-import { eq as eq4 } from "drizzle-orm";
+import { eq as eq5 } from "drizzle-orm";
 function requireTermsAccepted(req, res, next) {
   const path3 = req.path;
   const isPublicLegalDocRoute = req.method === "GET" && path3.startsWith("/api/legal/documents/");
@@ -9710,6 +9931,14 @@ function requireTermsAccepted(req, res, next) {
     });
   }).catch((err) => {
     logger.error("compliance.terms_check_failed", { error: err?.message, route: path3 });
+    const prodLike = process.env.NODE_ENV === "production" || process.env.VERCEL === "1" || process.env.VERCEL === "true";
+    if (prodLike) {
+      res.status(503).json({
+        error: "TERMS_CHECK_UNAVAILABLE",
+        message: "Unable to verify terms acceptance. Try again shortly."
+      });
+      return;
+    }
     next();
   });
 }
@@ -9779,7 +10008,7 @@ function registerComplianceRoutes(app) {
       );
       const tosResult = results.find((r) => r.docType === "tos");
       if (tosResult) {
-        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq4(users.id, userId));
+        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq5(users.id, userId));
       }
       await storage.trackUserActivity(userId, "terms_accepted", {
         docTypes: results.map((r) => r.docType),
@@ -9813,16 +10042,16 @@ function registerComplianceRoutes(app) {
         sentOrReceivedMessages
       ] = await Promise.all([
         storage.getUser(userId),
-        db.select().from(contracts).where(eq4(contracts.createdBy, userId)),
-        db.select().from(contractCollaborators).where(eq4(contractCollaborators.userId, userId)),
-        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq4(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq4(contractCollaborators.userId, userId)),
-        db.select().from(songAssets).where(eq4(songAssets.createdBy, userId)),
-        db.select().from(ownershipRecords).where(eq4(ownershipRecords.userId, userId)),
-        db.select().from(payoutRecords).where(eq4(payoutRecords.userId, userId)),
-        db.select().from(userBalances).where(eq4(userBalances.userId, userId)),
-        db.select().from(userActivity).where(eq4(userActivity.userId, userId)),
-        db.select().from(notifications).where(eq4(notifications.userId, userId)),
-        db.select().from(messages).where(eq4(messages.senderId, userId))
+        db.select().from(contracts).where(eq5(contracts.createdBy, userId)),
+        db.select().from(contractCollaborators).where(eq5(contractCollaborators.userId, userId)),
+        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq5(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq5(contractCollaborators.userId, userId)),
+        db.select().from(songAssets).where(eq5(songAssets.createdBy, userId)),
+        db.select().from(ownershipRecords).where(eq5(ownershipRecords.userId, userId)),
+        db.select().from(payoutRecords).where(eq5(payoutRecords.userId, userId)),
+        db.select().from(userBalances).where(eq5(userBalances.userId, userId)),
+        db.select().from(userActivity).where(eq5(userActivity.userId, userId)),
+        db.select().from(notifications).where(eq5(notifications.userId, userId)),
+        db.select().from(messages).where(eq5(messages.senderId, userId))
       ]);
       await storage.trackUserActivity(userId, "data_export_requested", { requestedAt: (/* @__PURE__ */ new Date()).toISOString() });
       res.setHeader("Content-Disposition", `attachment; filename="splitsheet-data-export-${userId}.json"`);
@@ -9863,7 +10092,7 @@ function registerComplianceRoutes(app) {
         contactInfo: null,
         isActive: false,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq4(users.id, userId));
+      }).where(eq5(users.id, userId));
       await storage.trackUserActivity(userId, "account_deletion_requested", {
         requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
         ipAddress: req.ip
@@ -9912,7 +10141,7 @@ var init_compliance_routes = __esm({
 // server/verification-routes.ts
 import crypto6 from "crypto";
 import { z as z11 } from "zod";
-import { and as and3, desc as desc3, eq as eq5, gt, isNull } from "drizzle-orm";
+import { and as and3, desc as desc3, eq as eq6, gt, isNull } from "drizzle-orm";
 function generateSixDigitCode() {
   return crypto6.randomInt(0, 1e6).toString().padStart(6, "0");
 }
@@ -9966,9 +10195,9 @@ function registerVerificationRoutes(app) {
       const body = confirmCodeSchema.parse(req.body);
       const [pending] = await db.select().from(verificationCodes).where(
         and3(
-          eq5(verificationCodes.userId, userId),
-          eq5(verificationCodes.destination, body.destination),
-          eq5(verificationCodes.purpose, body.purpose),
+          eq6(verificationCodes.userId, userId),
+          eq6(verificationCodes.destination, body.destination),
+          eq6(verificationCodes.purpose, body.purpose),
           isNull(verificationCodes.consumedAt),
           gt(verificationCodes.expiresAt, /* @__PURE__ */ new Date())
         )
@@ -9986,12 +10215,12 @@ function registerVerificationRoutes(app) {
         Buffer.from(codeHash, "hex"),
         Buffer.from(pending.codeHash, "hex")
       );
-      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq5(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq6(verificationCodes.id, pending.id));
       if (!matches) {
         res.status(400).json({ error: "Incorrect code." });
         return;
       }
-      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq5(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq6(verificationCodes.id, pending.id));
       await storage.trackUserActivity(userId, "identity_verified", {
         legalName: pending.legalName,
         idType: pending.idType,
@@ -10015,7 +10244,7 @@ function registerVerificationRoutes(app) {
   });
   app.get("/api/verify/status", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const [latest] = await db.select().from(userActivity).where(and3(eq5(userActivity.userId, userId), eq5(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
+    const [latest] = await db.select().from(userActivity).where(and3(eq6(userActivity.userId, userId), eq6(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
     res.json({ verified: Boolean(latest), verifiedAt: latest?.createdAt ?? null });
   });
 }
@@ -10249,37 +10478,6 @@ var init_rights_routes = __esm({
   }
 });
 
-// server/adminAuth.ts
-async function isAdmin(req, res, next) {
-  const user = req.user;
-  if (!user) {
-    res.status(401).json({ message: "Authentication required" });
-    return;
-  }
-  try {
-    const dbUser = await storage.getUser(user.claims.sub);
-    if (!dbUser) {
-      res.status(401).json({ message: "User not found" });
-      return;
-    }
-    const isAdminUser = dbUser.role === "admin";
-    if (!isAdminUser) {
-      res.status(403).json({ message: "Admin access required" });
-      return;
-    }
-    next();
-  } catch (error) {
-    console.error("Error checking admin status:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-}
-var init_adminAuth = __esm({
-  "server/adminAuth.ts"() {
-    "use strict";
-    init_storage();
-  }
-});
-
 // server/legal-routes.ts
 import { z as z14 } from "zod";
 function parseDocType(raw) {
@@ -10378,7 +10576,7 @@ var init_legal_routes = __esm({
 });
 
 // server/agreement-ledger.ts
-import { eq as eq6, sql as sql10 } from "drizzle-orm";
+import { eq as eq7, sql as sql10 } from "drizzle-orm";
 function generateSlSongId() {
   const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
   return `SL-SONG-${hex}`;
@@ -10445,7 +10643,7 @@ async function syncAgreementToRightsLedger(contractId, actorId) {
       const existingAssets = await storage.getSongAssetsByContract(contractId);
       assetId = existingAssets[0]?.id;
     }
-    const [latest] = await db.select({ maxVersion: sql10`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq6(licenseRecords.contractId, contractId));
+    const [latest] = await db.select({ maxVersion: sql10`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq7(licenseRecords.contractId, contractId));
     const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
     const [row] = await db.insert(licenseRecords).values({
       contractId,
@@ -11126,7 +11324,7 @@ var init_rights_ledger_routes = __esm({
 
 // server/stripe-subscription-webhook.ts
 import { sql as sql11 } from "drizzle-orm";
-function isProductionLike() {
+function isProductionLike2() {
   return isVercelRuntime() || process.env.NODE_ENV === "production" || process.env.LOCAL_DEV === "false";
 }
 async function alreadyProcessed(eventId) {
@@ -11242,7 +11440,7 @@ async function handleInvoicePaid(invoice) {
 async function handleSubscriptionWebhook(stripe5, req, res) {
   const sig = req.headers["stripe-signature"];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
-  if (!webhookSecret && isProductionLike()) {
+  if (!webhookSecret && isProductionLike2()) {
     console.error(
       "[stripe/webhook] STRIPE_WEBHOOK_SECRET is required in production. Refusing unsigned events."
     );
@@ -12204,13 +12402,9 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch analytics data" });
     }
   });
-  app.get("/api/analytics/global", isAuthenticated, async (req, res) => {
+  app.get("/api/analytics/global", isAuthenticated, isAdmin, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      if (!user || user.subscriptionTier !== "admin") {
-        return res.status(403).json({ message: "Admin access required" });
-      }
       await storage.trackUserActivity(userId, "admin_analytics_access");
       const analyticsData = await storage.getAnalyticsData();
       res.json(analyticsData);
@@ -12667,8 +12861,8 @@ async function registerRoutes(app) {
   });
   app.get("/api/assets/:id", isAuthenticated, async (req, res) => {
     try {
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       res.json(asset);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch asset" });
@@ -12691,6 +12885,8 @@ async function registerRoutes(app) {
     isAuthenticated,
     async (req, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const ownership = await storage.getCurrentOwnership(req.params.id);
         res.json(ownership);
       } catch (error) {
@@ -12703,6 +12899,8 @@ async function registerRoutes(app) {
     isAuthenticated,
     async (req, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const ownership = await storage.getCurrentOwnershipWithNames(req.params.id);
         res.json(ownership);
       } catch (error) {
@@ -12715,6 +12913,8 @@ async function registerRoutes(app) {
     isAuthenticated,
     async (req, res) => {
       try {
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const history = await storage.getOwnershipHistory(req.params.id);
         res.json(history);
       } catch (error) {
@@ -12807,6 +13007,8 @@ async function registerRoutes(app) {
   );
   app.get("/api/assets/:id/revenue", isAuthenticated, async (req, res) => {
     try {
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       const events = await storage.getRevenueEvents(req.params.id);
       res.json(events);
     } catch (error) {
@@ -12838,6 +13040,8 @@ async function registerRoutes(app) {
     isAuthenticated,
     async (req, res) => {
       try {
+        const owned = await requireOwnedRevenueEvent(req, res, req.params.eventId);
+        if (!owned) return;
         const payouts = await storage.calculatePayouts(req.params.eventId);
         res.json(payouts);
       } catch (error) {
@@ -12850,6 +13054,8 @@ async function registerRoutes(app) {
     isAuthenticated,
     async (req, res) => {
       try {
+        const owned = await requireOwnedRevenueEvent(req, res, req.params.eventId);
+        if (!owned) return;
         const payouts = await storage.executePayouts(req.params.eventId);
         res.json(payouts);
       } catch (error) {
@@ -12864,6 +13070,8 @@ async function registerRoutes(app) {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
+      const contract = await requireOwnedContract(req, res, projectId);
+      if (!contract) return;
       const assets = await storage.getSongAssetsByContract(projectId);
       const entriesByAsset = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
       const entries = entriesByAsset.flat().map((e) => ({
@@ -12884,6 +13092,8 @@ async function registerRoutes(app) {
     try {
       const projectId = String(req.query.projectId ?? "");
       if (!projectId) return res.json([]);
+      const contract = await requireOwnedContract(req, res, projectId);
+      if (!contract) return;
       const assets = await storage.getSongAssetsByContract(projectId);
       const revenueEventLists = await Promise.all(assets.map((a) => storage.getRevenueEvents(a.id)));
       const payoutLists = await Promise.all(
@@ -12947,63 +13157,17 @@ async function registerRoutes(app) {
       res.status(500).json({ message: "Failed to fetch confirmations" });
     }
   });
-  app.get("/api/confirmations/:token", async (req, res) => {
-    try {
-      const confirmation = await storage.getConfirmationByToken(req.params.token);
-      if (!confirmation) return res.status(404).json({ message: "Invalid or expired link" });
-      if (confirmation.expiresAt && confirmation.expiresAt < /* @__PURE__ */ new Date()) {
-        return res.status(410).json({ message: "This link has expired" });
-      }
-      const [contract, collaborator, allCollaborators] = await Promise.all([
-        storage.getContract(confirmation.contractId),
-        storage.getContractCollaborators(confirmation.contractId).then((cols) => cols.find((c) => c.id === confirmation.collaboratorId)),
-        storage.getContractCollaborators(confirmation.contractId)
-      ]);
-      if (!contract || !collaborator) return res.status(404).json({ message: "Contract details not found" });
-      res.json({
-        confirmation,
-        contract: {
-          title: contract.title,
-          type: contract.type,
-          data: contract.data
-        },
-        collaborator,
-        allCollaborators
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch confirmation details" });
-    }
+  app.get("/api/confirmations/:token", (_req, res) => {
+    res.status(410).json({
+      message: "This confirmation API is retired. Use /api/confirm/:contractId/:token from the operator-issued link.",
+      code: "CONFIRMATION_API_RETIRED"
+    });
   });
-  app.post("/api/confirmations/:token/submit", async (req, res) => {
-    try {
-      const confirmation = await storage.getConfirmationByToken(req.params.token);
-      if (!confirmation) return res.status(404).json({ message: "Invalid link" });
-      const { status, notes, name, email } = req.body;
-      const updates = {
-        status,
-        notes,
-        confirmedAt: /* @__PURE__ */ new Date(),
-        ipAddress: req.ip,
-        userAgent: req.get("user-agent")
-      };
-      const updatedConfirmation = await storage.updateConfirmation(confirmation.id, updates);
-      if (status === "confirmed") {
-        await storage.updateCollaboratorStatus(confirmation.collaboratorId, "signed");
-        const allConfirmations = await storage.getConfirmationsByContract(confirmation.contractId);
-        const allConfirmed = allConfirmations.every((c) => c.status === "confirmed");
-        if (allConfirmed) {
-          await storage.updateContract(confirmation.contractId, { status: "signed" });
-          try {
-            await syncAgreementToRightsLedger(confirmation.contractId);
-          } catch (syncErr) {
-            console.error("Rights ledger sync after confirmation failed:", syncErr);
-          }
-        }
-      }
-      res.json(updatedConfirmation);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to submit confirmation" });
-    }
+  app.post("/api/confirmations/:token/submit", (_req, res) => {
+    res.status(410).json({
+      message: "This confirmation API is retired. Use POST /api/confirm/:contractId/:token.",
+      code: "CONFIRMATION_API_RETIRED"
+    });
   });
   app.get("/api/earnings", isAuthenticated, async (req, res) => {
     try {
@@ -13057,13 +13221,13 @@ var init_routes = __esm({
     init_rights_routes();
     init_legal_routes();
     init_template_routes();
-    init_agreement_ledger();
     init_agreement_catalog();
     init_adminAuth();
     init_rights_ledger_routes();
     init_security();
     init_license_readiness();
     init_stripe_subscription_webhook();
+    init_authz_helpers();
     rateLimitStore2 = /* @__PURE__ */ new Map();
     stripe4 = null;
     stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;
@@ -13152,7 +13316,7 @@ var init_static_serve = __esm({
 });
 
 // server/seedData.ts
-import { eq as eq7 } from "drizzle-orm";
+import { eq as eq8 } from "drizzle-orm";
 async function seedContractTemplates() {
   try {
     console.log("Seeding entertainment agreement template library (MVP-gated)...");
@@ -13202,7 +13366,7 @@ async function seedContractTemplates() {
         isActive: row.isActive,
         template: preserveLegacyJson ? current.template : row.template,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq7(contractTemplates.id, current.id));
+      }).where(eq8(contractTemplates.id, current.id));
       updated += 1;
     }
     console.log(
@@ -14060,19 +14224,24 @@ function assertRuntimeEnv() {
   );
   if (!hasDb) missing.push("DATABASE_URL (or NEON_DATABASE_URL)");
   if (!process.env.SESSION_SECRET) missing.push("SESSION_SECRET");
-  const isProd = process.env.NODE_ENV === "production" || isVercelRuntime();
+  const isProd = isProductionLike();
   const useLocalAuth2 = useLocalAuthProvider();
   if (isProd) {
     if (process.env.LOCAL_DEV === "true") {
       throw new Error(
-        "LOCAL_DEV=true is not allowed when NODE_ENV=production / Vercel. Set LOCAL_DEV=false and use AUTH_PROVIDER=local for operator login."
+        "LOCAL_DEV=true is not allowed when NODE_ENV=production / Vercel. Set LOCAL_DEV=false."
+      );
+    }
+    if (process.env.AUTH_PROVIDER === "local" && !allowLocalAuthInProduction()) {
+      throw new Error(
+        "AUTH_PROVIDER=local on production requires ALLOW_LOCAL_AUTH_IN_PRODUCTION=true (break-glass only)."
       );
     }
     if (useLocalAuth2) {
     } else if (process.env.AUTH_PROVIDER === "social") {
       if (!hasSocialCredentials()) {
-        console.warn(
-          "[boot] AUTH_PROVIDER=social but no OAuth credentials yet. Add GOOGLE_CLIENT_ID/SECRET (or GitHub/Microsoft/Apple) in Vercel. Falling back to local login until then."
+        missing.push(
+          "GOOGLE_CLIENT_ID/SECRET (or GitHub/Microsoft/Apple) \u2014 required when AUTH_PROVIDER=social"
         );
       }
     } else if (hasSocialCredentials()) {
@@ -14080,7 +14249,7 @@ function assertRuntimeEnv() {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {
         missing.push(
-          "REPLIT_DOMAINS (hostname only) \u2014 or set AUTH_PROVIDER=social / local"
+          "REPLIT_DOMAINS (hostname only) \u2014 or set AUTH_PROVIDER=social with OAuth credentials"
         );
       }
     }

@@ -21,6 +21,8 @@ import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
 import { sendEmail, confirmationLinkEmail } from "./email-service";
 import { storage } from "./storage";
+import { createPgRateLimiter } from "./security";
+import { requireOwnedContract } from "./authz-helpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ function getIp(req: Request): string {
 // ── Register routes ───────────────────────────────────────────────────────────
 
 export function registerConfirmationRoutes(app: Express): void {
+  const confirmPublicLimiter = createPgRateLimiter(40, 60_000, "confirm-public");
+  app.use("/api/confirm", confirmPublicLimiter);
 
   // ══════════════════════════════════════════════════════════════════════════
   // OPERATOR: Generate confirmation tokens for all collaborators on a contract
@@ -271,14 +275,23 @@ export function registerConfirmationRoutes(app: Express): void {
     "/api/contracts/:id/confirmations/:confirmId/mark-sent",
     isAuthenticated,
     async (req: Request, res: Response): Promise<void> => {
-      const { confirmId } = req.params;
+      const { id: contractId, confirmId } = req.params;
       try {
-        await db.execute(sql`
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+
+        const result = await db.execute(sql`
           UPDATE split_confirmations
           SET status = 'sent', sent_at = NOW(), updated_at = NOW()
           WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
             AND status IN ('not_sent', 'sent')
+          RETURNING id
         `);
+        if (!result.rows.length) {
+          res.status(404).json({ error: "Confirmation not found for this contract" });
+          return;
+        }
         res.json({ success: true });
       } catch (err: any) {
         res.status(500).json({ error: err.message });

@@ -140,6 +140,8 @@ Cancel-at-period-end is supported through Stripe subscription handling.
 | `SESSION_SECRET` | Session signing |
 | `APP_URL` | Canonical URL (e.g. `https://splitsheet.ca`) |
 | `AUTH_PROVIDER` | `social` or `local` |
+| `ALLOW_LOCAL_AUTH_IN_PRODUCTION` | Break-glass only; required with `AUTH_PROVIDER=local` on Vercel/production |
+| `ALLOW_EMAIL_ACCOUNT_LINKING` | Optional; default off (safer) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google login (Web client; redirect `https://splitsheet.ca/api/auth/google/callback`) |
 | `STRIPE_SECRET_KEY` / price IDs / webhook secrets | Billing |
 | `LOCAL_DEV` | `false` on Vercel |

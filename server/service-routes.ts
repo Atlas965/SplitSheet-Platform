@@ -7,6 +7,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
+import { requireOwnedCollaborator } from "./authz-helpers";
 import { storage } from "./storage";
 import { db } from "./db";
 import type { Contract } from "@shared/schema";
@@ -204,6 +205,9 @@ export function registerServiceRoutes(app: Express): void {
 
   app.patch("/api/clients/:id", isAuthenticated, async (req: any, res: Response) => {
     try {
+      const owned = await requireOwnedCollaborator(req, res, req.params.id);
+      if (!owned) return;
+
       const { name, email, role, type } = req.body ?? {};
       const updates: Record<string, unknown> = {};
       if (name) updates.name = name;

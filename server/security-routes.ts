@@ -15,6 +15,7 @@ import { z } from "zod";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
+import { isAdmin } from "./adminAuth";
 import {
   splitSheetSchema,
   computeContentHash,
@@ -339,7 +340,7 @@ export async function registerSecurityRoutes(app: Express): Promise<void> {
     res.json(rows.rows);
   });
 
-  app.patch("/api/disputes/:id/resolve", isAuthenticated, async (req: Request, res: Response): Promise<void> => {
+  app.patch("/api/disputes/:id/resolve", isAuthenticated, isAdmin, async (req: Request, res: Response): Promise<void> => {
     const adminId = (req as any).user?.claims?.sub;
     const schema  = z.object({
       resolution: z.enum(["accepted", "rejected"]),
@@ -459,7 +460,7 @@ export async function registerSecurityRoutes(app: Express): Promise<void> {
   // FRAUD + RISK (ADMIN) + SPLIT HISTORY
   // ══════════════════════════════════════════════════════════════════════════
 
-  app.get("/api/admin/fraud-events", isAuthenticated, async (_req: Request, res: Response): Promise<void> => {
+  app.get("/api/admin/fraud-events", isAuthenticated, isAdmin, async (_req: Request, res: Response): Promise<void> => {
     const rows = await db.execute(sql`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe

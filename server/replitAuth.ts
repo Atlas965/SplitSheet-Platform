@@ -11,6 +11,7 @@ import { db } from "./db";
 import { users } from "@shared/schema";
 import {
   isVercelRuntime,
+  isProductionLike,
   useLocalAuthProvider,
   useSocialAuthProvider,
 } from "./runtime";
@@ -20,6 +21,8 @@ import {
   hasAnySocialProvider,
   listSocialProviders,
 } from "./social-auth";
+import { establishSession, destroySession } from "./session-security";
+import { createPgRateLimiter } from "./security";
 
 /** Cursor/local: NODE_ENV=development + LOCAL_DEV=true */
 const isLocalDev =
@@ -122,7 +125,16 @@ function mountSessionStack(app: Express) {
 }
 
 async function setupLocalDevAuth(app: Express) {
+  if (isProductionLike() && process.env.ALLOW_LOCAL_AUTH_IN_PRODUCTION !== "true") {
+    throw new Error(
+      "Local passwordless auth is blocked on production-like hosts without ALLOW_LOCAL_AUTH_IN_PRODUCTION=true",
+    );
+  }
+
   mountSessionStack(app);
+
+  const authLimiter = createPgRateLimiter(20, 60_000, "auth-local");
+  app.use("/api/login", authLimiter);
 
   // Still expose provider metadata + any configured social routes for testing
   if (hasAnySocialProvider()) {
@@ -152,17 +164,12 @@ async function setupLocalDevAuth(app: Express) {
       const user = {
         claims: devClaims,
         expires_at: devClaims.exp,
+        provider: "local",
       };
-      req.login(user, (err) => {
-        if (err) {
-          console.error("[auth] local login failed:", err);
-          res.status(500).json({ message: "Login failed" });
-          return;
-        }
-        res.redirect("/");
-      });
+      await establishSession(req, user as Express.User);
+      res.redirect("/");
     } catch (err) {
-      console.error("[auth] local login upsert failed:", err);
+      console.error("[auth] local login failed:", err);
       res.status(500).json({
         message: "Login failed",
         detail: err instanceof Error ? err.message : String(err),
@@ -170,19 +177,26 @@ async function setupLocalDevAuth(app: Express) {
     }
   });
 
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => res.redirect("/"));
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect("/");
   });
 }
 
 async function setupSocialAuth(app: Express) {
   mountSessionStack(app);
+
+  const authLimiter = createPgRateLimiter(30, 60_000, "auth-social");
+  app.use("/api/auth", authLimiter);
+  app.use("/api/login", authLimiter);
+
   const enabled = await registerSocialAuth(app);
 
   if (enabled.length === 0) {
     throw new Error(
       "AUTH_PROVIDER=social (or auto) but no provider credentials found. " +
-        "Set GOOGLE_CLIENT_ID/SECRET, and/or GITHUB_*, MICROSOFT_*, APPLE_* env vars.",
+        "Set GOOGLE_CLIENT_ID/SECRET, and/or GITHUB_*, MICROSOFT_*, APPLE_* env vars. " +
+        "Passwordless local fallback is disabled on production-like hosts.",
     );
   }
 
@@ -195,8 +209,9 @@ async function setupSocialAuth(app: Express) {
     res.redirect("/login");
   });
 
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => res.redirect("/"));
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect("/");
   });
 }
 
@@ -265,15 +280,14 @@ async function setupReplitOidcAuth(app: Express) {
     })(req, res, next);
   });
 
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => {
-      res.redirect(
-        client.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID!,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
-        }).href
-      );
-    });
+  app.get("/api/logout", async (req, res) => {
+    await destroySession(req, res);
+    res.redirect(
+      client.buildEndSessionUrl(config, {
+        client_id: process.env.REPL_ID!,
+        post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
+      }).href,
+    );
   });
 }
 
@@ -288,10 +302,14 @@ export async function setupAuth(app: Express) {
 
   if (useSocialAuthProvider()) {
     if (!hasAnySocialProvider()) {
+      if (isProductionLike()) {
+        throw new Error(
+          "AUTH_PROVIDER=social but no OAuth credentials configured. " +
+            "Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.). Local passwordless fallback is disabled.",
+        );
+      }
       console.warn(
-        "[auth] AUTH_PROVIDER=social but no provider credentials configured — " +
-          "falling back to local operator login so the site can boot. " +
-          "Add GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET (etc.) in Vercel, then redeploy.",
+        "[auth] Social credentials missing in non-production — enabling local operator login for development only.",
       );
       await setupLocalDevAuth(app);
       return;
