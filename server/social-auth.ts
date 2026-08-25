@@ -278,6 +278,12 @@ async function finishLogin(
   );
 
   await establishSession(req, user as Express.User);
+  try {
+    const { ensurePersonalOrganization } = await import("./org-context");
+    await ensurePersonalOrganization(userId);
+  } catch (orgErr) {
+    console.warn("[auth] personal org ensure skipped:", orgErr);
+  }
   res.redirect("/");
 }
 

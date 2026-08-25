@@ -53,6 +53,7 @@ import {
   requireOwnedContract,
   requireOwnedRevenueEvent,
 } from "./authz-helpers";
+import { resolveActiveOrganization } from "./org-context";
 
 // ── Inline CORS middleware (no package install required) ──────────────────────
 function cors(options?: {
@@ -241,7 +242,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
-      res.json(user);
+      let activeOrganization = null;
+      try {
+        activeOrganization = await resolveActiveOrganization(userId);
+      } catch (orgErr) {
+        console.warn("[auth/user] org resolve skipped:", orgErr);
+      }
+      res.json({ ...(user as any), activeOrganization });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -353,16 +360,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      const activeOrg = await resolveActiveOrganization(userId);
       const contractData = insertContractSchema.parse({
         ...req.body,
         templateId: templateId ?? req.body.templateId ?? null,
         templateVersion: templateVersion ?? null,
         createdBy: userId,
+        organizationId: activeOrg?.organizationId ?? null,
         metadata: {
           ...(req.body.metadata || {}),
           createdFrom: req.body.metadata?.createdFrom || "template",
           templateType: req.body.type,
           templateVersion: templateVersion ?? null,
+          organizationId: activeOrg?.organizationId ?? null,
         },
       });
 
@@ -1780,7 +1790,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/assets", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const data = { ...req.body, createdBy: userId };
+      const activeOrg = await resolveActiveOrganization(userId);
+      const data = {
+        ...req.body,
+        createdBy: userId,
+        organizationId: activeOrg?.organizationId ?? null,
+      };
       const asset = await storage.createSongAsset(data);
       await storage.trackUserActivity(userId, "asset_created", {
         assetId: asset.id,

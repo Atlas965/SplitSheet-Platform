@@ -53,10 +53,10 @@ function loadEnv() {
     for (const line of contents.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq10 = trimmed.indexOf("=");
-      if (eq10 === -1) continue;
-      const key = trimmed.slice(0, eq10).trim();
-      const value = sanitizeEnvValue(trimmed.slice(eq10 + 1));
+      const eq11 = trimmed.indexOf("=");
+      if (eq11 === -1) continue;
+      const key = trimmed.slice(0, eq11).trim();
+      const value = sanitizeEnvValue(trimmed.slice(eq11 + 1));
       if (!(key in process.env)) {
         process.env[key] = value;
       }
@@ -244,6 +244,8 @@ var init_schema = __esm({
       // user, admin
       /** Auth0 subject (`sub`) — links Universal Login identity without destroying legacy ids */
       auth0Sub: varchar("auth0_sub"),
+      /** Currently selected tenant for operator session context */
+      activeOrganizationId: varchar("active_organization_id"),
       // Stripe Connect Express — per-contributor payout account
       stripeConnectAccountId: varchar("stripe_connect_account_id"),
       stripeConnectOnboarded: boolean("stripe_connect_onboarded").default(false),
@@ -384,6 +386,8 @@ var init_schema = __esm({
       /** Snapshot of template version at creation time */
       templateVersion: varchar("template_version"),
       createdBy: varchar("created_by").references(() => users.id).notNull(),
+      /** Tenant that owns this agreement/project (Phase 3 multi-tenant) */
+      organizationId: varchar("organization_id"),
       data: jsonb("data").notNull(),
       // Contract form data
       metadata: jsonb("metadata"),
@@ -513,6 +517,8 @@ var init_schema = __esm({
       // permanent external ID: SL-SONG-XXXXXXXX
       createdBy: varchar("created_by").references(() => users.id).notNull(),
       contractId: varchar("contract_id").references(() => contracts.id),
+      /** Tenant that owns this ledger asset */
+      organizationId: varchar("organization_id"),
       status: varchar("status").default("active"),
       // active, archived
       metadata: jsonb("metadata"),
@@ -628,8 +634,8 @@ var init_schema = __esm({
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       organizationId: varchar("organization_id").references(() => organizations.id).notNull(),
       userId: varchar("user_id").references(() => users.id).notNull(),
-      role: varchar("role").notNull().default("member"),
-      // owner, admin, member, viewer
+      role: varchar("role").notNull().default("operator"),
+      // owner, admin, operator, reviewer, finance, viewer
       invitedBy: varchar("invited_by").references(() => users.id),
       createdAt: timestamp("created_at").defaultNow()
     });
@@ -646,7 +652,16 @@ var init_schema = __esm({
       createdAt: timestamp("created_at").defaultNow()
     });
     ORGANIZATION_TYPES = ["label", "studio", "publisher", "distributor", "pro"];
-    ORGANIZATION_ROLES = ["owner", "admin", "member", "viewer"];
+    ORGANIZATION_ROLES = [
+      "owner",
+      "admin",
+      "operator",
+      "reviewer",
+      "finance",
+      "viewer",
+      "member"
+      // legacy alias accepted on write → normalized to operator
+    ];
     TERRITORIES = ["CA", "US", "UK", "EU", "AU", "OTHER"];
     OWNERSHIP_RIGHT_TYPES = [
       "composition",
@@ -2753,9 +2768,261 @@ var init_session_security = __esm({
   }
 });
 
-// server/social-auth.ts
+// shared/org-rbac.ts
+function normalizeOrgRole(role) {
+  if (!role) return null;
+  const lower = role.trim().toLowerCase();
+  if (LEGACY_ORG_ROLE_MAP[lower]) return LEGACY_ORG_ROLE_MAP[lower];
+  if (ORG_ROLES.includes(lower)) return lower;
+  return null;
+}
+function roleAtLeast(role, minimum) {
+  const normalized = normalizeOrgRole(role);
+  if (!normalized) return false;
+  return ORG_ROLE_RANK[normalized] >= ORG_ROLE_RANK[minimum];
+}
+function permissionsForRole(role) {
+  const normalized = normalizeOrgRole(role);
+  if (!normalized) return [];
+  return [...ROLE_PERMISSIONS[normalized]];
+}
+var ORG_ROLES, LEGACY_ORG_ROLE_MAP, ORG_ROLE_RANK, ORG_PERMISSIONS, ROLE_PERMISSIONS;
+var init_org_rbac = __esm({
+  "shared/org-rbac.ts"() {
+    "use strict";
+    ORG_ROLES = [
+      "owner",
+      "admin",
+      "operator",
+      "reviewer",
+      "finance",
+      "viewer"
+    ];
+    LEGACY_ORG_ROLE_MAP = {
+      member: "operator",
+      administrator: "admin"
+    };
+    ORG_ROLE_RANK = {
+      viewer: 10,
+      finance: 20,
+      reviewer: 30,
+      operator: 40,
+      admin: 50,
+      owner: 60
+    };
+    ORG_PERMISSIONS = [
+      "org.manage",
+      "org.members.manage",
+      "org.billing.manage",
+      "org.audit.read",
+      "project.create",
+      "project.read",
+      "project.update",
+      "project.delete",
+      "agreement.create",
+      "agreement.read",
+      "agreement.send",
+      "rights.read",
+      "rights.update",
+      "client.manage"
+    ];
+    ROLE_PERMISSIONS = {
+      owner: [...ORG_PERMISSIONS],
+      admin: [
+        "org.members.manage",
+        "org.audit.read",
+        "project.create",
+        "project.read",
+        "project.update",
+        "project.delete",
+        "agreement.create",
+        "agreement.read",
+        "agreement.send",
+        "rights.read",
+        "rights.update",
+        "client.manage"
+      ],
+      operator: [
+        "project.create",
+        "project.read",
+        "project.update",
+        "agreement.create",
+        "agreement.read",
+        "agreement.send",
+        "rights.read",
+        "rights.update",
+        "client.manage"
+      ],
+      reviewer: ["project.read", "agreement.read", "rights.read"],
+      finance: ["org.billing.manage", "project.read", "agreement.read", "org.audit.read"],
+      viewer: ["project.read", "agreement.read", "rights.read"]
+    };
+  }
+});
+
+// server/org-context.ts
+var org_context_exports = {};
+__export(org_context_exports, {
+  attachActiveOrganization: () => attachActiveOrganization,
+  backfillUserResourcesToOrg: () => backfillUserResourcesToOrg,
+  ensureOrgTenantSchema: () => ensureOrgTenantSchema,
+  ensurePersonalOrganization: () => ensurePersonalOrganization,
+  getMembership: () => getMembership,
+  resolveActiveOrganization: () => resolveActiveOrganization,
+  setActiveOrganization: () => setActiveOrganization
+});
 import crypto2 from "crypto";
-import { eq as eq2 } from "drizzle-orm";
+import { eq as eq2, and as and2, isNull, sql as sql4 } from "drizzle-orm";
+async function generateUniqueSlOrgId() {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const shortId = crypto2.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const slOrgId = `SL-ORG-${shortId}`;
+    const existing = await storage.getOrganizationBySlOrgId(slOrgId);
+    if (!existing) return slOrgId;
+  }
+  return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
+}
+async function ensureOrgTenantSchema() {
+  await db.execute(sql4`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS active_organization_id varchar;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE contracts
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE song_assets
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql4`
+    CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
+  `);
+  await db.execute(sql4`
+    CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
+  `);
+  await db.execute(sql4`
+    UPDATE organization_members SET role = 'operator' WHERE role = 'member';
+  `);
+}
+async function ensurePersonalOrganization(userId) {
+  await ensureOrgTenantSchema();
+  const existing = await storage.getOrganizationsForUser(userId);
+  if (existing.length > 0) {
+    const user2 = await storage.getUser(userId);
+    if (!user2?.activeOrganizationId) {
+      await storage.updateUser(userId, {
+        activeOrganizationId: existing[0].id
+      });
+    }
+    await backfillUserResourcesToOrg(userId, user2?.activeOrganizationId || existing[0].id);
+    return user2?.activeOrganizationId || existing[0].id;
+  }
+  const user = await storage.getUser(userId);
+  const label = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() || user?.email || "Personal";
+  const slOrgId = await generateUniqueSlOrgId();
+  const org = await storage.createOrganization({
+    name: `${label} Workspace`,
+    type: "studio",
+    email: user?.email || null,
+    slOrgId,
+    createdBy: userId
+  });
+  await storage.addOrganizationMember({
+    organizationId: org.id,
+    userId,
+    role: "owner",
+    invitedBy: null
+  });
+  await storage.updateUser(userId, { activeOrganizationId: org.id });
+  await backfillUserResourcesToOrg(userId, org.id);
+  return org.id;
+}
+async function backfillUserResourcesToOrg(userId, organizationId) {
+  await db.update(contracts).set({ organizationId }).where(and2(eq2(contracts.createdBy, userId), isNull(contracts.organizationId)));
+  await db.update(songAssets).set({ organizationId }).where(and2(eq2(songAssets.createdBy, userId), isNull(songAssets.organizationId)));
+}
+async function getMembership(organizationId, userId) {
+  return storage.getOrganizationMember(organizationId, userId);
+}
+async function resolveActiveOrganization(userId) {
+  await ensurePersonalOrganization(userId);
+  const user = await storage.getUser(userId);
+  let orgId = user?.activeOrganizationId || null;
+  if (orgId) {
+    const member2 = await getMembership(orgId, userId);
+    const org = await storage.getOrganization(orgId);
+    const role2 = normalizeOrgRole(member2?.role);
+    if (member2 && org && role2) {
+      return {
+        organizationId: org.id,
+        role: role2,
+        slOrgId: org.slOrgId,
+        name: org.name
+      };
+    }
+  }
+  const orgs = await storage.getOrganizationsForUser(userId);
+  if (!orgs.length) return null;
+  const fallback = orgs[0];
+  await storage.updateUser(userId, { activeOrganizationId: fallback.id });
+  const member = await getMembership(fallback.id, userId);
+  const role = normalizeOrgRole(member?.role) || "viewer";
+  return {
+    organizationId: fallback.id,
+    role,
+    slOrgId: fallback.slOrgId,
+    name: fallback.name
+  };
+}
+async function setActiveOrganization(userId, organizationId) {
+  const member = await getMembership(organizationId, userId);
+  if (!member) {
+    throw Object.assign(new Error("Not a member of this organization"), { status: 403 });
+  }
+  const org = await storage.getOrganization(organizationId);
+  if (!org) {
+    throw Object.assign(new Error("Organization not found"), { status: 404 });
+  }
+  const role = normalizeOrgRole(member.role);
+  if (!role) {
+    throw Object.assign(new Error("Invalid organization role"), { status: 400 });
+  }
+  await storage.updateUser(userId, { activeOrganizationId: organizationId });
+  return {
+    organizationId: org.id,
+    role,
+    slOrgId: org.slOrgId,
+    name: org.name
+  };
+}
+function attachActiveOrganization() {
+  return async (req, res, next) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) return next();
+      const active = await resolveActiveOrganization(userId);
+      req.activeOrg = active;
+      next();
+    } catch (err) {
+      console.error("[org-context]", err);
+      next();
+    }
+  };
+}
+var init_org_context = __esm({
+  "server/org-context.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_storage();
+    init_org_rbac();
+  }
+});
+
+// server/social-auth.ts
+import crypto3 from "crypto";
+import { eq as eq3 } from "drizzle-orm";
 import * as client from "openid-client";
 function appBaseUrl(req) {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
@@ -2803,7 +3070,7 @@ function hasAnySocialProvider() {
   return listSocialProviders().some((p) => p.enabled);
 }
 async function getUserByEmail(email) {
-  const [row] = await db.select().from(users).where(eq2(users.email, email)).limit(1);
+  const [row] = await db.select().from(users).where(eq3(users.email, email)).limit(1);
   return row;
 }
 async function upsertSocialUser(input) {
@@ -2875,7 +3142,7 @@ function createAppleClientSecret() {
     })
   );
   const data = `${header}.${payload}`;
-  const signer = crypto2.createSign("SHA256");
+  const signer = crypto3.createSign("SHA256");
   signer.update(data);
   signer.end();
   const signature = signer.sign({ key: privateKey, dsaEncoding: "ieee-p1363" });
@@ -2929,6 +3196,12 @@ async function finishLogin(req, res, profile) {
     profile.provider
   );
   await establishSession(req, user);
+  try {
+    const { ensurePersonalOrganization: ensurePersonalOrganization2 } = await Promise.resolve().then(() => (init_org_context(), org_context_exports));
+    await ensurePersonalOrganization2(userId);
+  } catch (orgErr) {
+    console.warn("[auth] personal org ensure skipped:", orgErr);
+  }
   res.redirect("/");
 }
 function loginFailure(res, message) {
@@ -3156,7 +3429,7 @@ async function registerMicrosoft(app) {
 }
 function registerGitHub(app) {
   app.get("/api/auth/github", (req, res) => {
-    const state = crypto2.randomBytes(16).toString("hex");
+    const state = crypto3.randomBytes(16).toString("hex");
     setOAuthState(res, "github", state);
     const url = new URL("https://github.com/login/oauth/authorize");
     url.searchParams.set("client_id", process.env.GITHUB_CLIENT_ID);
@@ -3229,7 +3502,7 @@ function registerGitHub(app) {
 }
 function registerApple(app) {
   app.get("/api/auth/apple", (req, res) => {
-    const state = crypto2.randomBytes(16).toString("hex");
+    const state = crypto3.randomBytes(16).toString("hex");
     setOAuthState(res, "apple", state);
     const url = new URL("https://appleid.apple.com/auth/authorize");
     url.searchParams.set("client_id", process.env.APPLE_CLIENT_ID);
@@ -3355,8 +3628,8 @@ var init_social_auth = __esm({
 
 // server/auth0-auth.ts
 import * as client2 from "openid-client";
-import { eq as eq3 } from "drizzle-orm";
-import { sql as sql4 } from "drizzle-orm";
+import { eq as eq4 } from "drizzle-orm";
+import { sql as sql5 } from "drizzle-orm";
 function hasAuth0Credentials2() {
   return Boolean(
     process.env.AUTH0_DOMAIN && process.env.AUTH0_CLIENT_ID && process.env.AUTH0_CLIENT_SECRET
@@ -3409,22 +3682,22 @@ function readAuth0Cookie(req) {
   return void 0;
 }
 async function ensureAuth0Schema() {
-  await db.execute(sql4`
+  await db.execute(sql5`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS auth0_sub varchar;
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
   `);
 }
 async function getUserByAuth0Sub(auth0Sub) {
-  const [row] = await db.select().from(users).where(eq3(users.auth0Sub, auth0Sub)).limit(1);
+  const [row] = await db.select().from(users).where(eq4(users.auth0Sub, auth0Sub)).limit(1);
   return row;
 }
 async function getUserByEmail2(email) {
-  const [row] = await db.select().from(users).where(eq3(users.email, email)).limit(1);
+  const [row] = await db.select().from(users).where(eq4(users.email, email)).limit(1);
   return row;
 }
 async function upsertAuth0User(input) {
@@ -3600,6 +3873,12 @@ async function registerAuth0Auth(app) {
         refresh_token: tokens.refresh_token,
         access_token: tokens.access_token
       });
+      try {
+        const { ensurePersonalOrganization: ensurePersonalOrganization2 } = await Promise.resolve().then(() => (init_org_context(), org_context_exports));
+        await ensurePersonalOrganization2(userId);
+      } catch (orgErr) {
+        console.warn("[auth/auth0] personal org ensure skipped:", orgErr);
+      }
       res.redirect("/");
     } catch (err) {
       console.error("[auth/auth0] callback failed:", err);
@@ -4390,7 +4669,7 @@ var init_email_service = __esm({
 });
 
 // server/authz-helpers.ts
-import { eq as eq4 } from "drizzle-orm";
+import { eq as eq5 } from "drizzle-orm";
 function sessionUserId(req) {
   return req.user?.claims?.sub;
 }
@@ -4438,7 +4717,7 @@ async function requireOwnedRevenueEvent(req, res, eventId) {
     eventId: revenueEvents.id,
     assetId: revenueEvents.assetId,
     createdBy: songAssets.createdBy
-  }).from(revenueEvents).innerJoin(songAssets, eq4(revenueEvents.assetId, songAssets.id)).where(eq4(revenueEvents.id, eventId)).limit(1);
+  }).from(revenueEvents).innerJoin(songAssets, eq5(revenueEvents.assetId, songAssets.id)).where(eq5(revenueEvents.id, eventId)).limit(1);
   if (!row) {
     res.status(404).json({ message: "Revenue event not found" });
     return null;
@@ -4455,7 +4734,7 @@ async function requireOwnedCollaborator(req, res, collaboratorId) {
     res.status(401).json({ message: "Unauthorized" });
     return null;
   }
-  const [row] = await db.select().from(contractCollaborators).where(eq4(contractCollaborators.id, collaboratorId)).limit(1);
+  const [row] = await db.select().from(contractCollaborators).where(eq5(contractCollaborators.id, collaboratorId)).limit(1);
   if (!row) {
     res.status(404).json({ message: "Client not found" });
     return null;
@@ -4477,10 +4756,10 @@ var init_authz_helpers = __esm({
 });
 
 // server/confirmation-routes.ts
-import crypto3 from "crypto";
-import { sql as sql5 } from "drizzle-orm";
+import crypto4 from "crypto";
+import { sql as sql6 } from "drizzle-orm";
 function generateToken() {
-  return crypto3.randomBytes(32).toString("hex");
+  return crypto4.randomBytes(32).toString("hex");
 }
 function expiresAt72h() {
   return new Date(Date.now() + 72 * 60 * 60 * 1e3);
@@ -4498,7 +4777,7 @@ function registerConfirmationRoutes(app) {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
       try {
-        const contractRows = await db.execute(sql5`
+        const contractRows = await db.execute(sql6`
           SELECT id, title, status, created_by
           FROM contracts
           WHERE id = ${contractId}
@@ -4513,7 +4792,7 @@ function registerConfirmationRoutes(app) {
           res.status(403).json({ error: "Not authorized" });
           return;
         }
-        const collabRows = await db.execute(sql5`
+        const collabRows = await db.execute(sql6`
           SELECT id, name, email, role, ownership_percentage
           FROM contract_collaborators
           WHERE contract_id = ${contractId}
@@ -4527,7 +4806,7 @@ function registerConfirmationRoutes(app) {
         const results = [];
         const expires = expiresAt72h();
         for (const collab of collaborators) {
-          const existing = await db.execute(sql5`
+          const existing = await db.execute(sql6`
             SELECT id, token, status FROM split_confirmations
             WHERE contract_id = ${contractId}
               AND collaborator_id = ${collab.id}
@@ -4535,7 +4814,7 @@ function registerConfirmationRoutes(app) {
           `);
           if (existing.rows.length > 0) {
             const row = existing.rows[0];
-            await db.execute(sql5`
+            await db.execute(sql6`
               UPDATE split_confirmations
               SET expires_at = ${expires}, updated_at = NOW()
               WHERE id = ${row.id}
@@ -4543,7 +4822,7 @@ function registerConfirmationRoutes(app) {
             results.push({ collaboratorId: collab.id, name: collab.name, token: row.token, status: row.status, isNew: false });
           } else {
             const token = generateToken();
-            await db.execute(sql5`
+            await db.execute(sql6`
               INSERT INTO split_confirmations
                 (contract_id, collaborator_id, token, status, expires_at)
               VALUES
@@ -4570,7 +4849,7 @@ function registerConfirmationRoutes(app) {
               const delivery = await sendEmail({ to: collab.email, ...template });
               emailSent = delivery.delivered;
               if (delivery.delivered) {
-                await db.execute(sql5`
+                await db.execute(sql6`
                   UPDATE split_confirmations
                   SET status = 'sent', sent_at = NOW(), updated_at = NOW()
                   WHERE contract_id = ${contractId} AND collaborator_id = ${r.collaboratorId}
@@ -4607,7 +4886,7 @@ function registerConfirmationRoutes(app) {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
       try {
-        const contractRows = await db.execute(sql5`
+        const contractRows = await db.execute(sql6`
           SELECT id, title, status, created_by FROM contracts
           WHERE id = ${contractId} LIMIT 1
         `);
@@ -4620,7 +4899,7 @@ function registerConfirmationRoutes(app) {
           res.status(403).json({ error: "Not authorized" });
           return;
         }
-        const rows = await db.execute(sql5`
+        const rows = await db.execute(sql6`
           SELECT
             sc.id,
             sc.token,
@@ -4696,7 +4975,7 @@ function registerConfirmationRoutes(app) {
       try {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
-        const result = await db.execute(sql5`
+        const result = await db.execute(sql6`
           UPDATE split_confirmations
           SET status = 'sent', sent_at = NOW(), updated_at = NOW()
           WHERE id = ${confirmId}
@@ -4719,7 +4998,7 @@ function registerConfirmationRoutes(app) {
     async (req, res) => {
       const { contractId, token } = req.params;
       try {
-        const rows = await db.execute(sql5`
+        const rows = await db.execute(sql6`
           SELECT
             sc.id,
             sc.status,
@@ -4758,7 +5037,7 @@ function registerConfirmationRoutes(app) {
           });
           return;
         }
-        const allCollabs = await db.execute(sql5`
+        const allCollabs = await db.execute(sql6`
           SELECT name, role, ownership_percentage
           FROM contract_collaborators
           WHERE contract_id = ${contractId}
@@ -4795,7 +5074,7 @@ function registerConfirmationRoutes(app) {
         return;
       }
       try {
-        const rows = await db.execute(sql5`
+        const rows = await db.execute(sql6`
           SELECT sc.id, sc.status, sc.expires_at, cc.name AS collab_name, c.title AS contract_title
           FROM split_confirmations sc
           JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
@@ -4820,7 +5099,7 @@ function registerConfirmationRoutes(app) {
         const newStatus = action === "confirm" ? "confirmed" : "change_requested";
         const ip = getIp(req);
         const ua = req.headers["user-agent"] ?? null;
-        await db.execute(sql5`
+        await db.execute(sql6`
           UPDATE split_confirmations SET
             status           = ${newStatus},
             confirmed_name   = ${name ?? null},
@@ -4833,7 +5112,7 @@ function registerConfirmationRoutes(app) {
           WHERE id = ${row.id}
         `);
         if (action === "confirm") {
-          const pendingRows = await db.execute(sql5`
+          const pendingRows = await db.execute(sql6`
             SELECT COUNT(*) AS cnt
             FROM split_confirmations
             WHERE contract_id = ${contractId}
@@ -4841,7 +5120,7 @@ function registerConfirmationRoutes(app) {
           `);
           const remaining = Number(pendingRows.rows[0]?.cnt ?? 1);
           if (remaining === 0) {
-            await db.execute(sql5`
+            await db.execute(sql6`
               UPDATE contracts SET status = 'signed', updated_at = NOW()
               WHERE id = ${contractId}
             `);
@@ -7513,7 +7792,7 @@ var init_rights_context = __esm({
 });
 
 // server/voice/store.ts
-import { and as and2, desc as desc2, eq as eq5 } from "drizzle-orm";
+import { and as and3, desc as desc2, eq as eq6 } from "drizzle-orm";
 async function createVoiceSession(input) {
   const expiresAt = new Date(Date.now() + VOICE_RETENTION.sessionHours * 36e5);
   const [session2] = await db.insert(voiceSessions).values({
@@ -7530,7 +7809,7 @@ async function createVoiceSession(input) {
   return session2;
 }
 async function getVoiceSession(sessionId, userId) {
-  const [session2] = await db.select().from(voiceSessions).where(and2(eq5(voiceSessions.id, sessionId), eq5(voiceSessions.userId, userId)));
+  const [session2] = await db.select().from(voiceSessions).where(and3(eq6(voiceSessions.id, sessionId), eq6(voiceSessions.userId, userId)));
   return session2;
 }
 async function recordVoiceTurn(input) {
@@ -7585,7 +7864,7 @@ async function createPendingAction(input) {
   return row;
 }
 async function getPendingAction(id, userId) {
-  const [row] = await db.select().from(voicePendingActions).where(and2(eq5(voicePendingActions.id, id), eq5(voicePendingActions.userId, userId)));
+  const [row] = await db.select().from(voicePendingActions).where(and3(eq6(voicePendingActions.id, id), eq6(voicePendingActions.userId, userId)));
   return row;
 }
 async function resolvePendingAction(id, userId, decision) {
@@ -7595,11 +7874,11 @@ async function resolvePendingAction(id, userId, decision) {
     return { ok: false, error: `Action already ${pending.status}` };
   }
   if (pending.expiresAt && pending.expiresAt.getTime() < Date.now()) {
-    await db.update(voicePendingActions).set({ status: "expired" }).where(eq5(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "expired" }).where(eq6(voicePendingActions.id, id));
     return { ok: false, error: "Pending action expired \u2014 please repeat the request" };
   }
   if (decision === "rejected") {
-    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq5(voicePendingActions.id, id)).returning();
+    const [row] = await db.update(voicePendingActions).set({ status: "rejected", confirmedAt: /* @__PURE__ */ new Date() }).where(eq6(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: null };
   }
   const payload = pending.payload || {};
@@ -7649,24 +7928,24 @@ async function resolvePendingAction(id, userId, decision) {
       confirmedAt: /* @__PURE__ */ new Date(),
       executedAt: /* @__PURE__ */ new Date(),
       result
-    }).where(eq5(voicePendingActions.id, id)).returning();
+    }).where(eq6(voicePendingActions.id, id)).returning();
     return { ok: true, pending: row, executed: result };
   } catch (err) {
-    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq5(voicePendingActions.id, id));
+    await db.update(voicePendingActions).set({ status: "failed", result: { error: String(err?.message || err) } }).where(eq6(voicePendingActions.id, id));
     return { ok: false, error: "Failed to execute confirmed action" };
   }
 }
 async function listAuthorizedMemory(userId) {
-  return db.select().from(voiceUserMemory).where(and2(eq5(voiceUserMemory.userId, userId), eq5(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
+  return db.select().from(voiceUserMemory).where(and3(eq6(voiceUserMemory.userId, userId), eq6(voiceUserMemory.authorized, true))).orderBy(desc2(voiceUserMemory.updatedAt));
 }
 async function upsertAuthorizedMemory(input) {
   const blocked = /password|ssn|sin|bank|card|secret|signature/i;
   if (blocked.test(input.key) || blocked.test(JSON.stringify(input.value))) {
     throw new Error("That information cannot be stored in Copilot memory");
   }
-  const existing = await db.select().from(voiceUserMemory).where(and2(eq5(voiceUserMemory.userId, input.userId), eq5(voiceUserMemory.key, input.key)));
+  const existing = await db.select().from(voiceUserMemory).where(and3(eq6(voiceUserMemory.userId, input.userId), eq6(voiceUserMemory.key, input.key)));
   if (existing[0]) {
-    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq5(voiceUserMemory.id, existing[0].id)).returning();
+    const [row2] = await db.update(voiceUserMemory).set({ value: input.value, updatedAt: /* @__PURE__ */ new Date(), category: input.category || existing[0].category }).where(eq6(voiceUserMemory.id, existing[0].id)).returning();
     return row2;
   }
   const [row] = await db.insert(voiceUserMemory).values({
@@ -8057,11 +8336,11 @@ var init_voice_routes = __esm({
 });
 
 // server/service-routes.ts
-import crypto4 from "crypto";
+import crypto5 from "crypto";
 import { z as z5 } from "zod";
-import { sql as sql6 } from "drizzle-orm";
+import { sql as sql7 } from "drizzle-orm";
 function generateToken2() {
-  return crypto4.randomBytes(32).toString("hex");
+  return crypto5.randomBytes(32).toString("hex");
 }
 function expiresAt72h2() {
   return new Date(Date.now() + 72 * 60 * 60 * 1e3);
@@ -8316,7 +8595,7 @@ function registerServiceRoutes(app) {
       const collabs = await storage.getContractCollaborators(req.params.id);
       const enriched = await Promise.all(
         collabs.map(async (c) => {
-          const confRows = await db.execute(sql6`
+          const confRows = await db.execute(sql7`
             SELECT token, status, confirmed_at, expires_at
             FROM split_confirmations
             WHERE contract_id = ${req.params.id} AND collaborator_id = ${c.id}
@@ -8458,7 +8737,7 @@ function registerServiceRoutes(app) {
       const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
       const links = [];
       for (const collab of collabs) {
-        const existing = await db.execute(sql6`
+        const existing = await db.execute(sql7`
           SELECT id, token, status FROM split_confirmations
           WHERE contract_id = ${contractId} AND collaborator_id = ${collab.id}
           LIMIT 1
@@ -8467,12 +8746,12 @@ function registerServiceRoutes(app) {
         if (existing.rows.length > 0) {
           const row = existing.rows[0];
           token = row.token;
-          await db.execute(sql6`
+          await db.execute(sql7`
             UPDATE split_confirmations SET expires_at = ${expires}, updated_at = NOW() WHERE id = ${row.id}
           `);
         } else {
           token = generateToken2();
-          await db.execute(sql6`
+          await db.execute(sql7`
             INSERT INTO split_confirmations (contract_id, collaborator_id, token, status, expires_at)
             VALUES (${contractId}, ${collab.id}, ${token}, 'not_sent', ${expires})
           `);
@@ -8520,10 +8799,10 @@ var init_service_routes = __esm({
 
 // server/organization-routes.ts
 import { z as z6 } from "zod";
-import crypto5 from "crypto";
-async function generateUniqueSlOrgId() {
+import crypto6 from "crypto";
+async function generateUniqueSlOrgId2() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto5.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto6.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slOrgId = `SL-ORG-${shortId}`;
     const existing = await storage.getOrganizationBySlOrgId(slOrgId);
     if (!existing) return slOrgId;
@@ -8531,8 +8810,7 @@ async function generateUniqueSlOrgId() {
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 function hasRole(role, minimum) {
-  if (!role || !(role in ROLE_RANK)) return false;
-  return ROLE_RANK[role] >= ROLE_RANK[minimum];
+  return roleAtLeast(role, minimum);
 }
 async function requireOrgMember(req, res, next) {
   const userId = req.user?.claims?.sub;
@@ -8568,6 +8846,7 @@ function registerOrganizationRoutes(app) {
   app.get("/api/organizations", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
+      await ensurePersonalOrganization(userId);
       const orgs = await storage.getOrganizationsForUser(userId);
       res.json(orgs);
     } catch (error) {
@@ -8575,11 +8854,47 @@ function registerOrganizationRoutes(app) {
       res.status(500).json({ message: "Failed to fetch organizations" });
     }
   });
+  app.get("/api/me/organization", isAuthenticated, async (req, res) => {
+    const userId = req.user.claims.sub;
+    try {
+      const active = await resolveActiveOrganization(userId);
+      if (!active) {
+        res.status(404).json({ message: "No organization available" });
+        return;
+      }
+      res.json({
+        ...active,
+        permissions: permissionsForRole(active.role),
+        roles: ORG_ROLES
+      });
+    } catch (error) {
+      console.error("[ACTIVE ORG GET]", error);
+      res.status(500).json({ message: "Failed to resolve active organization" });
+    }
+  });
+  app.post("/api/me/organization", isAuthenticated, async (req, res) => {
+    const userId = req.user.claims.sub;
+    try {
+      const organizationId = String(req.body?.organizationId || "");
+      if (!organizationId) {
+        res.status(400).json({ message: "organizationId is required" });
+        return;
+      }
+      const active = await setActiveOrganization(userId, organizationId);
+      res.json({
+        ...active,
+        permissions: permissionsForRole(active.role)
+      });
+    } catch (error) {
+      const status = error?.status || 500;
+      res.status(status).json({ message: error?.message || "Failed to set active organization" });
+    }
+  });
   app.post("/api/organizations", isAuthenticated, async (req, res) => {
     const userId = req.user.claims.sub;
     try {
       const body = insertOrganizationSchema.pick({ name: true, type: true, email: true, website: true, country: true }).extend({ type: z6.enum(ORGANIZATION_TYPES) }).parse(req.body);
-      const slOrgId = await generateUniqueSlOrgId();
+      const slOrgId = await generateUniqueSlOrgId2();
       const org = await storage.createOrganization({
         ...body,
         slOrgId,
@@ -8655,7 +8970,11 @@ function registerOrganizationRoutes(app) {
     async (req, res) => {
       const actingUserId = req.user.claims.sub;
       try {
-        const body = z6.object({ userId: z6.string().min(1), role: z6.enum(ORGANIZATION_ROLES).default("member") }).parse(req.body);
+        const body = z6.object({
+          userId: z6.string().min(1),
+          role: z6.enum(ORGANIZATION_ROLES).default("operator")
+        }).parse(req.body);
+        const role = normalizeOrgRole(body.role) || "operator";
         const existing = await storage.getOrganizationMember(req.params.id, body.userId);
         if (existing) {
           res.status(409).json({ message: "User is already a member of this organization" });
@@ -8664,7 +8983,7 @@ function registerOrganizationRoutes(app) {
         const member = await storage.addOrganizationMember({
           organizationId: req.params.id,
           userId: body.userId,
-          role: body.role,
+          role,
           invitedBy: actingUserId
         });
         await auditLog({
@@ -8672,7 +8991,7 @@ function registerOrganizationRoutes(app) {
           action: "organization.member_add",
           resourceType: "organization",
           resourceId: req.params.id,
-          afterState: { addedUserId: body.userId, role: body.role },
+          afterState: { addedUserId: body.userId, role },
           ipAddress: req.ip
         });
         res.status(201).json(member);
@@ -8693,7 +9012,12 @@ function registerOrganizationRoutes(app) {
     requireOrgRole("owner"),
     async (req, res) => {
       try {
-        const { role } = z6.object({ role: z6.enum(ORGANIZATION_ROLES) }).parse(req.body);
+        const { role: rawRole } = z6.object({ role: z6.enum(ORGANIZATION_ROLES) }).parse(req.body);
+        const role = normalizeOrgRole(rawRole);
+        if (!role) {
+          res.status(400).json({ message: "Invalid role" });
+          return;
+        }
         const updated = await storage.updateOrganizationMemberRole(req.params.memberId, role);
         res.json(updated);
       } catch (error) {
@@ -8797,15 +9121,15 @@ function registerOrganizationRoutes(app) {
     }
   );
 }
-var ROLE_RANK;
 var init_organization_routes = __esm({
   "server/organization-routes.ts"() {
     "use strict";
     init_storage();
     init_replitAuth();
     init_schema();
+    init_org_rbac();
     init_security();
-    ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 };
+    init_org_context();
   }
 });
 
@@ -8974,10 +9298,10 @@ var init_message_routes = __esm({
 
 // server/stripe-connect.ts
 import Stripe from "stripe";
-import { sql as sql7 } from "drizzle-orm";
+import { sql as sql8 } from "drizzle-orm";
 async function createConnectAccount(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql7`
+  const rows = await db.execute(sql8`
     SELECT id, email, first_name, last_name,
            stripe_connect_account_id,
            stripe_connect_onboarded
@@ -9016,7 +9340,7 @@ async function createConnectAccount(req, res) {
       metadata: { splitsheet_user_id: userId }
     });
     accountId = account.id;
-    await db.execute(sql7`
+    await db.execute(sql8`
       UPDATE users
       SET stripe_connect_account_id = ${accountId},
           stripe_connect_onboarded  = FALSE
@@ -9038,7 +9362,7 @@ async function createConnectAccount(req, res) {
 }
 async function getConnectStatus(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql7`
+  const rows = await db.execute(sql8`
     SELECT stripe_connect_account_id, stripe_connect_onboarded,
            stripe_connect_charges_enabled, stripe_connect_payouts_enabled
     FROM users WHERE id = ${userId} LIMIT 1
@@ -9052,7 +9376,7 @@ async function getConnectStatus(req, res) {
   const onboarded = account.details_submitted;
   const chargesEnabled = account.charges_enabled;
   const payoutsEnabled = account.payouts_enabled;
-  await db.execute(sql7`
+  await db.execute(sql8`
     UPDATE users SET
       stripe_connect_onboarded        = ${onboarded},
       stripe_connect_charges_enabled  = ${chargesEnabled},
@@ -9071,7 +9395,7 @@ async function getConnectStatus(req, res) {
 }
 async function getConnectDashboardLink(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql7`
+  const rows = await db.execute(sql8`
     SELECT stripe_connect_account_id, stripe_connect_onboarded
     FROM users WHERE id = ${userId} LIMIT 1
   `);
@@ -9097,7 +9421,7 @@ var init_stripe_connect = __esm({
 
 // server/payment-service.ts
 import Stripe2 from "stripe";
-import { sql as sql8 } from "drizzle-orm";
+import { sql as sql9 } from "drizzle-orm";
 function calculateSplits(totalCents, collaborators) {
   const total = collaborators.reduce((s, c) => s + c.ownershipPct, 0);
   if (Math.abs(total - 100) > 0.01) {
@@ -9123,7 +9447,7 @@ function deductPlatformFee(grossCents, feeBps = PLATFORM_FEE_BPS) {
   return { netCents: grossCents - feeCents, feeCents };
 }
 async function enforceAgreement(contractId) {
-  const rows = await db.execute(sql8`
+  const rows = await db.execute(sql9`
     SELECT status, data
     FROM contracts WHERE id = ${contractId} LIMIT 1
   `);
@@ -9135,7 +9459,7 @@ async function enforceAgreement(contractId) {
       reason: `Contract must be signed before payment. Current status: ${contract.status}`
     };
   }
-  const sigRows = await db.execute(sql8`
+  const sigRows = await db.execute(sql9`
     SELECT cc.id, cc.email, cc.name,
            COUNT(cs.id) AS sig_count
     FROM contract_collaborators cc
@@ -9153,7 +9477,7 @@ async function enforceAgreement(contractId) {
   return { allowed: true };
 }
 async function resolvePayees(contractId) {
-  const rows = await db.execute(sql8`
+  const rows = await db.execute(sql9`
     SELECT
       cc.id, cc.name, cc.email,
       cc.ownership_percentage::float AS ownership_pct,
@@ -9194,7 +9518,7 @@ async function createSplitPaymentIntent(params) {
     throw new Error(`Payment blocked: ${enforcement.reason}`);
   }
   const { netCents, feeCents } = deductPlatformFee(grossCents);
-  const revenueResult = await db.execute(sql8`
+  const revenueResult = await db.execute(sql9`
     INSERT INTO revenue_events
       (asset_id, source, amount, currency, description, metadata)
     VALUES
@@ -9220,7 +9544,7 @@ async function createSplitPaymentIntent(params) {
     },
     { idempotencyKey }
   );
-  await db.execute(sql8`
+  await db.execute(sql9`
     UPDATE revenue_events
     SET metadata = metadata || ${{ stripePaymentIntentId: intent.id }}::jsonb
     WHERE id = ${revenueEventId}
@@ -9261,7 +9585,7 @@ async function executeSplits(params) {
         },
         { idempotencyKey }
       );
-      await db.execute(sql8`
+      await db.execute(sql9`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status, stripe_transfer_id, processed_at)
@@ -9273,7 +9597,7 @@ async function executeSplits(params) {
         FROM revenue_events re WHERE re.id = ${revenueEventId}
         ON CONFLICT DO NOTHING
       `);
-      await db.execute(sql8`
+      await db.execute(sql9`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${split.userId}, ${fromCents(split.cents)}, ${fromCents(split.cents)}, '0', ${currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -9285,7 +9609,7 @@ async function executeSplits(params) {
       log("TRANSFER_SUCCESS", { userId: split.userId, cents: split.cents, transferId: transfer.id });
     } catch (err) {
       log("TRANSFER_FAILED", { userId: split.userId, cents: split.cents, error: err.message });
-      await db.execute(sql8`
+      await db.execute(sql9`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status)
@@ -9332,12 +9656,12 @@ function scheduleRetry(job) {
         },
         { idempotencyKey: `${job.idempotencyKey}-retry-${job.attempt}` }
       );
-      await db.execute(sql8`
+      await db.execute(sql9`
         UPDATE payout_records
         SET status = 'completed', stripe_transfer_id = ${transfer.id}, processed_at = NOW()
         WHERE revenue_event_id = ${job.revenueEventId} AND user_id = ${job.userId}
       `);
-      await db.execute(sql8`
+      await db.execute(sql9`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${job.userId}, ${fromCents(job.cents)}, ${fromCents(job.cents)}, '0', ${job.currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -9381,7 +9705,7 @@ var init_payment_service = __esm({
 import express from "express";
 import Stripe3 from "stripe";
 import { z as z8 } from "zod";
-import { sql as sql9 } from "drizzle-orm";
+import { sql as sql10 } from "drizzle-orm";
 function uid(req) {
   return req.user?.claims?.sub ?? "";
 }
@@ -9468,7 +9792,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
-    const rows = await db.execute(sql9`
+    const rows = await db.execute(sql10`
       SELECT
         pr.id                  AS payout_id,
         pr.amount,
@@ -9491,7 +9815,7 @@ function registerPaymentRoutes(app) {
       ORDER BY pr.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `);
-    const initiated = await db.execute(sql9`
+    const initiated = await db.execute(sql10`
       SELECT
         re.id,
         re.source,
@@ -9517,7 +9841,7 @@ function registerPaymentRoutes(app) {
   });
   app.get("/api/payments/balance", isAuthenticated, async (req, res) => {
     const userId = uid(req);
-    const rows = await db.execute(sql9`
+    const rows = await db.execute(sql10`
       SELECT
         ub.total_earned,
         ub.total_paid,
@@ -9557,7 +9881,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);
-      const reRows = await db.execute(sql9`
+      const reRows = await db.execute(sql10`
         SELECT re.*, re.metadata->>'stripePaymentIntentId' AS payment_intent_id
         FROM revenue_events re
         WHERE re.id = ${revenueEventId}
@@ -9571,7 +9895,7 @@ function registerPaymentRoutes(app) {
       if (!event.payment_intent_id) {
         return res.status(400).json({ error: "No Stripe PaymentIntent found for this event" });
       }
-      const payoutRows = await db.execute(sql9`
+      const payoutRows = await db.execute(sql10`
         SELECT stripe_transfer_id, user_id, amount
         FROM payout_records
         WHERE revenue_event_id = ${revenueEventId}
@@ -9588,11 +9912,11 @@ function registerPaymentRoutes(app) {
             }
           );
           reversals.push(reversal.id);
-          await db.execute(sql9`
+          await db.execute(sql10`
             UPDATE payout_records SET status = 'refunded'
             WHERE stripe_transfer_id = ${payout.stripe_transfer_id}
           `);
-          await db.execute(sql9`
+          await db.execute(sql10`
             UPDATE user_balances SET
               total_earned = total_earned - ${payout.amount}::decimal,
               total_paid   = total_paid   - ${payout.amount}::decimal,
@@ -9646,12 +9970,12 @@ function registerPaymentRoutes(app) {
         console.error("[WEBHOOK] Signature verification failed:", err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
       }
-      const idempotencyRows = await db.execute(sql9`
+      const idempotencyRows = await db.execute(sql10`
         SELECT 1 FROM payment_events
         WHERE stripe_event_id = ${event.id} LIMIT 1
       `).catch(() => ({ rows: [] }));
       const alreadyProcessed2 = (idempotencyRows.rows?.length ?? 0) > 0;
-      await db.execute(sql9`
+      await db.execute(sql10`
         INSERT INTO payment_events
           (stripe_event_id, event_type, payload, processed)
         VALUES
@@ -9686,7 +10010,7 @@ function registerPaymentRoutes(app) {
           case "transfer.created": {
             const transfer = event.data.object;
             console.log(`[WEBHOOK] Transfer created: ${transfer.id} \u2192 ${transfer.destination}`);
-            await db.execute(sql9`
+            await db.execute(sql10`
               UPDATE payout_records SET status = 'processing'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -9697,7 +10021,7 @@ function registerPaymentRoutes(app) {
           case "transfer.failed": {
             const transfer = event.data.object;
             console.error(`[WEBHOOK] Transfer failed: ${transfer.id}`);
-            await db.execute(sql9`
+            await db.execute(sql10`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -9708,7 +10032,7 @@ function registerPaymentRoutes(app) {
           case "payout.paid": {
             const payout = event.data.object;
             console.log(`[WEBHOOK] Payout paid: ${payout.id}`);
-            await db.execute(sql9`
+            await db.execute(sql10`
               UPDATE payout_records SET status = 'completed', processed_at = NOW()
               WHERE stripe_transfer_id = ${payout.id}
                  OR stripe_transfer_id IN (
@@ -9724,7 +10048,7 @@ function registerPaymentRoutes(app) {
           case "payout.failed": {
             const payout = event.data.object;
             console.error(`[WEBHOOK] Payout failed: ${payout.id} \u2014 ${payout.failure_message}`);
-            await db.execute(sql9`
+            await db.execute(sql10`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${payout.id}
             `).catch(() => {
@@ -9734,7 +10058,7 @@ function registerPaymentRoutes(app) {
           // ── Account updated → sync onboarding status ─────────────────────
           case "account.updated": {
             const account = event.data.object;
-            await db.execute(sql9`
+            await db.execute(sql10`
               UPDATE users SET
                 stripe_connect_onboarded        = ${account.details_submitted},
                 stripe_connect_charges_enabled  = ${account.charges_enabled},
@@ -9748,7 +10072,7 @@ function registerPaymentRoutes(app) {
           default:
             console.log(`[WEBHOOK] Unhandled event: ${event.type}`);
         }
-        await db.execute(sql9`
+        await db.execute(sql10`
           UPDATE payment_events SET processed = TRUE
           WHERE stripe_event_id = ${event.id}
         `).catch(() => {
@@ -9827,7 +10151,7 @@ var init_adminAuth = __esm({
 
 // server/security-routes.ts
 import { z as z9 } from "zod";
-import { sql as sql10 } from "drizzle-orm";
+import { sql as sql11 } from "drizzle-orm";
 async function registerSecurityRoutes(app) {
   app.post(
     "/api/splits",
@@ -9837,7 +10161,7 @@ async function registerSecurityRoutes(app) {
       const userId = req.user?.claims?.sub;
       try {
         const body = splitSheetSchema.parse(req.body);
-        const prevRows = await db.execute(sql10`
+        const prevRows = await db.execute(sql11`
           SELECT version_number, collaborators, content_hash, created_at
           FROM split_versions
           WHERE contract_id = ${body.contractId}
@@ -9888,7 +10212,7 @@ async function registerSecurityRoutes(app) {
           (s, c) => s + c.ownershipPercentage,
           0
         );
-        const result = await db.execute(sql10`
+        const result = await db.execute(sql11`
           INSERT INTO split_versions
             (contract_id, version_number, content_hash, prev_hash,
              status, collaborators, total_pct, created_by)
@@ -9957,7 +10281,7 @@ async function registerSecurityRoutes(app) {
           `${body.signatureData}${body.signerEmail}${(/* @__PURE__ */ new Date()).toISOString()}`
         );
         const phoneHash = body.kycPhone ? sha256(body.kycPhone) : null;
-        await db.execute(sql10`
+        await db.execute(sql11`
           INSERT INTO split_signatures
             (split_version_id, contract_id, signer_name, signer_email, signer_title,
              signature_data, signature_hash, ip_address, user_agent, mode,
@@ -9977,7 +10301,7 @@ async function registerSecurityRoutes(app) {
             ip_address     = EXCLUDED.ip_address,
             signed_at      = NOW()
         `);
-        const versionRow = await db.execute(sql10`
+        const versionRow = await db.execute(sql11`
           SELECT sv.id, sv.contract_id, sv.version_number, sv.content_hash, sv.prev_hash,
                  sv.total_pct, sv.collaborators,
                  COUNT(ss.id) AS sig_count
@@ -9993,14 +10317,14 @@ async function registerSecurityRoutes(app) {
         if (allSigned) {
           const signedAt = /* @__PURE__ */ new Date();
           const lockExpiry = computeLockExpiry(signedAt);
-          await db.execute(sql10`
+          await db.execute(sql11`
             UPDATE split_versions SET
               status          = 'signed',
               signed_at       = ${signedAt},
               lock_expires_at = ${lockExpiry}
             WHERE id = ${versionId}::uuid AND status IN ('draft','pending_signatures')
           `);
-          await db.execute(sql10`
+          await db.execute(sql11`
             INSERT INTO zk_ownership_proofs
               (contract_id, version_number, content_hash, prev_hash, status,
                total_pct, is_valid, is_finalized, signature_count, collaborator_count, signed_at)
@@ -10009,19 +10333,19 @@ async function registerSecurityRoutes(app) {
                'signed', ${v.total_pct}, TRUE, TRUE, ${actualSigs}, ${requiredSigs}, ${signedAt})
           `);
           setTimeout(async () => {
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE split_versions SET status = 'locked', locked_at = NOW()
               WHERE id = ${versionId}::uuid AND status = 'signed'
             `).catch(() => {
             });
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE zk_ownership_proofs SET locked_at = NOW()
               WHERE contract_id = ${v.contract_id} AND version_number = ${v.version_number}
             `).catch(() => {
             });
           }, 48 * 60 * 60 * 1e3);
         } else {
-          await db.execute(sql10`
+          await db.execute(sql11`
             UPDATE split_versions SET status = 'pending_signatures'
             WHERE id = ${versionId}::uuid AND status = 'draft'
           `);
@@ -10071,7 +10395,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/disputes", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT id, contract_id, dispute_type, status, description,
              freeze_payouts, created_at, updated_at
       FROM disputes
@@ -10111,7 +10435,7 @@ async function registerSecurityRoutes(app) {
       const body = schema.parse(req.body);
       const { raw, hash, prefix } = generateApiKey();
       const scopesLiteral = `{${body.scopes.map((s) => `"${s.replace(/"/g, '\\"')}"`).join(",")}}`;
-      await db.execute(sql10`
+      await db.execute(sql11`
         INSERT INTO api_keys (owner_id, key_hash, key_prefix, name, scopes, expires_at)
         VALUES (${userId}, ${hash}, ${prefix}, ${body.name},
                 ${scopesLiteral}::text[], ${body.expiresAt ?? null}::timestamptz)
@@ -10143,7 +10467,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT id, key_prefix, name, scopes, rate_limit, is_active,
              last_used_at, expires_at, created_at
       FROM api_keys WHERE owner_id = ${userId}
@@ -10153,7 +10477,7 @@ async function registerSecurityRoutes(app) {
   });
   app.delete("/api/api-keys/:id", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    await db.execute(sql10`
+    await db.execute(sql11`
       UPDATE api_keys SET is_active = FALSE
       WHERE id = ${req.params.id}::uuid AND owner_id = ${userId}
     `);
@@ -10178,7 +10502,7 @@ async function registerSecurityRoutes(app) {
     }
   );
   app.get("/api/admin/fraud-events", isAuthenticated, isAdmin, async (_req, res) => {
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe
       LEFT JOIN contract_risk_profiles crp ON crp.contract_id = fe.contract_id
@@ -10190,7 +10514,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/splits/:contractId/history", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT version_number, content_hash, prev_hash, status,
              total_pct, created_at, signed_at, locked_at,
              jsonb_array_length(collaborators) AS collaborator_count
@@ -10204,7 +10528,7 @@ async function registerSecurityRoutes(app) {
   app.get("/api/audit-log", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT id, action, resource_type, resource_id, ip_address, created_at
       FROM audit_log
       WHERE user_id = ${userId}
@@ -10230,7 +10554,7 @@ var init_security_routes = __esm({
 
 // server/compliance-routes.ts
 import { z as z10 } from "zod";
-import { eq as eq6 } from "drizzle-orm";
+import { eq as eq7 } from "drizzle-orm";
 function requireTermsAccepted(req, res, next) {
   const path3 = req.path;
   const isPublicLegalDocRoute = req.method === "GET" && path3.startsWith("/api/legal/documents/");
@@ -10333,7 +10657,7 @@ function registerComplianceRoutes(app) {
       );
       const tosResult = results.find((r) => r.docType === "tos");
       if (tosResult) {
-        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq6(users.id, userId));
+        await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq7(users.id, userId));
       }
       await storage.trackUserActivity(userId, "terms_accepted", {
         docTypes: results.map((r) => r.docType),
@@ -10367,16 +10691,16 @@ function registerComplianceRoutes(app) {
         sentOrReceivedMessages
       ] = await Promise.all([
         storage.getUser(userId),
-        db.select().from(contracts).where(eq6(contracts.createdBy, userId)),
-        db.select().from(contractCollaborators).where(eq6(contractCollaborators.userId, userId)),
-        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq6(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq6(contractCollaborators.userId, userId)),
-        db.select().from(songAssets).where(eq6(songAssets.createdBy, userId)),
-        db.select().from(ownershipRecords).where(eq6(ownershipRecords.userId, userId)),
-        db.select().from(payoutRecords).where(eq6(payoutRecords.userId, userId)),
-        db.select().from(userBalances).where(eq6(userBalances.userId, userId)),
-        db.select().from(userActivity).where(eq6(userActivity.userId, userId)),
-        db.select().from(notifications).where(eq6(notifications.userId, userId)),
-        db.select().from(messages).where(eq6(messages.senderId, userId))
+        db.select().from(contracts).where(eq7(contracts.createdBy, userId)),
+        db.select().from(contractCollaborators).where(eq7(contractCollaborators.userId, userId)),
+        db.select().from(contractSignatures).innerJoin(contractCollaborators, eq7(contractSignatures.collaboratorId, contractCollaborators.id)).where(eq7(contractCollaborators.userId, userId)),
+        db.select().from(songAssets).where(eq7(songAssets.createdBy, userId)),
+        db.select().from(ownershipRecords).where(eq7(ownershipRecords.userId, userId)),
+        db.select().from(payoutRecords).where(eq7(payoutRecords.userId, userId)),
+        db.select().from(userBalances).where(eq7(userBalances.userId, userId)),
+        db.select().from(userActivity).where(eq7(userActivity.userId, userId)),
+        db.select().from(notifications).where(eq7(notifications.userId, userId)),
+        db.select().from(messages).where(eq7(messages.senderId, userId))
       ]);
       await storage.trackUserActivity(userId, "data_export_requested", { requestedAt: (/* @__PURE__ */ new Date()).toISOString() });
       res.setHeader("Content-Disposition", `attachment; filename="splitsheet-data-export-${userId}.json"`);
@@ -10417,7 +10741,7 @@ function registerComplianceRoutes(app) {
         contactInfo: null,
         isActive: false,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq6(users.id, userId));
+      }).where(eq7(users.id, userId));
       await storage.trackUserActivity(userId, "account_deletion_requested", {
         requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
         ipAddress: req.ip
@@ -10464,11 +10788,11 @@ var init_compliance_routes = __esm({
 });
 
 // server/verification-routes.ts
-import crypto6 from "crypto";
+import crypto7 from "crypto";
 import { z as z11 } from "zod";
-import { and as and3, desc as desc3, eq as eq7, gt, isNull } from "drizzle-orm";
+import { and as and4, desc as desc3, eq as eq8, gt, isNull as isNull2 } from "drizzle-orm";
 function generateSixDigitCode() {
-  return crypto6.randomInt(0, 1e6).toString().padStart(6, "0");
+  return crypto7.randomInt(0, 1e6).toString().padStart(6, "0");
 }
 function registerVerificationRoutes(app) {
   app.post("/api/verify/send-code", isAuthenticated, async (req, res) => {
@@ -10519,11 +10843,11 @@ function registerVerificationRoutes(app) {
     try {
       const body = confirmCodeSchema.parse(req.body);
       const [pending] = await db.select().from(verificationCodes).where(
-        and3(
-          eq7(verificationCodes.userId, userId),
-          eq7(verificationCodes.destination, body.destination),
-          eq7(verificationCodes.purpose, body.purpose),
-          isNull(verificationCodes.consumedAt),
+        and4(
+          eq8(verificationCodes.userId, userId),
+          eq8(verificationCodes.destination, body.destination),
+          eq8(verificationCodes.purpose, body.purpose),
+          isNull2(verificationCodes.consumedAt),
           gt(verificationCodes.expiresAt, /* @__PURE__ */ new Date())
         )
       ).orderBy(desc3(verificationCodes.createdAt)).limit(1);
@@ -10536,16 +10860,16 @@ function registerVerificationRoutes(app) {
         return;
       }
       const codeHash = sha256(body.code);
-      const matches = crypto6.timingSafeEqual(
+      const matches = crypto7.timingSafeEqual(
         Buffer.from(codeHash, "hex"),
         Buffer.from(pending.codeHash, "hex")
       );
-      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq7(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ attempts: pending.attempts + 1 }).where(eq8(verificationCodes.id, pending.id));
       if (!matches) {
         res.status(400).json({ error: "Incorrect code." });
         return;
       }
-      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq7(verificationCodes.id, pending.id));
+      await db.update(verificationCodes).set({ consumedAt: /* @__PURE__ */ new Date() }).where(eq8(verificationCodes.id, pending.id));
       await storage.trackUserActivity(userId, "identity_verified", {
         legalName: pending.legalName,
         idType: pending.idType,
@@ -10569,7 +10893,7 @@ function registerVerificationRoutes(app) {
   });
   app.get("/api/verify/status", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const [latest] = await db.select().from(userActivity).where(and3(eq7(userActivity.userId, userId), eq7(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
+    const [latest] = await db.select().from(userActivity).where(and4(eq8(userActivity.userId, userId), eq8(userActivity.activityType, "identity_verified"))).orderBy(desc3(userActivity.createdAt)).limit(1);
     res.json({ verified: Boolean(latest), verifiedAt: latest?.createdAt ?? null });
   });
 }
@@ -10603,10 +10927,10 @@ var init_verification_routes = __esm({
 
 // server/creator-routes.ts
 import { z as z12 } from "zod";
-import crypto7 from "crypto";
+import crypto8 from "crypto";
 async function generateUniqueSlCreatorId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto7.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto8.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slCreatorId = `SL-CREATOR-${shortId}`;
     const existing = await storage.getCreatorBySlCreatorId(slCreatorId);
     if (!existing) return slCreatorId;
@@ -10901,7 +11225,7 @@ var init_legal_routes = __esm({
 });
 
 // server/agreement-ledger.ts
-import { eq as eq8, sql as sql11 } from "drizzle-orm";
+import { eq as eq9, sql as sql12 } from "drizzle-orm";
 function generateSlSongId() {
   const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
   return `SL-SONG-${hex}`;
@@ -10968,7 +11292,7 @@ async function syncAgreementToRightsLedger(contractId, actorId) {
       const existingAssets = await storage.getSongAssetsByContract(contractId);
       assetId = existingAssets[0]?.id;
     }
-    const [latest] = await db.select({ maxVersion: sql11`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq8(licenseRecords.contractId, contractId));
+    const [latest] = await db.select({ maxVersion: sql12`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq9(licenseRecords.contractId, contractId));
     const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
     const [row] = await db.insert(licenseRecords).values({
       contractId,
@@ -11425,10 +11749,10 @@ var init_license_readiness = __esm({
 
 // server/rights-ledger-routes.ts
 import { z as z15 } from "zod";
-import crypto8 from "crypto";
+import crypto9 from "crypto";
 async function generateUniqueSlSongId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto8.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto9.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slSongId = `SL-SONG-${shortId}`;
     const existing = await storage.getSongAssetBySlSongId(slSongId);
     if (!existing) return slSongId;
@@ -11648,13 +11972,13 @@ var init_rights_ledger_routes = __esm({
 });
 
 // server/stripe-subscription-webhook.ts
-import { sql as sql12 } from "drizzle-orm";
+import { sql as sql13 } from "drizzle-orm";
 function isProductionLike2() {
   return isVercelRuntime() || process.env.NODE_ENV === "production" || process.env.LOCAL_DEV === "false";
 }
 async function alreadyProcessed(eventId) {
   try {
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql13`
       SELECT 1 FROM payment_events
       WHERE stripe_event_id = ${eventId}
       LIMIT 1
@@ -11667,7 +11991,7 @@ async function alreadyProcessed(eventId) {
 }
 async function recordEvent(event, processed) {
   try {
-    await db.execute(sql12`
+    await db.execute(sql13`
       INSERT INTO payment_events
         (stripe_event_id, event_type, payload, processed)
       VALUES
@@ -11680,7 +12004,7 @@ async function recordEvent(event, processed) {
 }
 async function markProcessed(eventId) {
   try {
-    await db.execute(sql12`
+    await db.execute(sql13`
       UPDATE payment_events
       SET processed = TRUE
       WHERE stripe_event_id = ${eventId}
@@ -11967,7 +12291,13 @@ async function registerRoutes(app) {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
-      res.json(user);
+      let activeOrganization = null;
+      try {
+        activeOrganization = await resolveActiveOrganization(userId);
+      } catch (orgErr) {
+        console.warn("[auth/user] org resolve skipped:", orgErr);
+      }
+      res.json({ ...user, activeOrganization });
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -12059,16 +12389,19 @@ async function registerRoutes(app) {
           }
         }
       }
+      const activeOrg = await resolveActiveOrganization(userId);
       const contractData = insertContractSchema.parse({
         ...req.body,
         templateId: templateId ?? req.body.templateId ?? null,
         templateVersion: templateVersion ?? null,
         createdBy: userId,
+        organizationId: activeOrg?.organizationId ?? null,
         metadata: {
           ...req.body.metadata || {},
           createdFrom: req.body.metadata?.createdFrom || "template",
           templateType: req.body.type,
-          templateVersion: templateVersion ?? null
+          templateVersion: templateVersion ?? null,
+          organizationId: activeOrg?.organizationId ?? null
         }
       });
       const contract = await storage.createContract(contractData);
@@ -13173,7 +13506,12 @@ async function registerRoutes(app) {
   app.post("/api/assets", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const data = { ...req.body, createdBy: userId };
+      const activeOrg = await resolveActiveOrganization(userId);
+      const data = {
+        ...req.body,
+        createdBy: userId,
+        organizationId: activeOrg?.organizationId ?? null
+      };
       const asset = await storage.createSongAsset(data);
       await storage.trackUserActivity(userId, "asset_created", {
         assetId: asset.id
@@ -13446,14 +13784,14 @@ async function registerRoutes(app) {
       const collaborators = await storage.getContractCollaborators(req.params.id);
       const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
       const newConfirmations = [];
-      const crypto9 = await import("crypto");
+      const crypto10 = await import("crypto");
       for (const collaborator of collaborators) {
         const existing = existingConfirmations.find((c) => c.collaboratorId === collaborator.id);
         if (existing) {
           newConfirmations.push(existing);
           continue;
         }
-        const token = crypto9.randomBytes(32).toString("hex");
+        const token = crypto10.randomBytes(32).toString("hex");
         const confirmation = await storage.createConfirmation({
           contractId: req.params.id,
           collaboratorId: collaborator.id,
@@ -13553,6 +13891,7 @@ var init_routes = __esm({
     init_license_readiness();
     init_stripe_subscription_webhook();
     init_authz_helpers();
+    init_org_context();
     rateLimitStore2 = /* @__PURE__ */ new Map();
     stripe4 = null;
     stripeKey = process.env.STRIPE_SECRET_KEY || process.env.TESTING_STRIPE_SECRET_KEY;
@@ -13641,7 +13980,7 @@ var init_static_serve = __esm({
 });
 
 // server/seedData.ts
-import { eq as eq9 } from "drizzle-orm";
+import { eq as eq10 } from "drizzle-orm";
 async function seedContractTemplates() {
   try {
     console.log("Seeding entertainment agreement template library (MVP-gated)...");
@@ -13691,7 +14030,7 @@ async function seedContractTemplates() {
         isActive: row.isActive,
         template: preserveLegacyJson ? current.template : row.template,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq9(contractTemplates.id, current.id));
+      }).where(eq10(contractTemplates.id, current.id));
       updated += 1;
     }
     console.log(
@@ -13755,9 +14094,9 @@ var init_transport_security = __esm({
 });
 
 // server/db-migrations.ts
-import { sql as sql13 } from "drizzle-orm";
+import { sql as sql14 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
-  await db.execute(sql13`
+  await db.execute(sql14`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS stripe_connect_account_id varchar,
       ADD COLUMN IF NOT EXISTS stripe_connect_onboarded boolean DEFAULT false,
@@ -13765,14 +14104,32 @@ async function runCoreSchemaMigrations() {
       ADD COLUMN IF NOT EXISTS stripe_connect_payouts_enabled boolean DEFAULT false,
       ADD COLUMN IF NOT EXISTS terms_accepted_at timestamp,
       ADD COLUMN IF NOT EXISTS terms_version varchar,
-      ADD COLUMN IF NOT EXISTS auth0_sub varchar;
+      ADD COLUMN IF NOT EXISTS auth0_sub varchar,
+      ADD COLUMN IF NOT EXISTS active_organization_id varchar;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
+    ALTER TABLE contracts
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql14`
+    ALTER TABLE song_assets
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql14`
+    CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
+  `);
+  await db.execute(sql14`
+    CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
+  `);
+  await db.execute(sql14`
+    UPDATE organization_members SET role = 'operator' WHERE role = 'member';
+  `);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL REFERENCES contracts(id),
@@ -13788,7 +14145,7 @@ async function runCoreSchemaMigrations() {
       updated_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS song_assets (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       title       varchar NOT NULL,
@@ -13802,11 +14159,11 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS ownership_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id             varchar NOT NULL REFERENCES song_assets(id),
@@ -13820,13 +14177,13 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     ALTER TABLE ownership_records
       ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
       ADD COLUMN IF NOT EXISTS territory varchar,
       ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS revenue_events (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id     varchar NOT NULL REFERENCES song_assets(id),
@@ -13840,7 +14197,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS payout_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       revenue_event_id     varchar NOT NULL REFERENCES revenue_events(id),
@@ -13855,7 +14212,7 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS user_balances (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -13866,7 +14223,7 @@ async function runCoreSchemaMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS split_confirmations (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL REFERENCES contracts(id),
@@ -13885,7 +14242,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,
@@ -13895,7 +14252,7 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS error_logs (
       id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       level      varchar NOT NULL DEFAULT 'error',
@@ -13907,14 +14264,14 @@ async function runCoreSchemaMigrations() {
       created_at timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS rate_limit_buckets (
       bucket_key varchar PRIMARY KEY,
       count      integer NOT NULL DEFAULT 0,
       reset_at   timestamp NOT NULL
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS organizations (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_org_id   varchar NOT NULL UNIQUE,
@@ -13929,7 +14286,7 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS organization_members (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -13940,9 +14297,9 @@ async function runCoreSchemaMigrations() {
       UNIQUE (organization_id, user_id)
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS organization_api_keys (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -13956,8 +14313,8 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar REFERENCES users(id),
@@ -13973,7 +14330,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS rights_organizations (
       id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       name              varchar NOT NULL,
@@ -13984,7 +14341,7 @@ async function runCoreSchemaMigrations() {
       created_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS creators (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_creator_id varchar NOT NULL UNIQUE,
@@ -14001,8 +14358,8 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS creator_rights_profiles (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -14015,7 +14372,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS composition_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14026,7 +14383,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS master_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14040,7 +14397,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS license_readiness (
       id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14053,7 +14410,7 @@ async function runCoreSchemaMigrations() {
       last_checked_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
     SELECT * FROM (VALUES
       ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
@@ -14074,7 +14431,7 @@ async function runCoreSchemaMigrations() {
   `);
 }
 async function runLegalDocumentMigrations() {
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS legal_documents (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       doc_type       varchar NOT NULL,
@@ -14086,7 +14443,7 @@ async function runLegalDocumentMigrations() {
       UNIQUE (doc_type, version)
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL REFERENCES users(id),
@@ -14097,18 +14454,18 @@ async function runLegalDocumentMigrations() {
       user_agent   varchar
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+  await db.execute(sql14`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
     FROM users u
@@ -14119,7 +14476,7 @@ async function runLegalDocumentMigrations() {
         WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
       );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
     FROM users u
@@ -14132,7 +14489,7 @@ async function runLegalDocumentMigrations() {
   `);
 }
 async function runSecurityEngineMigrations() {
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS split_versions (
       id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar NOT NULL,
@@ -14150,8 +14507,8 @@ async function runSecurityEngineMigrations() {
       UNIQUE (contract_id, version_number)
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS split_signatures (
       id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       split_version_id uuid NOT NULL REFERENCES split_versions(id) ON DELETE CASCADE,
@@ -14172,7 +14529,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (split_version_id, signer_email)
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS fraud_events (
       id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL,
@@ -14185,8 +14542,8 @@ async function runSecurityEngineMigrations() {
       created_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS contract_risk_profiles (
       contract_id        varchar PRIMARY KEY,
       current_score      integer NOT NULL DEFAULT 0,
@@ -14198,7 +14555,7 @@ async function runSecurityEngineMigrations() {
       updated_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS audit_log (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       varchar,
@@ -14214,8 +14571,8 @@ async function runSecurityEngineMigrations() {
       created_at    timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS api_keys (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       owner_id     varchar NOT NULL,
@@ -14230,8 +14587,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS login_events (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL,
@@ -14243,8 +14600,8 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS user_devices (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL,
@@ -14257,7 +14614,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (user_id, device_hash)
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS disputes (
       id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id       varchar NOT NULL,
@@ -14274,8 +14631,8 @@ async function runSecurityEngineMigrations() {
       updated_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS dispute_transitions (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       dispute_id  uuid NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
@@ -14286,7 +14643,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS zk_ownership_proofs (
       proof_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL,
@@ -14306,8 +14663,8 @@ async function runSecurityEngineMigrations() {
       created_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql14`
     ALTER TABLE contract_templates
       ADD COLUMN IF NOT EXISTS slug varchar,
       ADD COLUMN IF NOT EXISTS category varchar,
@@ -14327,14 +14684,14 @@ async function runSecurityEngineMigrations() {
       ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS parent_template_id varchar;
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+  await db.execute(sql14`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS template_version varchar;
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS template_audit_log (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       template_id varchar REFERENCES contract_templates(id),
@@ -14345,7 +14702,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS license_records (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar REFERENCES contracts(id),
@@ -14364,8 +14721,8 @@ async function runSecurityEngineMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS voice_sessions (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL REFERENCES users(id),
@@ -14382,8 +14739,8 @@ async function runSecurityEngineMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS voice_turns (
       id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id            varchar NOT NULL REFERENCES voice_sessions(id),
@@ -14402,8 +14759,8 @@ async function runSecurityEngineMigrations() {
       created_at            timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS voice_pending_actions (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id   varchar NOT NULL REFERENCES voice_sessions(id),
@@ -14420,8 +14777,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
-  await db.execute(sql13`
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS voice_provenance (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id           varchar REFERENCES voice_sessions(id),
@@ -14436,7 +14793,7 @@ async function runSecurityEngineMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`
+  await db.execute(sql14`
     CREATE TABLE IF NOT EXISTS voice_user_memory (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL REFERENCES users(id),
@@ -14449,7 +14806,7 @@ async function runSecurityEngineMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql13`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
+  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }
 var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
 var init_db_migrations = __esm({

@@ -18,9 +18,21 @@ import crypto from "crypto";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import { insertOrganizationSchema, ORGANIZATION_TYPES, ORGANIZATION_ROLES } from "@shared/schema";
+import {
+  ORG_ROLES,
+  normalizeOrgRole,
+  roleAtLeast,
+  permissionsForRole,
+  type OrgRole,
+} from "@shared/org-rbac";
 import { generateApiKey, auditLog } from "./security";
+import {
+  ensurePersonalOrganization,
+  resolveActiveOrganization,
+  setActiveOrganization,
+} from "./org-context";
 
-type OrgRole = (typeof ORGANIZATION_ROLES)[number];
+type LegacyOrgRole = (typeof ORGANIZATION_ROLES)[number];
 
 /** Permanent external ID: SL-ORG-XXXXXXXX (never reused, generated server-side only). */
 async function generateUniqueSlOrgId(): Promise<string> {
@@ -30,16 +42,11 @@ async function generateUniqueSlOrgId(): Promise<string> {
     const existing = await storage.getOrganizationBySlOrgId(slOrgId);
     if (!existing) return slOrgId;
   }
-  // Astronomically unlikely fallback — timestamp guarantees uniqueness.
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 
-/** Role hierarchy for permission checks — higher index = more privileged. */
-const ROLE_RANK: Record<OrgRole, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
-
 function hasRole(role: string | undefined, minimum: OrgRole): boolean {
-  if (!role || !(role in ROLE_RANK)) return false;
-  return ROLE_RANK[role as OrgRole] >= ROLE_RANK[minimum];
+  return roleAtLeast(role, minimum);
 }
 
 interface OrgScopedRequest extends Request {
@@ -85,15 +92,55 @@ export function registerOrganizationRoutes(app: Express): void {
   // ORGANIZATIONS
   // ══════════════════════════════════════════════════════════════════════════
 
-  // List organizations the current user belongs to
+  // List organizations the current user belongs to (array — backward compatible)
   app.get("/api/organizations", isAuthenticated, async (req: Request, res: Response) => {
     const userId = (req as any).user.claims.sub;
     try {
+      await ensurePersonalOrganization(userId);
       const orgs = await storage.getOrganizationsForUser(userId);
       res.json(orgs);
     } catch (error) {
       console.error("[ORG LIST ERROR]", error);
       res.status(500).json({ message: "Failed to fetch organizations" });
+    }
+  });
+
+  // Active tenant for the current operator session context
+  app.get("/api/me/organization", isAuthenticated, async (req: Request, res: Response) => {
+    const userId = (req as any).user.claims.sub;
+    try {
+      const active = await resolveActiveOrganization(userId);
+      if (!active) {
+        res.status(404).json({ message: "No organization available" });
+        return;
+      }
+      res.json({
+        ...active,
+        permissions: permissionsForRole(active.role),
+        roles: ORG_ROLES,
+      });
+    } catch (error) {
+      console.error("[ACTIVE ORG GET]", error);
+      res.status(500).json({ message: "Failed to resolve active organization" });
+    }
+  });
+
+  app.post("/api/me/organization", isAuthenticated, async (req: Request, res: Response) => {
+    const userId = (req as any).user.claims.sub;
+    try {
+      const organizationId = String(req.body?.organizationId || "");
+      if (!organizationId) {
+        res.status(400).json({ message: "organizationId is required" });
+        return;
+      }
+      const active = await setActiveOrganization(userId, organizationId);
+      res.json({
+        ...active,
+        permissions: permissionsForRole(active.role),
+      });
+    } catch (error: any) {
+      const status = error?.status || 500;
+      res.status(status).json({ message: error?.message || "Failed to set active organization" });
     }
   });
 
@@ -201,8 +248,13 @@ export function registerOrganizationRoutes(app: Express): void {
       const actingUserId = (req as any).user.claims.sub;
       try {
         const body = z
-          .object({ userId: z.string().min(1), role: z.enum(ORGANIZATION_ROLES).default("member") })
+          .object({
+            userId: z.string().min(1),
+            role: z.enum(ORGANIZATION_ROLES).default("operator"),
+          })
           .parse(req.body);
+
+        const role = normalizeOrgRole(body.role) || "operator";
 
         const existing = await storage.getOrganizationMember(req.params.id, body.userId);
         if (existing) {
@@ -213,7 +265,7 @@ export function registerOrganizationRoutes(app: Express): void {
         const member = await storage.addOrganizationMember({
           organizationId: req.params.id,
           userId: body.userId,
-          role: body.role,
+          role,
           invitedBy: actingUserId,
         } as any);
 
@@ -222,7 +274,7 @@ export function registerOrganizationRoutes(app: Express): void {
           action: "organization.member_add",
           resourceType: "organization",
           resourceId: req.params.id,
-          afterState: { addedUserId: body.userId, role: body.role },
+          afterState: { addedUserId: body.userId, role },
           ipAddress: (req as any).ip,
         });
 
@@ -246,7 +298,12 @@ export function registerOrganizationRoutes(app: Express): void {
     requireOrgRole("owner"),
     async (req: Request, res: Response) => {
       try {
-        const { role } = z.object({ role: z.enum(ORGANIZATION_ROLES) }).parse(req.body);
+        const { role: rawRole } = z.object({ role: z.enum(ORGANIZATION_ROLES) }).parse(req.body);
+        const role = normalizeOrgRole(rawRole);
+        if (!role) {
+          res.status(400).json({ message: "Invalid role" });
+          return;
+        }
         const updated = await storage.updateOrganizationMemberRole(req.params.memberId, role);
         res.json(updated);
       } catch (error) {

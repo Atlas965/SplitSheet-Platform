@@ -38,12 +38,30 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS stripe_connect_payouts_enabled boolean DEFAULT false,
       ADD COLUMN IF NOT EXISTS terms_accepted_at timestamp,
       ADD COLUMN IF NOT EXISTS terms_version varchar,
-      ADD COLUMN IF NOT EXISTS auth0_sub varchar;
+      ADD COLUMN IF NOT EXISTS auth0_sub varchar,
+      ADD COLUMN IF NOT EXISTS active_organization_id varchar;
   `);
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
+  `);
+  await db.execute(sql`
+    ALTER TABLE contracts
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql`
+    ALTER TABLE song_assets
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
+  `);
+  await db.execute(sql`
+    UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
 
   await db.execute(sql`

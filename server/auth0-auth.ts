@@ -334,6 +334,13 @@ export async function registerAuth0Auth(app: Express): Promise<void> {
         access_token: tokens.access_token,
       } as Express.User);
 
+      try {
+        const { ensurePersonalOrganization } = await import("./org-context");
+        await ensurePersonalOrganization(userId);
+      } catch (orgErr) {
+        console.warn("[auth/auth0] personal org ensure skipped:", orgErr);
+      }
+
       res.redirect("/");
     } catch (err: any) {
       console.error("[auth/auth0] callback failed:", err);

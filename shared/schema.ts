@@ -45,6 +45,8 @@ export const users = pgTable("users", {
   role: varchar("role").default("user"), // user, admin
   /** Auth0 subject (`sub`) — links Universal Login identity without destroying legacy ids */
   auth0Sub: varchar("auth0_sub"),
+  /** Currently selected tenant for operator session context */
+  activeOrganizationId: varchar("active_organization_id"),
   // Stripe Connect Express — per-contributor payout account
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
   stripeConnectOnboarded: boolean("stripe_connect_onboarded").default(false),
@@ -189,6 +191,8 @@ export const contracts = pgTable("contracts", {
   /** Snapshot of template version at creation time */
   templateVersion: varchar("template_version"),
   createdBy: varchar("created_by").references(() => users.id).notNull(),
+  /** Tenant that owns this agreement/project (Phase 3 multi-tenant) */
+  organizationId: varchar("organization_id"),
   data: jsonb("data").notNull(), // Contract form data
   metadata: jsonb("metadata"), // Additional metadata
   createdAt: timestamp("created_at").defaultNow(),
@@ -327,6 +331,8 @@ export const songAssets = pgTable("song_assets", {
   slSongId: varchar("sl_song_id").unique(), // permanent external ID: SL-SONG-XXXXXXXX
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   contractId: varchar("contract_id").references(() => contracts.id),
+  /** Tenant that owns this ledger asset */
+  organizationId: varchar("organization_id"),
   status: varchar("status").default("active"), // active, archived
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -454,7 +460,7 @@ export const organizationMembers = pgTable("organization_members", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").references(() => organizations.id).notNull(),
   userId: varchar("user_id").references(() => users.id).notNull(),
-  role: varchar("role").notNull().default("member"), // owner, admin, member, viewer
+  role: varchar("role").notNull().default("operator"), // owner, admin, operator, reviewer, finance, viewer
   invitedBy: varchar("invited_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -476,7 +482,16 @@ export const organizationApiKeys = pgTable("organization_api_keys", {
 });
 
 export const ORGANIZATION_TYPES = ["label", "studio", "publisher", "distributor", "pro"] as const;
-export const ORGANIZATION_ROLES = ["owner", "admin", "member", "viewer"] as const;
+/** @deprecated Prefer ORG_ROLES from shared/org-rbac.ts — kept for insert schema compat */
+export const ORGANIZATION_ROLES = [
+  "owner",
+  "admin",
+  "operator",
+  "reviewer",
+  "finance",
+  "viewer",
+  "member", // legacy alias accepted on write → normalized to operator
+] as const;
 
 // ─── GLOBAL RIGHTS FRAMEWORK ─────────────────────────────────────────────────
 // Territories and right-types are closed enums (TypeScript consts), not DB

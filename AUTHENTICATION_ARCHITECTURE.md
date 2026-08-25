@@ -371,3 +371,18 @@ Phase 1 hardening is implemented in code. Redeploy Production, then manually ver
 **Manual steps required before claiming Auth0 works in Production:** create Auth0 Regular Web App, set callbacks, add Vercel env vars, switch `AUTH_PROVIDER=auth0`, redeploy, test login/logout.
 
 **Not done yet:** Phase 3 org tenancy expansion, Phase 4 full RBAC matrix, enterprise SSO/SCIM.
+
+---
+
+## 20. Phase 3 — Organization / tenant architecture (implemented structures)
+
+| Item | Result |
+| --- | --- |
+| RBAC catalog | `shared/org-rbac.ts` — owner/admin/operator/reviewer/finance/viewer + permissions |
+| Active org | `users.active_organization_id` + `GET/POST /api/me/organization` |
+| Personal workspace | `ensurePersonalOrganization()` on login / org list / auth user |
+| Resource columns | `contracts.organization_id`, `song_assets.organization_id` (stamped on create) |
+| Legacy `member` role | Migrated/normalized to `operator` |
+| Docs | `docs/AUTHORIZATION.md` |
+
+**Not claimed:** Full permission middleware on all APIs (Phase 4) or org-only IDOR (Phase 5). `createdBy` checks still apply for many routes.
