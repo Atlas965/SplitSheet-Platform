@@ -37,7 +37,13 @@ export async function runCoreSchemaMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS stripe_connect_charges_enabled boolean DEFAULT false,
       ADD COLUMN IF NOT EXISTS stripe_connect_payouts_enabled boolean DEFAULT false,
       ADD COLUMN IF NOT EXISTS terms_accepted_at timestamp,
-      ADD COLUMN IF NOT EXISTS terms_version varchar;
+      ADD COLUMN IF NOT EXISTS terms_version varchar,
+      ADD COLUMN IF NOT EXISTS auth0_sub varchar;
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
+      ON users (auth0_sub)
+      WHERE auth0_sub IS NOT NULL;
   `);
 
   await db.execute(sql`

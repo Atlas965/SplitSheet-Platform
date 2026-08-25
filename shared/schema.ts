@@ -43,6 +43,8 @@ export const users = pgTable("users", {
   subscriptionStatus: varchar("subscription_status").default("free"),
   subscriptionTier: varchar("subscription_tier").default("free"), // free, pro, label
   role: varchar("role").default("user"), // user, admin
+  /** Auth0 subject (`sub`) — links Universal Login identity without destroying legacy ids */
+  auth0Sub: varchar("auth0_sub"),
   // Stripe Connect Express — per-contributor payout account
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
   stripeConnectOnboarded: boolean("stripe_connect_onboarded").default(false),

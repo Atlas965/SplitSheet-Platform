@@ -32,6 +32,15 @@ export function hasSocialCredentials(): boolean {
   );
 }
 
+/** True when Auth0 Universal Login credentials are configured. */
+export function hasAuth0Credentials(): boolean {
+  return Boolean(
+    process.env.AUTH0_DOMAIN &&
+      process.env.AUTH0_CLIENT_ID &&
+      process.env.AUTH0_CLIENT_SECRET,
+  );
+}
+
 /**
  * Operator / passwordless local login.
  * Never auto-enabled on Vercel/production — only AUTH_PROVIDER=local
@@ -47,21 +56,38 @@ export function useLocalAuthProvider(): boolean {
   if (
     process.env.AUTH_PROVIDER === "replit" ||
     process.env.AUTH_PROVIDER === "oidc" ||
-    process.env.AUTH_PROVIDER === "social"
+    process.env.AUTH_PROVIDER === "social" ||
+    process.env.AUTH_PROVIDER === "auth0"
   ) {
     return false;
   }
-  if (hasSocialCredentials()) return false;
-  // Do NOT fall back to passwordless local on Vercel when misconfigured.
+  if (hasAuth0Credentials() || hasSocialCredentials()) return false;
+  return false;
+}
+
+export function useAuth0Provider(): boolean {
+  if (process.env.AUTH_PROVIDER === "auth0") return true;
+  if (
+    process.env.AUTH_PROVIDER === "local" ||
+    process.env.AUTH_PROVIDER === "social" ||
+    process.env.AUTH_PROVIDER === "replit" ||
+    process.env.AUTH_PROVIDER === "oidc"
+  ) {
+    return false;
+  }
+  // Auto: prefer Auth0 when configured (long-term IdP), else social.
+  if (hasAuth0Credentials()) return true;
   return false;
 }
 
 export function useSocialAuthProvider(): boolean {
   if (process.env.AUTH_PROVIDER === "social") return true;
+  if (process.env.AUTH_PROVIDER === "auth0") return false;
   if (process.env.AUTH_PROVIDER === "local") return false;
   if (process.env.AUTH_PROVIDER === "replit" || process.env.AUTH_PROVIDER === "oidc") {
     return false;
   }
+  if (hasAuth0Credentials()) return false;
   return hasSocialCredentials();
 }
 

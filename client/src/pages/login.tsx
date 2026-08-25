@@ -11,6 +11,12 @@ type Provider = {
 };
 
 const PROVIDER_STYLES: Record<string, { bg: string; text: string; border: string; icon: string }> = {
+  auth0: {
+    bg: "bg-slate-900 hover:bg-slate-800",
+    text: "text-white",
+    border: "border-slate-900",
+    icon: "",
+  },
   google: {
     bg: "bg-white hover:bg-slate-50",
     text: "text-slate-900",
@@ -38,6 +44,13 @@ const PROVIDER_STYLES: Record<string, { bg: string; text: string; border: string
 };
 
 function ProviderIcon({ id }: { id: string }) {
+  if (id === "auth0") {
+    return (
+      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+        <path d="M21.98 7.448L19.62 0H4.347L2.02 7.448c-1.352 4.155.1 8.52 3.698 11.105L12 24l6.282-5.447c3.598-2.585 5.05-6.95 3.698-11.105zM12 16.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z" />
+      </svg>
+    );
+  }
   if (id === "apple") {
     return (
       <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>

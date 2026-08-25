@@ -353,6 +353,21 @@ Phase 1 hardening is implemented in code. Redeploy Production, then manually ver
 | Terms check on prod-like | Fail closed (503) if DB check errors |
 | Unit tests | `server/__tests__/runtime-auth.test.ts` (passed locally) |
 
-**Remaining Phase 1 risks:** SameSite=Lax only (no CSRF tokens); org-scoped RBAC still incomplete; Auth0 not introduced; contributor consent versions not recorded; not all routes ownership-audited.
+**Remaining Phase 1 risks:** SameSite=Lax only (no CSRF tokens); org-scoped RBAC still incomplete; contributor consent versions not recorded; not all routes ownership-audited.
 
-**Next:** Phase 2 (Auth0) only after Production redeploy verification of Phase 1.
+---
+
+## 19. Phase 2 — Auth0 (implemented in code — requires manual Auth0 + Vercel config)
+
+| Item | Result |
+| --- | --- |
+| Auth0 OIDC + PKCE | `server/auth0-auth.ts` — `/api/auth/auth0` + callback |
+| Session after Auth0 | `establishSession()`; logout → Auth0 `/v2/logout` |
+| User link | `users.auth0_sub` + id `auth0:{sub}` |
+| Dual-run | Keep `AUTH_PROVIDER=social` until Auth0 verified; then `AUTH_PROVIDER=auth0` |
+| Docs | `docs/AUTHENTICATION.md` |
+| MFA / Google via Auth0 | **Configured in Auth0 Dashboard** (not built in SplitSheet) |
+
+**Manual steps required before claiming Auth0 works in Production:** create Auth0 Regular Web App, set callbacks, add Vercel env vars, switch `AUTH_PROVIDER=auth0`, redeploy, test login/logout.
+
+**Not done yet:** Phase 3 org tenancy expansion, Phase 4 full RBAC matrix, enterprise SSO/SCIM.

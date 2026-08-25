@@ -14,6 +14,8 @@ import {
   isProductionLike,
   useLocalAuthProvider,
   useSocialAuthProvider,
+  useAuth0Provider,
+  hasAuth0Credentials,
 } from "./runtime";
 import {
   registerSocialAuth,
@@ -21,6 +23,7 @@ import {
   hasAnySocialProvider,
   listSocialProviders,
 } from "./social-auth";
+import { registerAuth0Auth } from "./auth0-auth";
 import { establishSession, destroySession } from "./session-security";
 import { createPgRateLimiter } from "./security";
 
@@ -291,12 +294,28 @@ async function setupReplitOidcAuth(app: Express) {
   });
 }
 
+async function setupAuth0Auth(app: Express) {
+  mountSessionStack(app);
+  await registerAuth0Auth(app);
+}
+
 export async function setupAuth(app: Express) {
   if (useLocalAuth) {
     console.log(
       "[auth] Using AUTH_PROVIDER=local (operator login via /api/login?local=1)",
     );
     await setupLocalDevAuth(app);
+    return;
+  }
+
+  if (useAuth0Provider()) {
+    if (!hasAuth0Credentials()) {
+      throw new Error(
+        "AUTH_PROVIDER=auth0 (or auto) but AUTH0_DOMAIN / AUTH0_CLIENT_ID / AUTH0_CLIENT_SECRET are missing.",
+      );
+    }
+    console.log("[auth] Using Auth0 Universal Login");
+    await setupAuth0Auth(app);
     return;
   }
 

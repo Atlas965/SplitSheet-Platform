@@ -3,10 +3,10 @@
  * Prevents opaque Vercel FUNCTION_INVOCATION_FAILED crashes during getApp().
  */
 import {
-  isVercelRuntime,
   isProductionLike,
   useLocalAuthProvider,
   hasSocialCredentials,
+  hasAuth0Credentials,
   allowLocalAuthInProduction,
 } from "./runtime";
 
@@ -39,11 +39,22 @@ export function assertRuntimeEnv(): void {
 
     if (useLocalAuth) {
       // Explicit break-glass local operator login
+    } else if (process.env.AUTH_PROVIDER === "auth0") {
+      if (!hasAuth0Credentials()) {
+        missing.push("AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET");
+      }
+      if (!process.env.APP_URL && !process.env.AUTH0_BASE_URL) {
+        missing.push("APP_URL (or AUTH0_BASE_URL) for Auth0 callbacks");
+      }
     } else if (process.env.AUTH_PROVIDER === "social") {
       if (!hasSocialCredentials()) {
         missing.push(
           "GOOGLE_CLIENT_ID/SECRET (or GitHub/Microsoft/Apple) — required when AUTH_PROVIDER=social",
         );
+      }
+    } else if (hasAuth0Credentials()) {
+      if (!process.env.APP_URL && !process.env.AUTH0_BASE_URL) {
+        missing.push("APP_URL (or AUTH0_BASE_URL) for Auth0 callbacks");
       }
     } else if (hasSocialCredentials()) {
       // credentials present — social auth will be used
@@ -51,7 +62,7 @@ export function assertRuntimeEnv(): void {
       if (!process.env.REPL_ID) missing.push("REPL_ID");
       if (!process.env.REPLIT_DOMAINS) {
         missing.push(
-          "REPLIT_DOMAINS (hostname only) — or set AUTH_PROVIDER=social with OAuth credentials",
+          "REPLIT_DOMAINS — or set AUTH_PROVIDER=auth0 / social with credentials",
         );
       }
     }

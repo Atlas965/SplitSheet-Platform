@@ -75,6 +75,7 @@ export function requireTermsAccepted(req: Request, res: Response, next: NextFunc
     path.startsWith("/api/auth/apple") ||
     path.startsWith("/api/auth/github") ||
     path.startsWith("/api/auth/microsoft") ||
+    path.startsWith("/api/auth/auth0") ||
     path === "/api/auth/providers";
   if (
     !path.startsWith("/api/") ||

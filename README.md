@@ -80,7 +80,7 @@ Do these before or during the counsel phase — nothing more unless counsel asks
 | Frontend | React + TypeScript, Vite, Wouter, TanStack Query, Shadcn/Radix |
 | Backend | Express (TypeScript), deployed as Vercel serverless (`api/index.js`) |
 | Database | PostgreSQL (Neon) + Drizzle ORM — schema in `shared/schema.ts` |
-| Auth | Session cookies (Postgres store); social OAuth (Google, etc.) and/or local operator login |
+| Auth | Session cookies (Postgres); **Auth0 Universal Login** (`AUTH_PROVIDER=auth0`) or direct social OAuth; local break-glass only |
 | Payments | Stripe Checkout + webhooks (`/api/stripe/webhook`) |
 | PDFs | Client-side jsPDF |
 
@@ -139,10 +139,11 @@ Cancel-at-period-end is supported through Stripe subscription handling.
 | `DATABASE_URL` / `NEON_DATABASE_URL` | Postgres |
 | `SESSION_SECRET` | Session signing |
 | `APP_URL` | Canonical URL (e.g. `https://splitsheet.ca`) |
-| `AUTH_PROVIDER` | `social` or `local` |
+| `AUTH_PROVIDER` | `auth0` (recommended), `social`, or `local` (break-glass) |
+| `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` | Auth0 Universal Login |
 | `ALLOW_LOCAL_AUTH_IN_PRODUCTION` | Break-glass only; required with `AUTH_PROVIDER=local` on Vercel/production |
 | `ALLOW_EMAIL_ACCOUNT_LINKING` | Optional; default off (safer) |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google login (Web client; redirect `https://splitsheet.ca/api/auth/google/callback`) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Direct Google login when `AUTH_PROVIDER=social` |
 | `STRIPE_SECRET_KEY` / price IDs / webhook secrets | Billing |
 | `LOCAL_DEV` | `false` on Vercel |
 

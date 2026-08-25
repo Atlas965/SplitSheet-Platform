@@ -25,8 +25,16 @@ const OAUTH_ENV_KEYS = [
   "APPLE_TEAM_ID",
   "APPLE_KEY_ID",
   "APPLE_PRIVATE_KEY",
+  "AUTH0_DOMAIN",
+  "AUTH0_CLIENT_ID",
+  "AUTH0_CLIENT_SECRET",
+  "AUTH0_AUDIENCE",
+  "AUTH0_BASE_URL",
+  "AUTH0_ISSUER_BASE_URL",
   "APP_URL",
   "AUTH_PROVIDER",
+  "ALLOW_LOCAL_AUTH_IN_PRODUCTION",
+  "ALLOW_EMAIL_ACCOUNT_LINKING",
 ] as const;
 
 function sanitizeOAuthEnv(): void {
@@ -48,11 +56,16 @@ function applyRuntimeDefaults(): void {
     process.env.DATABASE_URL = process.env.NEON_DATABASE_URL;
   }
 
-  // Vercel: prefer social OAuth when credentials exist; otherwise local operator login.
+  // Vercel: prefer Auth0, then social OAuth; never default to passwordless local.
   if (
     (process.env.VERCEL === "1" || process.env.VERCEL === "true") &&
     !process.env.AUTH_PROVIDER
   ) {
+    const hasAuth0 = Boolean(
+      process.env.AUTH0_DOMAIN &&
+        process.env.AUTH0_CLIENT_ID &&
+        process.env.AUTH0_CLIENT_SECRET,
+    );
     const hasSocial = Boolean(
       (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) ||
         (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) ||
@@ -62,7 +75,9 @@ function applyRuntimeDefaults(): void {
           process.env.APPLE_KEY_ID &&
           process.env.APPLE_PRIVATE_KEY),
     );
-    process.env.AUTH_PROVIDER = hasSocial ? "social" : "local";
+    if (hasAuth0) process.env.AUTH_PROVIDER = "auth0";
+    else if (hasSocial) process.env.AUTH_PROVIDER = "social";
+    // else leave unset — boot-check / setupAuth will fail closed in production
   }
 
   // Corporate networks / SSL inspection can block Neon WebSocket TLS locally.
