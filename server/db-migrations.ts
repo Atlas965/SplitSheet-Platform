@@ -185,6 +185,27 @@ export async function runCoreSchemaMigrations(): Promise<void> {
   `);
 
   await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS revoked_at timestamp;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consumed_at timestamp;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consent_versions jsonb;
+  `);
+  await db.execute(sql`
+    ALTER TABLE legal_acceptances
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql`
+    ALTER TABLE organizations
+      ADD COLUMN IF NOT EXISTS stripe_customer_id varchar;
+  `);
+
+  await db.execute(sql`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,

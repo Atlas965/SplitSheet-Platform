@@ -422,10 +422,16 @@ export const splitConfirmations = pgTable("split_confirmations", {
   contractId: varchar("contract_id").references(() => contracts.id).notNull(),
   collaboratorId: varchar("collaborator_id").references(() => contractCollaborators.id).notNull(),
   token: varchar("token").notNull().unique(),
-  status: varchar("status").default("not_sent"), // not_sent, sent, confirmed, change_requested
+  status: varchar("status").default("not_sent"), // not_sent, sent, confirmed, change_requested, revoked
   sentAt: timestamp("sent_at"),
   confirmedAt: timestamp("confirmed_at"),
   expiresAt: timestamp("expires_at"),
+  /** Phase 6 — operator revoke; public link must fail closed */
+  revokedAt: timestamp("revoked_at"),
+  /** Phase 6 — set when contributor successfully confirms (one-shot consume) */
+  consumedAt: timestamp("consumed_at"),
+  /** Phase 6 — legal doc versions accepted at confirm time (e.g. contributor_consent) */
+  consentVersions: jsonb("consent_versions"),
   confirmedName: varchar("confirmed_name"),
   confirmedEmail: varchar("confirmed_email"),
   confirmationNote: text("confirmation_note"),
@@ -450,6 +456,8 @@ export const organizations = pgTable("organizations", {
   country: varchar("country"),
   createdBy: varchar("created_by").references(() => users.id).notNull(),
   isActive: boolean("is_active").default(true),
+  /** Phase 12 — optional Stripe customer for org-level billing (user-level still default) */
+  stripeCustomerId: varchar("stripe_customer_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -662,6 +670,8 @@ export const legalDocuments = pgTable("legal_documents", {
 export const legalAcceptances = pgTable("legal_acceptances", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id).notNull(),
+  /** Phase 7 — optional tenant context when accepted inside an org workspace */
+  organizationId: varchar("organization_id").references(() => organizations.id),
   docType: varchar("doc_type").notNull(),
   version: varchar("version").notNull(),
   acceptedAt: timestamp("accepted_at").defaultNow(),

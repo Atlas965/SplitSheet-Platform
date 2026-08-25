@@ -326,9 +326,19 @@ export async function registerAuth0Auth(app: Express): Promise<void> {
           exp,
           provider: "auth0",
           auth0_sub: auth0Sub,
+          amr: claims.amr,
+          acr: claims.acr,
+          mfa: Array.isArray(claims.amr)
+            ? (claims.amr as string[]).some((v) => String(v).toLowerCase().includes("mfa"))
+            : false,
         },
         expires_at: exp,
         provider: "auth0",
+        amr: claims.amr,
+        acr: claims.acr,
+        mfa: Array.isArray(claims.amr)
+          ? (claims.amr as string[]).some((v) => String(v).toLowerCase().includes("mfa"))
+          : false,
         // Keep refresh only in server session — never expose to clients
         refresh_token: tokens.refresh_token,
         access_token: tokens.access_token,
@@ -341,9 +351,31 @@ export async function registerAuth0Auth(app: Express): Promise<void> {
         console.warn("[auth/auth0] personal org ensure skipped:", orgErr);
       }
 
+      try {
+        const { logAuthEvent, AUTH_EVENTS } = await import("./auth-events");
+        await logAuthEvent({
+          action: AUTH_EVENTS.LOGIN_SUCCESS,
+          userId,
+          afterState: { provider: "auth0", mfa: !!(Array.isArray(claims.amr) && (claims.amr as string[]).some((v) => /mfa/i.test(String(v)))) },
+          req,
+        });
+      } catch {
+        /* audit best-effort */
+      }
+
       res.redirect("/");
     } catch (err: any) {
       console.error("[auth/auth0] callback failed:", err);
+      try {
+        const { logAuthEvent, AUTH_EVENTS } = await import("./auth-events");
+        await logAuthEvent({
+          action: AUTH_EVENTS.LOGIN_FAILURE,
+          afterState: { provider: "auth0" },
+          req,
+        });
+      } catch {
+        /* ignore */
+      }
       loginFailure(res, oauthErrorMessage(err, "Auth0 sign-in failed"));
     }
   });
@@ -357,6 +389,13 @@ export async function registerAuth0Auth(app: Express): Promise<void> {
     const domain = (process.env.AUTH0_DOMAIN || "")
       .replace(/^https?:\/\//, "")
       .replace(/\/$/, "");
+    const userId = (req as any).user?.claims?.sub;
+    try {
+      const { logAuthEvent, AUTH_EVENTS } = await import("./auth-events");
+      await logAuthEvent({ action: AUTH_EVENTS.LOGOUT, userId, afterState: { provider: "auth0" }, req });
+    } catch {
+      /* ignore */
+    }
     await destroySession(req, res);
     const logout = new URL(`https://${domain}/v2/logout`);
     logout.searchParams.set("client_id", clientId);

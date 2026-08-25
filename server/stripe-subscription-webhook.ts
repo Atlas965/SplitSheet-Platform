@@ -29,6 +29,21 @@ function isProductionLike(): boolean {
   );
 }
 
+/** Exported for unit tests — production must refuse unsigned webhooks. */
+export function webhookRequiresSignature(): boolean {
+  return isProductionLike();
+}
+
+export const STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS = [
+  "checkout.session.completed",
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "invoice.paid",
+  "invoice.payment_succeeded",
+  "invoice.payment_failed",
+] as const;
+
 async function alreadyProcessed(eventId: string): Promise<boolean> {
   try {
     const rows = await db.execute(sql`
@@ -288,6 +303,3 @@ export async function handleSubscriptionWebhook(
     res.status(500).json({ error: "Webhook processing failed" });
   }
 }
-
-/** Events to enable in Stripe Dashboard for this endpoint. */
-export const STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS = [...SUBSCRIPTION_EVENTS];

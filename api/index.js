@@ -603,10 +603,16 @@ var init_schema = __esm({
       collaboratorId: varchar("collaborator_id").references(() => contractCollaborators.id).notNull(),
       token: varchar("token").notNull().unique(),
       status: varchar("status").default("not_sent"),
-      // not_sent, sent, confirmed, change_requested
+      // not_sent, sent, confirmed, change_requested, revoked
       sentAt: timestamp("sent_at"),
       confirmedAt: timestamp("confirmed_at"),
       expiresAt: timestamp("expires_at"),
+      /** Phase 6 — operator revoke; public link must fail closed */
+      revokedAt: timestamp("revoked_at"),
+      /** Phase 6 — set when contributor successfully confirms (one-shot consume) */
+      consumedAt: timestamp("consumed_at"),
+      /** Phase 6 — legal doc versions accepted at confirm time (e.g. contributor_consent) */
+      consentVersions: jsonb("consent_versions"),
       confirmedName: varchar("confirmed_name"),
       confirmedEmail: varchar("confirmed_email"),
       confirmationNote: text("confirmation_note"),
@@ -627,6 +633,8 @@ var init_schema = __esm({
       country: varchar("country"),
       createdBy: varchar("created_by").references(() => users.id).notNull(),
       isActive: boolean("is_active").default(true),
+      /** Phase 12 — optional Stripe customer for org-level billing (user-level still default) */
+      stripeCustomerId: varchar("stripe_customer_id"),
       createdAt: timestamp("created_at").defaultNow(),
       updatedAt: timestamp("updated_at").defaultNow()
     });
@@ -806,6 +814,8 @@ var init_schema = __esm({
     legalAcceptances = pgTable("legal_acceptances", {
       id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
       userId: varchar("user_id").references(() => users.id).notNull(),
+      /** Phase 7 — optional tenant context when accepted inside an org workspace */
+      organizationId: varchar("organization_id").references(() => organizations.id),
       docType: varchar("doc_type").notNull(),
       version: varchar("version").notNull(),
       acceptedAt: timestamp("accepted_at").defaultNow(),
@@ -2887,6 +2897,75 @@ var init_org_rbac = __esm({
   }
 });
 
+// server/confirmation-token-policy.ts
+var confirmation_token_policy_exports = {};
+__export(confirmation_token_policy_exports, {
+  ensureContributorTokenSchema: () => ensureContributorTokenSchema,
+  ensureLegalOrgAcceptanceSchema: () => ensureLegalOrgAcceptanceSchema,
+  ensureOrgStripeCustomerSchema: () => ensureOrgStripeCustomerSchema,
+  evaluateConfirmationToken: () => evaluateConfirmationToken
+});
+import { sql as sql4 } from "drizzle-orm";
+function evaluateConfirmationToken(row, opts = {}) {
+  if (row.revoked_at) {
+    return {
+      ok: false,
+      status: 410,
+      error: "This confirmation link was revoked. Ask the operator for a new link."
+    };
+  }
+  if (row.expires_at && new Date(row.expires_at) < /* @__PURE__ */ new Date()) {
+    return {
+      ok: false,
+      status: 410,
+      error: "This confirmation link has expired. Ask the operator to resend."
+    };
+  }
+  if (opts.forSubmit && row.consumed_at && row.status === "confirmed") {
+    return { ok: true };
+  }
+  if (row.status === "revoked") {
+    return {
+      ok: false,
+      status: 410,
+      error: "This confirmation link was revoked. Ask the operator for a new link."
+    };
+  }
+  return { ok: true };
+}
+async function ensureContributorTokenSchema() {
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS revoked_at timestamp;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consumed_at timestamp;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consent_versions jsonb;
+  `);
+}
+async function ensureLegalOrgAcceptanceSchema() {
+  await db.execute(sql4`
+    ALTER TABLE legal_acceptances
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+}
+async function ensureOrgStripeCustomerSchema() {
+  await db.execute(sql4`
+    ALTER TABLE organizations
+      ADD COLUMN IF NOT EXISTS stripe_customer_id varchar;
+  `);
+}
+var init_confirmation_token_policy = __esm({
+  "server/confirmation-token-policy.ts"() {
+    "use strict";
+    init_db();
+  }
+});
+
 // server/org-context.ts
 var org_context_exports = {};
 __export(org_context_exports, {
@@ -2899,7 +2978,7 @@ __export(org_context_exports, {
   setActiveOrganization: () => setActiveOrganization
 });
 import crypto2 from "crypto";
-import { eq as eq2, and as and2, isNull as isNull2, sql as sql4 } from "drizzle-orm";
+import { eq as eq2, and as and2, isNull as isNull2, sql as sql5 } from "drizzle-orm";
 async function generateUniqueSlOrgId() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const shortId = crypto2.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
@@ -2910,27 +2989,35 @@ async function generateUniqueSlOrgId() {
   return `SL-ORG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 async function ensureOrgTenantSchema() {
-  await db.execute(sql4`
+  await db.execute(sql5`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS active_organization_id varchar;
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
   `);
-  await db.execute(sql4`
+  await db.execute(sql5`
     UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
+  const {
+    ensureContributorTokenSchema: ensureContributorTokenSchema2,
+    ensureLegalOrgAcceptanceSchema: ensureLegalOrgAcceptanceSchema2,
+    ensureOrgStripeCustomerSchema: ensureOrgStripeCustomerSchema2
+  } = await Promise.resolve().then(() => (init_confirmation_token_policy(), confirmation_token_policy_exports));
+  await ensureContributorTokenSchema2();
+  await ensureLegalOrgAcceptanceSchema2();
+  await ensureOrgStripeCustomerSchema2();
 }
 async function ensurePersonalOrganization(userId) {
   await ensureOrgTenantSchema();
@@ -3653,10 +3740,59 @@ var init_social_auth = __esm({
   }
 });
 
+// server/auth-events.ts
+var auth_events_exports = {};
+__export(auth_events_exports, {
+  AUTH_EVENTS: () => AUTH_EVENTS,
+  logAuthEvent: () => logAuthEvent
+});
+function clientMeta(req) {
+  if (!req) return {};
+  return {
+    ipAddress: req.ip || req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || req.socket?.remoteAddress,
+    userAgent: req.headers["user-agent"]?.toString(),
+    requestId: req.requestId
+  };
+}
+async function logAuthEvent(input) {
+  const safeAfter = input.afterState ? Object.fromEntries(
+    Object.entries(input.afterState).filter(
+      ([k]) => !/token|secret|password|code|refresh|authorization/i.test(k)
+    )
+  ) : void 0;
+  await auditLog({
+    userId: input.userId ?? void 0,
+    action: input.action,
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    afterState: safeAfter,
+    ...clientMeta(input.req)
+  });
+}
+var AUTH_EVENTS;
+var init_auth_events = __esm({
+  "server/auth-events.ts"() {
+    "use strict";
+    init_security();
+    AUTH_EVENTS = {
+      LOGIN_SUCCESS: "AUTH_LOGIN_SUCCESS",
+      LOGIN_FAILURE: "AUTH_LOGIN_FAILURE",
+      LOGOUT: "AUTH_LOGOUT",
+      MFA_REQUIRED: "AUTH_MFA_REQUIRED",
+      MFA_SATISFIED: "AUTH_MFA_SATISFIED",
+      SESSION_ESTABLISHED: "AUTH_SESSION_ESTABLISHED",
+      CONFIRM_VIEW: "AUTH_CONFIRM_VIEW",
+      CONFIRM_SUBMIT: "AUTH_CONFIRM_SUBMIT",
+      CONFIRM_REVOKE: "AUTH_CONFIRM_REVOKE",
+      TERMS_ACCEPT: "AUTH_TERMS_ACCEPT"
+    };
+  }
+});
+
 // server/auth0-auth.ts
 import * as client2 from "openid-client";
 import { eq as eq4 } from "drizzle-orm";
-import { sql as sql5 } from "drizzle-orm";
+import { sql as sql6 } from "drizzle-orm";
 function hasAuth0Credentials2() {
   return Boolean(
     process.env.AUTH0_DOMAIN && process.env.AUTH0_CLIENT_ID && process.env.AUTH0_CLIENT_SECRET
@@ -3709,11 +3845,11 @@ function readAuth0Cookie(req) {
   return void 0;
 }
 async function ensureAuth0Schema() {
-  await db.execute(sql5`
+  await db.execute(sql6`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS auth0_sub varchar;
   `);
-  await db.execute(sql5`
+  await db.execute(sql6`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
@@ -3892,10 +4028,16 @@ async function registerAuth0Auth(app) {
           profile_image_url: claims.picture || null,
           exp,
           provider: "auth0",
-          auth0_sub: auth0Sub
+          auth0_sub: auth0Sub,
+          amr: claims.amr,
+          acr: claims.acr,
+          mfa: Array.isArray(claims.amr) ? claims.amr.some((v) => String(v).toLowerCase().includes("mfa")) : false
         },
         expires_at: exp,
         provider: "auth0",
+        amr: claims.amr,
+        acr: claims.acr,
+        mfa: Array.isArray(claims.amr) ? claims.amr.some((v) => String(v).toLowerCase().includes("mfa")) : false,
         // Keep refresh only in server session — never expose to clients
         refresh_token: tokens.refresh_token,
         access_token: tokens.access_token
@@ -3906,9 +4048,28 @@ async function registerAuth0Auth(app) {
       } catch (orgErr) {
         console.warn("[auth/auth0] personal org ensure skipped:", orgErr);
       }
+      try {
+        const { logAuthEvent: logAuthEvent2, AUTH_EVENTS: AUTH_EVENTS2 } = await Promise.resolve().then(() => (init_auth_events(), auth_events_exports));
+        await logAuthEvent2({
+          action: AUTH_EVENTS2.LOGIN_SUCCESS,
+          userId,
+          afterState: { provider: "auth0", mfa: !!(Array.isArray(claims.amr) && claims.amr.some((v) => /mfa/i.test(String(v)))) },
+          req
+        });
+      } catch {
+      }
       res.redirect("/");
     } catch (err) {
       console.error("[auth/auth0] callback failed:", err);
+      try {
+        const { logAuthEvent: logAuthEvent2, AUTH_EVENTS: AUTH_EVENTS2 } = await Promise.resolve().then(() => (init_auth_events(), auth_events_exports));
+        await logAuthEvent2({
+          action: AUTH_EVENTS2.LOGIN_FAILURE,
+          afterState: { provider: "auth0" },
+          req
+        });
+      } catch {
+      }
       loginFailure2(res, oauthErrorMessage2(err, "Auth0 sign-in failed"));
     }
   });
@@ -3918,6 +4079,12 @@ async function registerAuth0Auth(app) {
   app.get("/api/logout", async (req, res) => {
     const returnTo = appBaseUrl2(req);
     const domain = (process.env.AUTH0_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    const userId = req.user?.claims?.sub;
+    try {
+      const { logAuthEvent: logAuthEvent2, AUTH_EVENTS: AUTH_EVENTS2 } = await Promise.resolve().then(() => (init_auth_events(), auth_events_exports));
+      await logAuthEvent2({ action: AUTH_EVENTS2.LOGOUT, userId, afterState: { provider: "auth0" }, req });
+    } catch {
+    }
     await destroySession(req, res);
     const logout = new URL(`https://${domain}/v2/logout`);
     logout.searchParams.set("client_id", clientId);
@@ -4953,7 +5120,7 @@ var init_rbac_middleware = __esm({
 
 // server/confirmation-routes.ts
 import crypto4 from "crypto";
-import { sql as sql6 } from "drizzle-orm";
+import { sql as sql7 } from "drizzle-orm";
 function generateToken() {
   return crypto4.randomBytes(32).toString("hex");
 }
@@ -4966,6 +5133,9 @@ function getIp(req) {
 function registerConfirmationRoutes(app) {
   const confirmPublicLimiter = createPgRateLimiter(40, 6e4, "confirm-public");
   app.use("/api/confirm", confirmPublicLimiter);
+  void ensureContributorTokenSchema().catch(
+    (err) => console.warn("[confirm] schema ensure skipped:", err)
+  );
   app.post(
     "/api/contracts/:id/generate-confirmations",
     ...requireActivePermission("agreement.send"),
@@ -4976,7 +5146,7 @@ function registerConfirmationRoutes(app) {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
         const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
-        const collabRows = await db.execute(sql6`
+        const collabRows = await db.execute(sql7`
           SELECT id, name, email, role, ownership_percentage
           FROM contract_collaborators
           WHERE contract_id = ${contractId}
@@ -4990,7 +5160,7 @@ function registerConfirmationRoutes(app) {
         const results = [];
         const expires = expiresAt72h();
         for (const collab of collaborators) {
-          const existing = await db.execute(sql6`
+          const existing = await db.execute(sql7`
             SELECT id, token, status FROM split_confirmations
             WHERE contract_id = ${contractId}
               AND collaborator_id = ${collab.id}
@@ -4998,15 +5168,19 @@ function registerConfirmationRoutes(app) {
           `);
           if (existing.rows.length > 0) {
             const row = existing.rows[0];
-            await db.execute(sql6`
+            await db.execute(sql7`
               UPDATE split_confirmations
-              SET expires_at = ${expires}, updated_at = NOW()
+              SET expires_at = ${expires},
+                  revoked_at = NULL,
+                  consumed_at = NULL,
+                  status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
+                  updated_at = NOW()
               WHERE id = ${row.id}
             `);
             results.push({ collaboratorId: collab.id, name: collab.name, token: row.token, status: row.status, isNew: false });
           } else {
             const token = generateToken();
-            await db.execute(sql6`
+            await db.execute(sql7`
               INSERT INTO split_confirmations
                 (contract_id, collaborator_id, token, status, expires_at)
               VALUES
@@ -5033,7 +5207,7 @@ function registerConfirmationRoutes(app) {
               const delivery = await sendEmail({ to: collab.email, ...template });
               emailSent = delivery.delivered;
               if (delivery.delivered) {
-                await db.execute(sql6`
+                await db.execute(sql7`
                   UPDATE split_confirmations
                   SET status = 'sent', sent_at = NOW(), updated_at = NOW()
                   WHERE contract_id = ${contractId} AND collaborator_id = ${r.collaboratorId}
@@ -5073,7 +5247,7 @@ function registerConfirmationRoutes(app) {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
         const contract = { title: owned.title, status: owned.status };
-        const rows = await db.execute(sql6`
+        const rows = await db.execute(sql7`
           SELECT
             sc.id,
             sc.token,
@@ -5149,7 +5323,7 @@ function registerConfirmationRoutes(app) {
       try {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
-        const result = await db.execute(sql6`
+        const result = await db.execute(sql7`
           UPDATE split_confirmations
           SET status = 'sent', sent_at = NOW(), updated_at = NOW()
           WHERE id = ${confirmId}
@@ -5167,16 +5341,55 @@ function registerConfirmationRoutes(app) {
       }
     }
   );
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/revoke",
+    ...requireActivePermission("agreement.send"),
+    async (req, res) => {
+      const { id: contractId, confirmId } = req.params;
+      const userId = req.user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const result = await db.execute(sql7`
+          UPDATE split_confirmations
+          SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+          WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
+            AND status != 'confirmed'
+          RETURNING id
+        `);
+        if (!result.rows.length) {
+          res.status(404).json({
+            error: "Confirmation not found or already confirmed (cannot revoke confirmed)"
+          });
+          return;
+        }
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_REVOKE,
+          userId,
+          resourceType: "split_confirmation",
+          resourceId: confirmId,
+          afterState: { contractId },
+          req
+        });
+        res.json({ revoked: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
   app.get(
     "/api/confirm/:contractId/:token",
     async (req, res) => {
       const { contractId, token } = req.params;
       try {
-        const rows = await db.execute(sql6`
+        const rows = await db.execute(sql7`
           SELECT
             sc.id,
             sc.status,
             sc.expires_at,
+            sc.revoked_at,
+            sc.consumed_at,
             sc.confirmed_at,
             sc.collaborator_id,
             cc.name   AS collaborator_name,
@@ -5198,8 +5411,9 @@ function registerConfirmationRoutes(app) {
           return;
         }
         const row = rows.rows[0];
-        if (row.expires_at && new Date(row.expires_at) < /* @__PURE__ */ new Date()) {
-          res.status(410).json({ error: "This confirmation link has expired. Ask the operator to resend." });
+        const gate = evaluateConfirmationToken(row);
+        if (!gate.ok) {
+          res.status(gate.status).json({ error: gate.error });
           return;
         }
         if (row.status === "confirmed") {
@@ -5211,12 +5425,25 @@ function registerConfirmationRoutes(app) {
           });
           return;
         }
-        const allCollabs = await db.execute(sql6`
+        const allCollabs = await db.execute(sql7`
           SELECT name, role, ownership_percentage
           FROM contract_collaborators
           WHERE contract_id = ${contractId}
           ORDER BY created_at ASC
         `);
+        let contributorConsentVersion = null;
+        try {
+          const consent = await storage.getLatestLegalDocument("contributor_consent");
+          contributorConsentVersion = consent?.version ?? null;
+        } catch {
+        }
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_VIEW,
+          resourceType: "split_confirmation",
+          resourceId: row.id,
+          afterState: { contractId },
+          req
+        });
         res.json({
           alreadyConfirmed: false,
           confirmationId: row.id,
@@ -5226,6 +5453,7 @@ function registerConfirmationRoutes(app) {
           collaboratorRole: row.role,
           ownershipPercentage: Number(row.ownership_percentage),
           expiresAt: row.expires_at,
+          contributorConsentVersion,
           allCollaborators: allCollabs.rows.map((c) => ({
             name: c.name,
             role: c.role,
@@ -5248,8 +5476,9 @@ function registerConfirmationRoutes(app) {
         return;
       }
       try {
-        const rows = await db.execute(sql6`
-          SELECT sc.id, sc.status, sc.expires_at, cc.name AS collab_name, c.title AS contract_title
+        const rows = await db.execute(sql7`
+          SELECT sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at,
+                 cc.name AS collab_name, c.title AS contract_title
           FROM split_confirmations sc
           JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
           JOIN contracts c ON c.id = sc.contract_id
@@ -5262,18 +5491,35 @@ function registerConfirmationRoutes(app) {
           return;
         }
         const row = rows.rows[0];
-        if (row.expires_at && new Date(row.expires_at) < /* @__PURE__ */ new Date()) {
-          res.status(410).json({ error: "This link has expired. Ask the operator to resend." });
+        const gate = evaluateConfirmationToken(row, { forSubmit: true });
+        if (!gate.ok) {
+          res.status(gate.status).json({ error: gate.error });
           return;
         }
         if (row.status === "confirmed" && action === "confirm") {
           res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
           return;
         }
+        if (row.consumed_at && action === "request_change") {
+          res.status(410).json({
+            error: "This confirmation was already completed and cannot be changed via this link."
+          });
+          return;
+        }
         const newStatus = action === "confirm" ? "confirmed" : "change_requested";
         const ip = getIp(req);
         const ua = req.headers["user-agent"] ?? null;
-        await db.execute(sql6`
+        let consentVersions = null;
+        try {
+          const consent = await storage.getLatestLegalDocument("contributor_consent");
+          if (consent?.version) {
+            consentVersions = { contributor_consent: consent.version };
+          }
+        } catch {
+        }
+        const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
+        const consumedAt = action === "confirm" ? /* @__PURE__ */ new Date() : null;
+        await db.execute(sql7`
           UPDATE split_confirmations SET
             status           = ${newStatus},
             confirmed_name   = ${name ?? null},
@@ -5282,24 +5528,35 @@ function registerConfirmationRoutes(app) {
             ip_address       = ${ip},
             user_agent       = ${ua},
             confirmed_at     = NOW(),
+            consumed_at      = COALESCE(${consumedAt}, consumed_at),
+            consent_versions = COALESCE(${consentJson}::jsonb, consent_versions),
             updated_at       = NOW()
           WHERE id = ${row.id}
+            AND revoked_at IS NULL
         `);
         if (action === "confirm") {
-          const pendingRows = await db.execute(sql6`
+          const pendingRows = await db.execute(sql7`
             SELECT COUNT(*) AS cnt
             FROM split_confirmations
             WHERE contract_id = ${contractId}
               AND status != 'confirmed'
+              AND (revoked_at IS NULL)
           `);
           const remaining = Number(pendingRows.rows[0]?.cnt ?? 1);
           if (remaining === 0) {
-            await db.execute(sql6`
+            await db.execute(sql7`
               UPDATE contracts SET status = 'signed', updated_at = NOW()
               WHERE id = ${contractId}
             `);
           }
         }
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_SUBMIT,
+          resourceType: "split_confirmation",
+          resourceId: row.id,
+          afterState: { contractId, action: newStatus, hasConsentVersions: !!consentVersions },
+          req
+        });
         res.json({
           success: true,
           action: newStatus,
@@ -5321,6 +5578,8 @@ var init_confirmation_routes = __esm({
     init_security();
     init_authz_helpers();
     init_rbac_middleware();
+    init_confirmation_token_policy();
+    init_auth_events();
   }
 });
 
@@ -8515,7 +8774,7 @@ var init_voice_routes = __esm({
 // server/service-routes.ts
 import crypto5 from "crypto";
 import { z as z5 } from "zod";
-import { sql as sql7 } from "drizzle-orm";
+import { sql as sql8 } from "drizzle-orm";
 function generateToken2() {
   return crypto5.randomBytes(32).toString("hex");
 }
@@ -8779,7 +9038,7 @@ function registerServiceRoutes(app) {
       const collabs = await storage.getContractCollaborators(req.params.id);
       const enriched = await Promise.all(
         collabs.map(async (c) => {
-          const confRows = await db.execute(sql7`
+          const confRows = await db.execute(sql8`
             SELECT token, status, confirmed_at, expires_at
             FROM split_confirmations
             WHERE contract_id = ${req.params.id} AND collaborator_id = ${c.id}
@@ -8921,7 +9180,7 @@ function registerServiceRoutes(app) {
       const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
       const links = [];
       for (const collab of collabs) {
-        const existing = await db.execute(sql7`
+        const existing = await db.execute(sql8`
           SELECT id, token, status FROM split_confirmations
           WHERE contract_id = ${contractId} AND collaborator_id = ${collab.id}
           LIMIT 1
@@ -8930,12 +9189,12 @@ function registerServiceRoutes(app) {
         if (existing.rows.length > 0) {
           const row = existing.rows[0];
           token = row.token;
-          await db.execute(sql7`
+          await db.execute(sql8`
             UPDATE split_confirmations SET expires_at = ${expires}, updated_at = NOW() WHERE id = ${row.id}
           `);
         } else {
           token = generateToken2();
-          await db.execute(sql7`
+          await db.execute(sql8`
             INSERT INTO split_confirmations (contract_id, collaborator_id, token, status, expires_at)
             VALUES (${contractId}, ${collab.id}, ${token}, 'not_sent', ${expires})
           `);
@@ -8979,6 +9238,60 @@ var init_service_routes = __esm({
       ipi: z5.string().max(20).optional(),
       ownershipPercentage: z5.union([z5.string(), z5.number()])
     });
+  }
+});
+
+// server/mfa-policy.ts
+function mfaEnforcementEnabled() {
+  return process.env.REQUIRE_MFA_FOR_ORG_ADMINS === "true" || process.env.REQUIRE_MFA_FOR_ORG_ADMINS === "1";
+}
+function sessionHasMfa(req) {
+  const user = req.user;
+  if (!user) return false;
+  if (user.mfa === true || user.claims?.mfa === true) return true;
+  const amr = user.amr || user.claims?.amr;
+  if (Array.isArray(amr) && amr.some((v) => String(v).toLowerCase().includes("mfa"))) {
+    return true;
+  }
+  const acr = String(user.acr || user.claims?.acr || "");
+  if (/mfa|multi/i.test(acr)) return true;
+  return false;
+}
+function requireMfaForPrivilegedOrgRoles(minimum = "admin") {
+  return async (req, res, next) => {
+    if (!mfaEnforcementEnabled()) return next();
+    const role = req.orgAuth?.role;
+    if (!role || !roleAtLeast(role, minimum)) return next();
+    if (sessionHasMfa(req)) {
+      await logAuthEvent({
+        action: AUTH_EVENTS.MFA_SATISFIED,
+        userId: req.orgAuth?.userId,
+        resourceType: "organization",
+        resourceId: req.orgAuth?.organizationId,
+        req
+      });
+      return next();
+    }
+    await logAuthEvent({
+      action: AUTH_EVENTS.MFA_REQUIRED,
+      userId: req.orgAuth?.userId,
+      resourceType: "organization",
+      resourceId: req.orgAuth?.organizationId,
+      afterState: { role, minimum },
+      req
+    });
+    res.status(403).json({
+      message: "Multi-factor authentication required for this organization role",
+      code: "MFA_REQUIRED",
+      hint: "Complete MFA via Auth0 Universal Login, then retry."
+    });
+  };
+}
+var init_mfa_policy = __esm({
+  "server/mfa-policy.ts"() {
+    "use strict";
+    init_org_rbac();
+    init_auth_events();
   }
 });
 
@@ -9090,6 +9403,7 @@ function registerOrganizationRoutes(app) {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("admin"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req, res) => {
       try {
         const updates = insertOrganizationSchema.pick({ name: true, email: true, website: true, country: true }).partial().parse(req.body);
@@ -9119,6 +9433,7 @@ function registerOrganizationRoutes(app) {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requirePermission("org.members.manage"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req, res) => {
       const actingUserId = req.user.claims.sub;
       try {
@@ -9162,6 +9477,7 @@ function registerOrganizationRoutes(app) {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("owner"),
+    requireMfaForPrivilegedOrgRoles("owner"),
     async (req, res) => {
       try {
         const { role: rawRole } = z6.object({ role: z6.enum(ORGANIZATION_ROLES) }).parse(req.body);
@@ -9217,6 +9533,7 @@ function registerOrganizationRoutes(app) {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("admin"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req, res) => {
       const userId = req.user.claims.sub;
       try {
@@ -9282,6 +9599,42 @@ var init_organization_routes = __esm({
     init_security();
     init_org_context();
     init_rbac_middleware();
+    init_mfa_policy();
+  }
+});
+
+// server/enterprise-stubs.ts
+function registerEnterpriseStubs(app) {
+  app.get("/api/enterprise/sso/status", requireAuth, (_req, res) => {
+    res.status(501).json({
+      ...STUB,
+      feature: "sso",
+      auth0Hint: "Configure an Enterprise connection in Auth0; set AUTH_PROVIDER=auth0."
+    });
+  });
+  app.post("/api/enterprise/sso/acs", (_req, res) => {
+    res.status(501).json({ ...STUB, feature: "sso_acs" });
+  });
+  app.get("/api/enterprise/scim/Users", requireAuth, (_req, res) => {
+    res.status(501).json({ ...STUB, feature: "scim_users" });
+  });
+  app.post("/api/enterprise/scim/Users", requireAuth, (_req, res) => {
+    res.status(501).json({ ...STUB, feature: "scim_users_create" });
+  });
+  app.get("/api/enterprise/scim/Groups", requireAuth, (_req, res) => {
+    res.status(501).json({ ...STUB, feature: "scim_groups" });
+  });
+}
+var STUB;
+var init_enterprise_stubs = __esm({
+  "server/enterprise-stubs.ts"() {
+    "use strict";
+    init_rbac_middleware();
+    STUB = {
+      code: "ENTERPRISE_NOT_ENABLED",
+      message: "Enterprise SSO/SCIM is not enabled. Use Auth0 Enterprise connections when contracted; SplitSheet does not host an IdP.",
+      docs: "/docs/ENTERPRISE_SSO_SCIM.md"
+    };
   }
 });
 
@@ -9450,10 +9803,10 @@ var init_message_routes = __esm({
 
 // server/stripe-connect.ts
 import Stripe from "stripe";
-import { sql as sql8 } from "drizzle-orm";
+import { sql as sql9 } from "drizzle-orm";
 async function createConnectAccount(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql8`
+  const rows = await db.execute(sql9`
     SELECT id, email, first_name, last_name,
            stripe_connect_account_id,
            stripe_connect_onboarded
@@ -9492,7 +9845,7 @@ async function createConnectAccount(req, res) {
       metadata: { splitsheet_user_id: userId }
     });
     accountId = account.id;
-    await db.execute(sql8`
+    await db.execute(sql9`
       UPDATE users
       SET stripe_connect_account_id = ${accountId},
           stripe_connect_onboarded  = FALSE
@@ -9514,7 +9867,7 @@ async function createConnectAccount(req, res) {
 }
 async function getConnectStatus(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql8`
+  const rows = await db.execute(sql9`
     SELECT stripe_connect_account_id, stripe_connect_onboarded,
            stripe_connect_charges_enabled, stripe_connect_payouts_enabled
     FROM users WHERE id = ${userId} LIMIT 1
@@ -9528,7 +9881,7 @@ async function getConnectStatus(req, res) {
   const onboarded = account.details_submitted;
   const chargesEnabled = account.charges_enabled;
   const payoutsEnabled = account.payouts_enabled;
-  await db.execute(sql8`
+  await db.execute(sql9`
     UPDATE users SET
       stripe_connect_onboarded        = ${onboarded},
       stripe_connect_charges_enabled  = ${chargesEnabled},
@@ -9547,7 +9900,7 @@ async function getConnectStatus(req, res) {
 }
 async function getConnectDashboardLink(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql8`
+  const rows = await db.execute(sql9`
     SELECT stripe_connect_account_id, stripe_connect_onboarded
     FROM users WHERE id = ${userId} LIMIT 1
   `);
@@ -9573,7 +9926,7 @@ var init_stripe_connect = __esm({
 
 // server/payment-service.ts
 import Stripe2 from "stripe";
-import { sql as sql9 } from "drizzle-orm";
+import { sql as sql10 } from "drizzle-orm";
 function calculateSplits(totalCents, collaborators) {
   const total = collaborators.reduce((s, c) => s + c.ownershipPct, 0);
   if (Math.abs(total - 100) > 0.01) {
@@ -9599,7 +9952,7 @@ function deductPlatformFee(grossCents, feeBps = PLATFORM_FEE_BPS) {
   return { netCents: grossCents - feeCents, feeCents };
 }
 async function enforceAgreement(contractId) {
-  const rows = await db.execute(sql9`
+  const rows = await db.execute(sql10`
     SELECT status, data
     FROM contracts WHERE id = ${contractId} LIMIT 1
   `);
@@ -9611,7 +9964,7 @@ async function enforceAgreement(contractId) {
       reason: `Contract must be signed before payment. Current status: ${contract.status}`
     };
   }
-  const sigRows = await db.execute(sql9`
+  const sigRows = await db.execute(sql10`
     SELECT cc.id, cc.email, cc.name,
            COUNT(cs.id) AS sig_count
     FROM contract_collaborators cc
@@ -9629,7 +9982,7 @@ async function enforceAgreement(contractId) {
   return { allowed: true };
 }
 async function resolvePayees(contractId) {
-  const rows = await db.execute(sql9`
+  const rows = await db.execute(sql10`
     SELECT
       cc.id, cc.name, cc.email,
       cc.ownership_percentage::float AS ownership_pct,
@@ -9670,7 +10023,7 @@ async function createSplitPaymentIntent(params) {
     throw new Error(`Payment blocked: ${enforcement.reason}`);
   }
   const { netCents, feeCents } = deductPlatformFee(grossCents);
-  const revenueResult = await db.execute(sql9`
+  const revenueResult = await db.execute(sql10`
     INSERT INTO revenue_events
       (asset_id, source, amount, currency, description, metadata)
     VALUES
@@ -9696,7 +10049,7 @@ async function createSplitPaymentIntent(params) {
     },
     { idempotencyKey }
   );
-  await db.execute(sql9`
+  await db.execute(sql10`
     UPDATE revenue_events
     SET metadata = metadata || ${{ stripePaymentIntentId: intent.id }}::jsonb
     WHERE id = ${revenueEventId}
@@ -9737,7 +10090,7 @@ async function executeSplits(params) {
         },
         { idempotencyKey }
       );
-      await db.execute(sql9`
+      await db.execute(sql10`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status, stripe_transfer_id, processed_at)
@@ -9749,7 +10102,7 @@ async function executeSplits(params) {
         FROM revenue_events re WHERE re.id = ${revenueEventId}
         ON CONFLICT DO NOTHING
       `);
-      await db.execute(sql9`
+      await db.execute(sql10`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${split.userId}, ${fromCents(split.cents)}, ${fromCents(split.cents)}, '0', ${currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -9761,7 +10114,7 @@ async function executeSplits(params) {
       log("TRANSFER_SUCCESS", { userId: split.userId, cents: split.cents, transferId: transfer.id });
     } catch (err) {
       log("TRANSFER_FAILED", { userId: split.userId, cents: split.cents, error: err.message });
-      await db.execute(sql9`
+      await db.execute(sql10`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status)
@@ -9808,12 +10161,12 @@ function scheduleRetry(job) {
         },
         { idempotencyKey: `${job.idempotencyKey}-retry-${job.attempt}` }
       );
-      await db.execute(sql9`
+      await db.execute(sql10`
         UPDATE payout_records
         SET status = 'completed', stripe_transfer_id = ${transfer.id}, processed_at = NOW()
         WHERE revenue_event_id = ${job.revenueEventId} AND user_id = ${job.userId}
       `);
-      await db.execute(sql9`
+      await db.execute(sql10`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${job.userId}, ${fromCents(job.cents)}, ${fromCents(job.cents)}, '0', ${job.currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -9857,7 +10210,7 @@ var init_payment_service = __esm({
 import express from "express";
 import Stripe3 from "stripe";
 import { z as z8 } from "zod";
-import { sql as sql10 } from "drizzle-orm";
+import { sql as sql11 } from "drizzle-orm";
 function uid(req) {
   return req.user?.claims?.sub ?? "";
 }
@@ -9944,7 +10297,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT
         pr.id                  AS payout_id,
         pr.amount,
@@ -9967,7 +10320,7 @@ function registerPaymentRoutes(app) {
       ORDER BY pr.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `);
-    const initiated = await db.execute(sql10`
+    const initiated = await db.execute(sql11`
       SELECT
         re.id,
         re.source,
@@ -9993,7 +10346,7 @@ function registerPaymentRoutes(app) {
   });
   app.get("/api/payments/balance", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
-    const rows = await db.execute(sql10`
+    const rows = await db.execute(sql11`
       SELECT
         ub.total_earned,
         ub.total_paid,
@@ -10033,7 +10386,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);
-      const reRows = await db.execute(sql10`
+      const reRows = await db.execute(sql11`
         SELECT re.*, re.metadata->>'stripePaymentIntentId' AS payment_intent_id
         FROM revenue_events re
         WHERE re.id = ${revenueEventId}
@@ -10047,7 +10400,7 @@ function registerPaymentRoutes(app) {
       if (!event.payment_intent_id) {
         return res.status(400).json({ error: "No Stripe PaymentIntent found for this event" });
       }
-      const payoutRows = await db.execute(sql10`
+      const payoutRows = await db.execute(sql11`
         SELECT stripe_transfer_id, user_id, amount
         FROM payout_records
         WHERE revenue_event_id = ${revenueEventId}
@@ -10064,11 +10417,11 @@ function registerPaymentRoutes(app) {
             }
           );
           reversals.push(reversal.id);
-          await db.execute(sql10`
+          await db.execute(sql11`
             UPDATE payout_records SET status = 'refunded'
             WHERE stripe_transfer_id = ${payout.stripe_transfer_id}
           `);
-          await db.execute(sql10`
+          await db.execute(sql11`
             UPDATE user_balances SET
               total_earned = total_earned - ${payout.amount}::decimal,
               total_paid   = total_paid   - ${payout.amount}::decimal,
@@ -10122,12 +10475,12 @@ function registerPaymentRoutes(app) {
         console.error("[WEBHOOK] Signature verification failed:", err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
       }
-      const idempotencyRows = await db.execute(sql10`
+      const idempotencyRows = await db.execute(sql11`
         SELECT 1 FROM payment_events
         WHERE stripe_event_id = ${event.id} LIMIT 1
       `).catch(() => ({ rows: [] }));
       const alreadyProcessed2 = (idempotencyRows.rows?.length ?? 0) > 0;
-      await db.execute(sql10`
+      await db.execute(sql11`
         INSERT INTO payment_events
           (stripe_event_id, event_type, payload, processed)
         VALUES
@@ -10162,7 +10515,7 @@ function registerPaymentRoutes(app) {
           case "transfer.created": {
             const transfer = event.data.object;
             console.log(`[WEBHOOK] Transfer created: ${transfer.id} \u2192 ${transfer.destination}`);
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE payout_records SET status = 'processing'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -10173,7 +10526,7 @@ function registerPaymentRoutes(app) {
           case "transfer.failed": {
             const transfer = event.data.object;
             console.error(`[WEBHOOK] Transfer failed: ${transfer.id}`);
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -10184,7 +10537,7 @@ function registerPaymentRoutes(app) {
           case "payout.paid": {
             const payout = event.data.object;
             console.log(`[WEBHOOK] Payout paid: ${payout.id}`);
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE payout_records SET status = 'completed', processed_at = NOW()
               WHERE stripe_transfer_id = ${payout.id}
                  OR stripe_transfer_id IN (
@@ -10200,7 +10553,7 @@ function registerPaymentRoutes(app) {
           case "payout.failed": {
             const payout = event.data.object;
             console.error(`[WEBHOOK] Payout failed: ${payout.id} \u2014 ${payout.failure_message}`);
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${payout.id}
             `).catch(() => {
@@ -10210,7 +10563,7 @@ function registerPaymentRoutes(app) {
           // ── Account updated → sync onboarding status ─────────────────────
           case "account.updated": {
             const account = event.data.object;
-            await db.execute(sql10`
+            await db.execute(sql11`
               UPDATE users SET
                 stripe_connect_onboarded        = ${account.details_submitted},
                 stripe_connect_charges_enabled  = ${account.charges_enabled},
@@ -10224,7 +10577,7 @@ function registerPaymentRoutes(app) {
           default:
             console.log(`[WEBHOOK] Unhandled event: ${event.type}`);
         }
-        await db.execute(sql10`
+        await db.execute(sql11`
           UPDATE payment_events SET processed = TRUE
           WHERE stripe_event_id = ${event.id}
         `).catch(() => {
@@ -10303,7 +10656,7 @@ var init_adminAuth = __esm({
 
 // server/security-routes.ts
 import { z as z9 } from "zod";
-import { sql as sql11 } from "drizzle-orm";
+import { sql as sql12 } from "drizzle-orm";
 async function registerSecurityRoutes(app) {
   app.post(
     "/api/splits",
@@ -10315,7 +10668,7 @@ async function registerSecurityRoutes(app) {
         const body = splitSheetSchema.parse(req.body);
         const owned = await requireOwnedContract(req, res, body.contractId);
         if (!owned) return;
-        const prevRows = await db.execute(sql11`
+        const prevRows = await db.execute(sql12`
           SELECT version_number, collaborators, content_hash, created_at
           FROM split_versions
           WHERE contract_id = ${body.contractId}
@@ -10366,7 +10719,7 @@ async function registerSecurityRoutes(app) {
           (s, c) => s + c.ownershipPercentage,
           0
         );
-        const result = await db.execute(sql11`
+        const result = await db.execute(sql12`
           INSERT INTO split_versions
             (contract_id, version_number, content_hash, prev_hash,
              status, collaborators, total_pct, created_by)
@@ -10435,7 +10788,7 @@ async function registerSecurityRoutes(app) {
           `${body.signatureData}${body.signerEmail}${(/* @__PURE__ */ new Date()).toISOString()}`
         );
         const phoneHash = body.kycPhone ? sha256(body.kycPhone) : null;
-        await db.execute(sql11`
+        await db.execute(sql12`
           INSERT INTO split_signatures
             (split_version_id, contract_id, signer_name, signer_email, signer_title,
              signature_data, signature_hash, ip_address, user_agent, mode,
@@ -10455,7 +10808,7 @@ async function registerSecurityRoutes(app) {
             ip_address     = EXCLUDED.ip_address,
             signed_at      = NOW()
         `);
-        const versionRow = await db.execute(sql11`
+        const versionRow = await db.execute(sql12`
           SELECT sv.id, sv.contract_id, sv.version_number, sv.content_hash, sv.prev_hash,
                  sv.total_pct, sv.collaborators,
                  COUNT(ss.id) AS sig_count
@@ -10471,14 +10824,14 @@ async function registerSecurityRoutes(app) {
         if (allSigned) {
           const signedAt = /* @__PURE__ */ new Date();
           const lockExpiry = computeLockExpiry(signedAt);
-          await db.execute(sql11`
+          await db.execute(sql12`
             UPDATE split_versions SET
               status          = 'signed',
               signed_at       = ${signedAt},
               lock_expires_at = ${lockExpiry}
             WHERE id = ${versionId}::uuid AND status IN ('draft','pending_signatures')
           `);
-          await db.execute(sql11`
+          await db.execute(sql12`
             INSERT INTO zk_ownership_proofs
               (contract_id, version_number, content_hash, prev_hash, status,
                total_pct, is_valid, is_finalized, signature_count, collaborator_count, signed_at)
@@ -10487,19 +10840,19 @@ async function registerSecurityRoutes(app) {
                'signed', ${v.total_pct}, TRUE, TRUE, ${actualSigs}, ${requiredSigs}, ${signedAt})
           `);
           setTimeout(async () => {
-            await db.execute(sql11`
+            await db.execute(sql12`
               UPDATE split_versions SET status = 'locked', locked_at = NOW()
               WHERE id = ${versionId}::uuid AND status = 'signed'
             `).catch(() => {
             });
-            await db.execute(sql11`
+            await db.execute(sql12`
               UPDATE zk_ownership_proofs SET locked_at = NOW()
               WHERE contract_id = ${v.contract_id} AND version_number = ${v.version_number}
             `).catch(() => {
             });
           }, 48 * 60 * 60 * 1e3);
         } else {
-          await db.execute(sql11`
+          await db.execute(sql12`
             UPDATE split_versions SET status = 'pending_signatures'
             WHERE id = ${versionId}::uuid AND status = 'draft'
           `);
@@ -10549,7 +10902,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/disputes", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql12`
       SELECT id, contract_id, dispute_type, status, description,
              freeze_payouts, created_at, updated_at
       FROM disputes
@@ -10589,7 +10942,7 @@ async function registerSecurityRoutes(app) {
       const body = schema.parse(req.body);
       const { raw, hash, prefix } = generateApiKey();
       const scopesLiteral = `{${body.scopes.map((s) => `"${s.replace(/"/g, '\\"')}"`).join(",")}}`;
-      await db.execute(sql11`
+      await db.execute(sql12`
         INSERT INTO api_keys (owner_id, key_hash, key_prefix, name, scopes, expires_at)
         VALUES (${userId}, ${hash}, ${prefix}, ${body.name},
                 ${scopesLiteral}::text[], ${body.expiresAt ?? null}::timestamptz)
@@ -10621,7 +10974,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql12`
       SELECT id, key_prefix, name, scopes, rate_limit, is_active,
              last_used_at, expires_at, created_at
       FROM api_keys WHERE owner_id = ${userId}
@@ -10631,7 +10984,7 @@ async function registerSecurityRoutes(app) {
   });
   app.delete("/api/api-keys/:id", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    await db.execute(sql11`
+    await db.execute(sql12`
       UPDATE api_keys SET is_active = FALSE
       WHERE id = ${req.params.id}::uuid AND owner_id = ${userId}
     `);
@@ -10656,7 +11009,7 @@ async function registerSecurityRoutes(app) {
     }
   );
   app.get("/api/admin/fraud-events", isAuthenticated, isAdmin, async (_req, res) => {
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql12`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe
       LEFT JOIN contract_risk_profiles crp ON crp.contract_id = fe.contract_id
@@ -10669,7 +11022,7 @@ async function registerSecurityRoutes(app) {
   app.get("/api/splits/:contractId/history", ...requireActivePermission("agreement.read"), async (req, res) => {
     const owned = await requireOwnedContract(req, res, req.params.contractId);
     if (!owned) return;
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql12`
       SELECT version_number, content_hash, prev_hash, status,
              total_pct, created_at, signed_at, locked_at,
              jsonb_array_length(collaborators) AS collaborator_count
@@ -10682,7 +11035,7 @@ async function registerSecurityRoutes(app) {
   app.get("/api/audit-log", ...requireActiveOrg(), async (req, res) => {
     const userId = req.user?.claims?.sub;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql12`
       SELECT id, action, resource_type, resource_id, ip_address, created_at
       FROM audit_log
       WHERE user_id = ${userId}
@@ -10794,15 +11147,20 @@ function registerComplianceRoutes(app) {
       // legacy field, ignored — version is always the current published one
     });
     try {
+      await ensureLegalOrgAcceptanceSchema().catch(() => {
+      });
       const { docType } = schema.parse(req.body ?? {});
       const docTypesToAccept = docType ? [docType] : GATED_DOC_TYPES;
       const acceptedAt = /* @__PURE__ */ new Date();
+      const activeOrg = await resolveActiveOrganization(userId).catch(() => null);
+      const organizationId = activeOrg?.organizationId ?? null;
       const results = await Promise.all(
         docTypesToAccept.map(async (dt) => {
           const latestDoc = await storage.getLatestLegalDocument(dt);
           const version = latestDoc?.version ?? CURRENT_TERMS_VERSION;
           await storage.createLegalAcceptance({
             userId,
+            organizationId,
             docType: dt,
             version,
             ipAddress: req.ip,
@@ -10816,18 +11174,31 @@ function registerComplianceRoutes(app) {
         await db.update(users).set({ termsAcceptedAt: acceptedAt, termsVersion: tosResult.version }).where(eq7(users.id, userId));
       }
       await storage.trackUserActivity(userId, "terms_accepted", {
-        docTypes: results.map((r) => r.docType),
-        versions: results.map((r) => r.version),
-        ipAddress: req.ip
+        results,
+        organizationId
       });
-      res.json({ accepted: true, results, acceptedAt });
+      await logAuthEvent({
+        action: AUTH_EVENTS.TERMS_ACCEPT,
+        userId,
+        resourceType: "legal_acceptance",
+        afterState: {
+          docs: results.map((r) => r.docType),
+          organizationId: organizationId ?? void 0
+        },
+        req
+      });
+      res.json({
+        accepted: true,
+        organizationId,
+        results
+      });
     } catch (err) {
       if (err instanceof z10.ZodError) {
-        res.status(400).json({ error: "Invalid request" });
-      } else {
-        logger.error("compliance.accept_terms_failed", { error: err?.message });
-        res.status(500).json({ error: "Failed to record terms acceptance" });
+        res.status(400).json({ error: "Invalid request", issues: err.errors });
+        return;
       }
+      logger.error("compliance.accept_terms_failed", { userId, error: err?.message });
+      res.status(500).json({ error: "Failed to record terms acceptance" });
     }
   });
   app.get("/api/user/export", isAuthenticated, async (req, res) => {
@@ -10926,6 +11297,9 @@ var init_compliance_routes = __esm({
     init_db();
     init_schema();
     init_replitAuth();
+    init_org_context();
+    init_confirmation_token_policy();
+    init_auth_events();
     init_storage();
     init_logger();
     CURRENT_TERMS_VERSION = "2026-07-12";
@@ -11381,7 +11755,7 @@ var init_legal_routes = __esm({
 });
 
 // server/agreement-ledger.ts
-import { eq as eq9, sql as sql12 } from "drizzle-orm";
+import { eq as eq9, sql as sql13 } from "drizzle-orm";
 function generateSlSongId() {
   const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
   return `SL-SONG-${hex}`;
@@ -11448,7 +11822,7 @@ async function syncAgreementToRightsLedger(contractId, actorId) {
       const existingAssets = await storage.getSongAssetsByContract(contractId);
       assetId = existingAssets[0]?.id;
     }
-    const [latest] = await db.select({ maxVersion: sql12`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq9(licenseRecords.contractId, contractId));
+    const [latest] = await db.select({ maxVersion: sql13`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq9(licenseRecords.contractId, contractId));
     const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
     const [row] = await db.insert(licenseRecords).values({
       contractId,
@@ -12115,13 +12489,13 @@ var init_rights_ledger_routes = __esm({
 });
 
 // server/stripe-subscription-webhook.ts
-import { sql as sql13 } from "drizzle-orm";
+import { sql as sql14 } from "drizzle-orm";
 function isProductionLike2() {
   return isVercelRuntime() || process.env.NODE_ENV === "production" || process.env.LOCAL_DEV === "false";
 }
 async function alreadyProcessed(eventId) {
   try {
-    const rows = await db.execute(sql13`
+    const rows = await db.execute(sql14`
       SELECT 1 FROM payment_events
       WHERE stripe_event_id = ${eventId}
       LIMIT 1
@@ -12134,7 +12508,7 @@ async function alreadyProcessed(eventId) {
 }
 async function recordEvent(event, processed) {
   try {
-    await db.execute(sql13`
+    await db.execute(sql14`
       INSERT INTO payment_events
         (stripe_event_id, event_type, payload, processed)
       VALUES
@@ -12147,7 +12521,7 @@ async function recordEvent(event, processed) {
 }
 async function markProcessed(eventId) {
   try {
-    await db.execute(sql13`
+    await db.execute(sql14`
       UPDATE payment_events
       SET processed = TRUE
       WHERE stripe_event_id = ${eventId}
@@ -12323,7 +12697,7 @@ async function handleSubscriptionWebhook(stripe5, req, res) {
     res.status(500).json({ error: "Webhook processing failed" });
   }
 }
-var SUBSCRIPTION_EVENTS, STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS;
+var SUBSCRIPTION_EVENTS;
 var init_stripe_subscription_webhook = __esm({
   "server/stripe-subscription-webhook.ts"() {
     "use strict";
@@ -12339,7 +12713,6 @@ var init_stripe_subscription_webhook = __esm({
       "invoice.payment_succeeded",
       "invoice.payment_failed"
     ]);
-    STRIPE_SUBSCRIPTION_WEBHOOK_EVENTS = [...SUBSCRIPTION_EVENTS];
   }
 });
 
@@ -13906,6 +14279,7 @@ async function registerRoutes(app) {
   registerConfirmationRoutes(app);
   registerServiceRoutes(app);
   registerOrganizationRoutes(app);
+  registerEnterpriseStubs(app);
   registerCreatorRoutes(app);
   registerRightsRoutes(app);
   registerRightsLedgerRoutes(app);
@@ -13934,6 +14308,7 @@ var init_routes = __esm({
     init_voice_routes();
     init_service_routes();
     init_organization_routes();
+    init_enterprise_stubs();
     init_message_routes();
     init_payment_routes();
     init_security_routes();
@@ -14154,9 +14529,9 @@ var init_transport_security = __esm({
 });
 
 // server/db-migrations.ts
-import { sql as sql14 } from "drizzle-orm";
+import { sql as sql15 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
-  await db.execute(sql14`
+  await db.execute(sql15`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS stripe_connect_account_id varchar,
       ADD COLUMN IF NOT EXISTS stripe_connect_onboarded boolean DEFAULT false,
@@ -14167,29 +14542,29 @@ async function runCoreSchemaMigrations() {
       ADD COLUMN IF NOT EXISTS auth0_sub varchar,
       ADD COLUMN IF NOT EXISTS active_organization_id varchar;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL REFERENCES contracts(id),
@@ -14205,7 +14580,7 @@ async function runCoreSchemaMigrations() {
       updated_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS song_assets (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       title       varchar NOT NULL,
@@ -14219,11 +14594,11 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS ownership_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id             varchar NOT NULL REFERENCES song_assets(id),
@@ -14237,13 +14612,13 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     ALTER TABLE ownership_records
       ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
       ADD COLUMN IF NOT EXISTS territory varchar,
       ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS revenue_events (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id     varchar NOT NULL REFERENCES song_assets(id),
@@ -14257,7 +14632,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS payout_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       revenue_event_id     varchar NOT NULL REFERENCES revenue_events(id),
@@ -14272,7 +14647,7 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS user_balances (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -14283,7 +14658,7 @@ async function runCoreSchemaMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS split_confirmations (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL REFERENCES contracts(id),
@@ -14302,7 +14677,27 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS revoked_at timestamp;
+  `);
+  await db.execute(sql15`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consumed_at timestamp;
+  `);
+  await db.execute(sql15`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS consent_versions jsonb;
+  `);
+  await db.execute(sql15`
+    ALTER TABLE legal_acceptances
+      ADD COLUMN IF NOT EXISTS organization_id varchar;
+  `);
+  await db.execute(sql15`
+    ALTER TABLE organizations
+      ADD COLUMN IF NOT EXISTS stripe_customer_id varchar;
+  `);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,
@@ -14312,7 +14707,7 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS error_logs (
       id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       level      varchar NOT NULL DEFAULT 'error',
@@ -14324,14 +14719,14 @@ async function runCoreSchemaMigrations() {
       created_at timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS rate_limit_buckets (
       bucket_key varchar PRIMARY KEY,
       count      integer NOT NULL DEFAULT 0,
       reset_at   timestamp NOT NULL
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS organizations (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_org_id   varchar NOT NULL UNIQUE,
@@ -14346,7 +14741,7 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS organization_members (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -14357,9 +14752,9 @@ async function runCoreSchemaMigrations() {
       UNIQUE (organization_id, user_id)
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS organization_api_keys (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -14373,8 +14768,8 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar REFERENCES users(id),
@@ -14390,7 +14785,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS rights_organizations (
       id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       name              varchar NOT NULL,
@@ -14401,7 +14796,7 @@ async function runCoreSchemaMigrations() {
       created_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS creators (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_creator_id varchar NOT NULL UNIQUE,
@@ -14418,8 +14813,8 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS creator_rights_profiles (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -14432,7 +14827,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS composition_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14443,7 +14838,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS master_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14457,7 +14852,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS license_readiness (
       id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14470,7 +14865,7 @@ async function runCoreSchemaMigrations() {
       last_checked_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
     SELECT * FROM (VALUES
       ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
@@ -14491,7 +14886,7 @@ async function runCoreSchemaMigrations() {
   `);
 }
 async function runLegalDocumentMigrations() {
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS legal_documents (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       doc_type       varchar NOT NULL,
@@ -14503,7 +14898,7 @@ async function runLegalDocumentMigrations() {
       UNIQUE (doc_type, version)
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL REFERENCES users(id),
@@ -14514,18 +14909,18 @@ async function runLegalDocumentMigrations() {
       user_agent   varchar
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+  await db.execute(sql15`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
     FROM users u
@@ -14536,7 +14931,7 @@ async function runLegalDocumentMigrations() {
         WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
       );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
     FROM users u
@@ -14549,7 +14944,7 @@ async function runLegalDocumentMigrations() {
   `);
 }
 async function runSecurityEngineMigrations() {
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS split_versions (
       id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar NOT NULL,
@@ -14567,8 +14962,8 @@ async function runSecurityEngineMigrations() {
       UNIQUE (contract_id, version_number)
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS split_signatures (
       id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       split_version_id uuid NOT NULL REFERENCES split_versions(id) ON DELETE CASCADE,
@@ -14589,7 +14984,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (split_version_id, signer_email)
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS fraud_events (
       id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL,
@@ -14602,8 +14997,8 @@ async function runSecurityEngineMigrations() {
       created_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS contract_risk_profiles (
       contract_id        varchar PRIMARY KEY,
       current_score      integer NOT NULL DEFAULT 0,
@@ -14615,7 +15010,7 @@ async function runSecurityEngineMigrations() {
       updated_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS audit_log (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       varchar,
@@ -14631,8 +15026,8 @@ async function runSecurityEngineMigrations() {
       created_at    timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS api_keys (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       owner_id     varchar NOT NULL,
@@ -14647,8 +15042,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS login_events (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL,
@@ -14660,8 +15055,8 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS user_devices (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL,
@@ -14674,7 +15069,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (user_id, device_hash)
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS disputes (
       id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id       varchar NOT NULL,
@@ -14691,8 +15086,8 @@ async function runSecurityEngineMigrations() {
       updated_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS dispute_transitions (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       dispute_id  uuid NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
@@ -14703,7 +15098,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS zk_ownership_proofs (
       proof_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL,
@@ -14723,8 +15118,8 @@ async function runSecurityEngineMigrations() {
       created_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql15`
     ALTER TABLE contract_templates
       ADD COLUMN IF NOT EXISTS slug varchar,
       ADD COLUMN IF NOT EXISTS category varchar,
@@ -14744,14 +15139,14 @@ async function runSecurityEngineMigrations() {
       ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS parent_template_id varchar;
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+  await db.execute(sql15`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS template_version varchar;
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS template_audit_log (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       template_id varchar REFERENCES contract_templates(id),
@@ -14762,7 +15157,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS license_records (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar REFERENCES contracts(id),
@@ -14781,8 +15176,8 @@ async function runSecurityEngineMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS voice_sessions (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL REFERENCES users(id),
@@ -14799,8 +15194,8 @@ async function runSecurityEngineMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS voice_turns (
       id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id            varchar NOT NULL REFERENCES voice_sessions(id),
@@ -14819,8 +15214,8 @@ async function runSecurityEngineMigrations() {
       created_at            timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS voice_pending_actions (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id   varchar NOT NULL REFERENCES voice_sessions(id),
@@ -14837,8 +15232,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
-  await db.execute(sql14`
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS voice_provenance (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id           varchar REFERENCES voice_sessions(id),
@@ -14853,7 +15248,7 @@ async function runSecurityEngineMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`
+  await db.execute(sql15`
     CREATE TABLE IF NOT EXISTS voice_user_memory (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL REFERENCES users(id),
@@ -14866,7 +15261,7 @@ async function runSecurityEngineMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql14`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
+  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }
 var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
 var init_db_migrations = __esm({

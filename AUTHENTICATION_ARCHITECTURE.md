@@ -416,3 +416,84 @@ Phase 1 hardening is implemented in code. Redeploy Production, then manually ver
 | Docs | `docs/AUTHORIZATION.md` |
 
 **Remaining:** creators (no org column), some negotiation/personal routes still `createdBy`-only; live cross-tenant IDOR suite not yet in CI.
+
+---
+
+## 23. Phase 6 — Contributor token harden (implemented)
+
+| Item | Result |
+| --- | --- |
+| Columns | `revoked_at`, `consumed_at`, `consent_versions` on `split_confirmations` |
+| Policy | `evaluateConfirmationToken()` — revoke/expiry fail closed |
+| Operator revoke | `POST …/confirmations/:confirmId/revoke` |
+| Consent evidence | Latest `contributor_consent` version stored on confirm |
+| Rate limit | Existing `/api/confirm` limiter retained |
+
+---
+
+## 24. Phase 7 — Legal acceptance org-aware (implemented)
+
+| Item | Result |
+| --- | --- |
+| Column | `legal_acceptances.organization_id` |
+| Accept path | Stamps active org when present |
+| Gate | Existing TermsGate (tos + privacy) unchanged |
+
+Hardcoded competing legal essays were not reintroduced; counsel text remains versioned via `legal_documents`.
+
+---
+
+## 25. Phase 8 — MFA enforcement hook (implemented; Auth0-managed factors)
+
+| Item | Result |
+| --- | --- |
+| Session | Auth0 callback stores `amr` / `mfa` |
+| Gate | `requireMfaForPrivilegedOrgRoles` when `REQUIRE_MFA_FOR_ORG_ADMINS=true` |
+| Surfaces | Org patch, member add, role change, API key create |
+
+**Manual:** Enable MFA in Auth0 Dashboard before turning the env flag on in Production.
+
+---
+
+## 26. Phases 9–10 — SSO / SCIM stubs
+
+| Item | Result |
+| --- | --- |
+| Routes | `/api/enterprise/sso/*`, `/api/enterprise/scim/*` → `501` |
+| Docs | `docs/ENTERPRISE_SSO_SCIM.md` |
+
+---
+
+## 27. Phase 11 — AUTH_* audit events
+
+| Item | Result |
+| --- | --- |
+| Module | `server/auth-events.ts` |
+| Wired | Auth0 login/logout, confirm view/submit/revoke, terms accept |
+
+---
+
+## 28. Phases 12–13 — Stripe separation
+
+| Item | Result |
+| --- | --- |
+| Subscription vs Connect | Separate webhook routes (existing) |
+| Signature | Production-like refuses unsigned events |
+| Org column | `organizations.stripe_customer_id` (optional; billing still user-default) |
+| Tests | `webhookRequiresSignature` + event list |
+
+---
+
+## 29. Phases 14–15 — Tests
+
+Unit coverage for token policy, MFA flag, AUTH catalog, Stripe signature gate, cross-tenant `resourceBelongsToOrg`. Live DB IDOR suite still operator checklist.
+
+---
+
+## 30. Phases 16–20 — Env, docs, acceptance
+
+| Item | Result |
+| --- | --- |
+| Env | `.env.example` includes MFA flag |
+| Docs | `AUTHENTICATION.md`, `AUTHORIZATION.md`, `ENTERPRISE_SSO_SCIM.md`, `ACCEPTANCE_CHECKLIST.md` |
+| Acceptance | Checklist only — no unearned “secure” claim |

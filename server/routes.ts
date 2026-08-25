@@ -32,6 +32,7 @@ import { registerCopilotRoutes } from "./copilot-routes";
 import { registerVoiceRoutes } from "./voice-routes";
 import { registerServiceRoutes } from "./service-routes";
 import { registerOrganizationRoutes } from "./organization-routes";
+import { registerEnterpriseStubs } from "./enterprise-stubs";
 import { registerMessageRoutes } from "./message-routes";
 import { registerPaymentRoutes } from "./payment-routes";
 import { registerSecurityRoutes } from "./security-routes";
@@ -2105,6 +2106,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Enterprise multi-tenant workspaces — organizations, RBAC members, org API keys
   registerOrganizationRoutes(app);
+
+  // Phases 9–10 — SSO/SCIM discovery stubs (501 until enterprise enablement)
+  registerEnterpriseStubs(app);
 
   // Global Music Rights Infrastructure — creator registry, rights profile/orgs, rights ledger
   registerCreatorRoutes(app);

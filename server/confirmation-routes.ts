@@ -23,6 +23,11 @@ import { storage } from "./storage";
 import { createPgRateLimiter } from "./security";
 import { requireOwnedContract } from "./authz-helpers";
 import { requireActivePermission } from "./rbac-middleware";
+import {
+  ensureContributorTokenSchema,
+  evaluateConfirmationToken,
+} from "./confirmation-token-policy";
+import { logAuthEvent, AUTH_EVENTS } from "./auth-events";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +54,9 @@ function getIp(req: Request): string {
 export function registerConfirmationRoutes(app: Express): void {
   const confirmPublicLimiter = createPgRateLimiter(40, 60_000, "confirm-public");
   app.use("/api/confirm", confirmPublicLimiter);
+  void ensureContributorTokenSchema().catch((err) =>
+    console.warn("[confirm] schema ensure skipped:", err),
+  );
 
   // ══════════════════════════════════════════════════════════════════════════
   // OPERATOR: Generate confirmation tokens for all collaborators on a contract
@@ -97,7 +105,11 @@ export function registerConfirmationRoutes(app: Express): void {
             // Already exists — refresh expiry and mark as not_sent so operator can re-send
             await db.execute(sql`
               UPDATE split_confirmations
-              SET expires_at = ${expires}, updated_at = NOW()
+              SET expires_at = ${expires},
+                  revoked_at = NULL,
+                  consumed_at = NULL,
+                  status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
+                  updated_at = NOW()
               WHERE id = ${row.id}
             `);
             results.push({ collaboratorId: collab.id, name: collab.name, token: row.token, status: row.status, isNew: false });
@@ -287,6 +299,45 @@ export function registerConfirmationRoutes(app: Express): void {
     }
   );
 
+  // OPERATOR: Revoke a confirmation link (Phase 6)
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/revoke",
+    ...requireActivePermission("agreement.send"),
+    async (req: Request, res: Response): Promise<void> => {
+      const { id: contractId, confirmId } = req.params;
+      const userId = (req as any).user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const result = await db.execute(sql`
+          UPDATE split_confirmations
+          SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+          WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
+            AND status != 'confirmed'
+          RETURNING id
+        `);
+        if (!result.rows.length) {
+          res.status(404).json({
+            error: "Confirmation not found or already confirmed (cannot revoke confirmed)",
+          });
+          return;
+        }
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_REVOKE,
+          userId,
+          resourceType: "split_confirmation",
+          resourceId: confirmId,
+          afterState: { contractId },
+          req,
+        });
+        res.json({ revoked: true });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    },
+  );
+
   // ══════════════════════════════════════════════════════════════════════════
   // PUBLIC: Load confirmation page data (NO LOGIN REQUIRED)
   // GET /api/confirm/:contractId/:token
@@ -303,6 +354,8 @@ export function registerConfirmationRoutes(app: Express): void {
             sc.id,
             sc.status,
             sc.expires_at,
+            sc.revoked_at,
+            sc.consumed_at,
             sc.confirmed_at,
             sc.collaborator_id,
             cc.name   AS collaborator_name,
@@ -326,10 +379,9 @@ export function registerConfirmationRoutes(app: Express): void {
         }
 
         const row = rows.rows[0] as any;
-
-        // Check expiry
-        if (row.expires_at && new Date(row.expires_at) < new Date()) {
-          res.status(410).json({ error: "This confirmation link has expired. Ask the operator to resend." });
+        const gate = evaluateConfirmationToken(row);
+        if (!gate.ok) {
+          res.status(gate.status).json({ error: gate.error });
           return;
         }
 
@@ -352,6 +404,22 @@ export function registerConfirmationRoutes(app: Express): void {
           ORDER BY created_at ASC
         `);
 
+        let contributorConsentVersion: string | null = null;
+        try {
+          const consent = await storage.getLatestLegalDocument("contributor_consent");
+          contributorConsentVersion = consent?.version ?? null;
+        } catch {
+          /* optional */
+        }
+
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_VIEW,
+          resourceType: "split_confirmation",
+          resourceId: row.id,
+          afterState: { contractId },
+          req,
+        });
+
         res.json({
           alreadyConfirmed:    false,
           confirmationId:      row.id,
@@ -361,6 +429,7 @@ export function registerConfirmationRoutes(app: Express): void {
           collaboratorRole:    row.role,
           ownershipPercentage: Number(row.ownership_percentage),
           expiresAt:           row.expires_at,
+          contributorConsentVersion,
           allCollaborators:    (allCollabs.rows as any[]).map((c) => ({
             name:               c.name,
             role:               c.role,
@@ -393,7 +462,8 @@ export function registerConfirmationRoutes(app: Express): void {
       try {
         // Look up and validate token
         const rows = await db.execute(sql`
-          SELECT sc.id, sc.status, sc.expires_at, cc.name AS collab_name, c.title AS contract_title
+          SELECT sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at,
+                 cc.name AS collab_name, c.title AS contract_title
           FROM split_confirmations sc
           JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
           JOIN contracts c ON c.id = sc.contract_id
@@ -409,8 +479,9 @@ export function registerConfirmationRoutes(app: Express): void {
 
         const row = rows.rows[0] as any;
 
-        if (row.expires_at && new Date(row.expires_at) < new Date()) {
-          res.status(410).json({ error: "This link has expired. Ask the operator to resend." });
+        const gate = evaluateConfirmationToken(row, { forSubmit: true });
+        if (!gate.ok) {
+          res.status(gate.status).json({ error: gate.error });
           return;
         }
 
@@ -420,10 +491,29 @@ export function registerConfirmationRoutes(app: Express): void {
           return;
         }
 
+        if (row.consumed_at && action === "request_change") {
+          res.status(410).json({
+            error: "This confirmation was already completed and cannot be changed via this link.",
+          });
+          return;
+        }
+
         const newStatus = action === "confirm" ? "confirmed" : "change_requested";
         const ip = getIp(req);
         const ua = req.headers["user-agent"] ?? null;
 
+        let consentVersions: Record<string, string> | null = null;
+        try {
+          const consent = await storage.getLatestLegalDocument("contributor_consent");
+          if (consent?.version) {
+            consentVersions = { contributor_consent: consent.version };
+          }
+        } catch {
+          /* optional evidence */
+        }
+        const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
+
+        const consumedAt = action === "confirm" ? new Date() : null;
         await db.execute(sql`
           UPDATE split_confirmations SET
             status           = ${newStatus},
@@ -433,8 +523,11 @@ export function registerConfirmationRoutes(app: Express): void {
             ip_address       = ${ip},
             user_agent       = ${ua},
             confirmed_at     = NOW(),
+            consumed_at      = COALESCE(${consumedAt}, consumed_at),
+            consent_versions = COALESCE(${consentJson}::jsonb, consent_versions),
             updated_at       = NOW()
           WHERE id = ${row.id}
+            AND revoked_at IS NULL
         `);
 
         // If all confirmed → update contract status to 'signed'
@@ -444,6 +537,7 @@ export function registerConfirmationRoutes(app: Express): void {
             FROM split_confirmations
             WHERE contract_id = ${contractId}
               AND status != 'confirmed'
+              AND (revoked_at IS NULL)
           `);
           const remaining = Number((pendingRows.rows[0] as any)?.cnt ?? 1);
           if (remaining === 0) {
@@ -453,6 +547,14 @@ export function registerConfirmationRoutes(app: Express): void {
             `);
           }
         }
+
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_SUBMIT,
+          resourceType: "split_confirmation",
+          resourceId: row.id,
+          afterState: { contractId, action: newStatus, hasConsentVersions: !!consentVersions },
+          req,
+        });
 
         res.json({
           success: true,

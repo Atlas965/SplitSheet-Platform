@@ -25,6 +25,7 @@ AUTH0_CLIENT_ID=
 AUTH0_CLIENT_SECRET=
 AUTH0_AUDIENCE=          # optional
 AUTH0_BASE_URL=          # optional; defaults to APP_URL
+REQUIRE_MFA_FOR_ORG_ADMINS=true   # optional Phase 8 enforcement
 ```
 
 ### Auth0 Dashboard (manual)
@@ -34,7 +35,7 @@ AUTH0_BASE_URL=          # optional; defaults to APP_URL
 3. Logout URLs: `https://splitsheet.ca` (+ localhost)
 4. Web origins: `https://splitsheet.ca`
 5. Enable connections: Google, Database, etc.
-6. MFA: Auth0 Security → MFA (enforce for admins when ready)
+6. MFA: Auth0 Security → MFA (required when `REQUIRE_MFA_FOR_ORG_ADMINS=true`)
 
 ### Routes
 
@@ -50,14 +51,27 @@ AUTH0_BASE_URL=          # optional; defaults to APP_URL
 
 - Auth0 `sub` stored in `users.auth0_sub`
 - Default user id: `auth0:{sub}`
-- Optional verified-email link to an **existing** SplitSheet user only when `ALLOW_EMAIL_ACCOUNT_LINKING=true`
+- Session stores `amr` / `mfa` from ID token when present
+- Optional verified-email link only when `ALLOW_EMAIL_ACCOUNT_LINKING=true`
 
-### Not implemented yet
+## Contributor confirmations (Phase 6)
 
-- Full org RBAC on every resource (Phase 3–5)
-- Forced MFA policies in-app (use Auth0 MFA)
-- Enterprise SSO / SCIM (documented later)
-- Claiming “production certified” without your Auth0 + Vercel verification
+- Expiry enforced; public rate limit on `/api/confirm`
+- Operator revoke: `POST /api/contracts/:id/confirmations/:confirmId/revoke`
+- Confirm sets `consumed_at` + optional `consent_versions` (contributor_consent doc)
+- Legacy `/api/confirmations/:token` remains `410 Gone`
+
+## MFA (Phase 8)
+
+Auth0 manages factors. With `REQUIRE_MFA_FOR_ORG_ADMINS=true`, privileged org mutations (members, API keys, org patch, role changes) require MFA evidence on the session (`amr` includes `mfa`).
+
+## Enterprise SSO / SCIM (Phases 9–10)
+
+Stubs only — see `docs/ENTERPRISE_SSO_SCIM.md`. Prefer Auth0 Enterprise connections.
+
+## Audit (Phase 11)
+
+`AUTH_*` events via `server/auth-events.ts` → `audit_log` (no secrets).
 
 ## Dual-run migration
 
@@ -65,4 +79,8 @@ AUTH0_BASE_URL=          # optional; defaults to APP_URL
 2. Create Auth0 app + set Auth0 env on **Preview** first.
 3. Test login/logout/MFA on Preview.
 4. Set Production `AUTH_PROVIDER=auth0` + Auth0 secrets; redeploy.
-5. Keep Google social env until operators are confirmed migrated; then remove direct Google if desired.
+5. Keep Google social env until operators are confirmed migrated.
+
+## Acceptance
+
+Use `docs/ACCEPTANCE_CHECKLIST.md`. Do not claim production-certified without checklist evidence.

@@ -52,6 +52,14 @@ export async function ensureOrgTenantSchema(): Promise<void> {
   await db.execute(sql`
     UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
+  const {
+    ensureContributorTokenSchema,
+    ensureLegalOrgAcceptanceSchema,
+    ensureOrgStripeCustomerSchema,
+  } = await import("./confirmation-token-policy");
+  await ensureContributorTokenSchema();
+  await ensureLegalOrgAcceptanceSchema();
+  await ensureOrgStripeCustomerSchema();
 }
 
 /**

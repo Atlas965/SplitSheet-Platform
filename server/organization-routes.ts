@@ -36,6 +36,7 @@ import {
   requirePermission,
   type OrgAuthedRequest,
 } from "./rbac-middleware";
+import { requireMfaForPrivilegedOrgRoles } from "./mfa-policy";
 
 /** Permanent external ID: SL-ORG-XXXXXXXX (never reused, generated server-side only). */
 async function generateUniqueSlOrgId(): Promise<string> {
@@ -165,6 +166,7 @@ export function registerOrganizationRoutes(app: Express): void {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("admin"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req: Request, res: Response) => {
       try {
         const updates = insertOrganizationSchema
@@ -205,6 +207,7 @@ export function registerOrganizationRoutes(app: Express): void {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requirePermission("org.members.manage"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req: Request, res: Response) => {
       const actingUserId = (req as any).user.claims.sub;
       try {
@@ -257,6 +260,7 @@ export function registerOrganizationRoutes(app: Express): void {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("owner"),
+    requireMfaForPrivilegedOrgRoles("owner"),
     async (req: Request, res: Response) => {
       try {
         const { role: rawRole } = z.object({ role: z.enum(ORGANIZATION_ROLES) }).parse(req.body);
@@ -321,6 +325,7 @@ export function registerOrganizationRoutes(app: Express): void {
     requireAuth,
     requireOrganizationMembership({ paramKey: "id" }),
     requireRole("admin"),
+    requireMfaForPrivilegedOrgRoles("admin"),
     async (req: Request, res: Response) => {
       const userId = (req as any).user.claims.sub;
       try {

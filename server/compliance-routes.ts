@@ -29,6 +29,9 @@ import {
   messages,
 } from "@shared/schema";
 import { isAuthenticated } from "./replitAuth";
+import { resolveActiveOrganization } from "./org-context";
+import { ensureLegalOrgAcceptanceSchema } from "./confirmation-token-policy";
+import { logAuthEvent, AUTH_EVENTS } from "./auth-events";
 import { storage } from "./storage";
 import { logger } from "./logger";
 import type { LegalDocType } from "@shared/schema";
@@ -207,9 +210,12 @@ export function registerComplianceRoutes(app: Express): void {
       version: z.string().max(40).optional(), // legacy field, ignored — version is always the current published one
     });
     try {
+      await ensureLegalOrgAcceptanceSchema().catch(() => {});
       const { docType } = schema.parse(req.body ?? {});
       const docTypesToAccept = docType ? [docType] : GATED_DOC_TYPES;
       const acceptedAt = new Date();
+      const activeOrg = await resolveActiveOrganization(userId).catch(() => null);
+      const organizationId = activeOrg?.organizationId ?? null;
 
       const results = await Promise.all(
         docTypesToAccept.map(async (dt) => {
@@ -217,11 +223,12 @@ export function registerComplianceRoutes(app: Express): void {
           const version = latestDoc?.version ?? CURRENT_TERMS_VERSION;
           await storage.createLegalAcceptance({
             userId,
+            organizationId,
             docType: dt,
             version,
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"],
-          });
+          } as any);
           return { docType: dt, version };
         })
       );
@@ -237,19 +244,32 @@ export function registerComplianceRoutes(app: Express): void {
       }
 
       await storage.trackUserActivity(userId, "terms_accepted", {
-        docTypes: results.map((r) => r.docType),
-        versions: results.map((r) => r.version),
-        ipAddress: req.ip,
+        results,
+        organizationId,
+      });
+      await logAuthEvent({
+        action: AUTH_EVENTS.TERMS_ACCEPT,
+        userId,
+        resourceType: "legal_acceptance",
+        afterState: {
+          docs: results.map((r) => r.docType),
+          organizationId: organizationId ?? undefined,
+        },
+        req,
       });
 
-      res.json({ accepted: true, results, acceptedAt });
+      res.json({
+        accepted: true,
+        organizationId,
+        results,
+      });
     } catch (err) {
       if (err instanceof z.ZodError) {
-        res.status(400).json({ error: "Invalid request" });
-      } else {
-        logger.error("compliance.accept_terms_failed", { error: (err as Error)?.message });
-        res.status(500).json({ error: "Failed to record terms acceptance" });
+        res.status(400).json({ error: "Invalid request", issues: err.errors });
+        return;
       }
+      logger.error("compliance.accept_terms_failed", { userId, error: (err as Error)?.message });
+      res.status(500).json({ error: "Failed to record terms acceptance" });
     }
   });
 
