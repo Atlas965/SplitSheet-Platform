@@ -2,18 +2,25 @@
  * Rights graph context retrieval — canonical records beat conversational memory.
  */
 import { storage } from "../storage";
+import { resourceBelongsToOrg } from "../authz-helpers";
+import { resolveActiveOrganization } from "../org-context";
 
 export async function retrieveRightsContext(input: {
   userId: string;
   projectId?: string | null;
   contractId?: string | null;
   songQuery?: string | null;
+  organizationId?: string | null;
 }): Promise<Record<string, unknown> | null> {
   try {
     if (input.contractId || input.projectId) {
       const id = input.contractId || input.projectId!;
       const contract = await storage.getContract(id);
-      if (!contract || contract.createdBy !== input.userId) {
+      const orgId =
+        input.organizationId ??
+        (await resolveActiveOrganization(input.userId))?.organizationId ??
+        null;
+      if (!contract || !resourceBelongsToOrg(contract, orgId, input.userId)) {
         return { available: false, reason: "Agreement not found or not authorized" };
       }
       const collaborators = await storage.getContractCollaborators(id);

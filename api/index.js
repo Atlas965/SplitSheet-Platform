@@ -1759,7 +1759,7 @@ var init_message_crypto = __esm({
 });
 
 // server/storage.ts
-import { eq, desc, and, or, sql as sql3, count, gte, lt, max, ilike } from "drizzle-orm";
+import { eq, desc, and, or, sql as sql3, count, gte, lt, max, ilike, isNull } from "drizzle-orm";
 var DatabaseStorage, storage;
 var init_storage = __esm({
   "server/storage.ts"() {
@@ -1877,6 +1877,14 @@ var init_storage = __esm({
           or(
             eq(contracts.createdBy, userId)
             // TODO: Add join for collaborators
+          )
+        ).orderBy(desc(contracts.updatedAt));
+      }
+      async getContractsForOrganization(organizationId, userId) {
+        return await db.select().from(contracts).where(
+          or(
+            eq(contracts.organizationId, organizationId),
+            and(isNull(contracts.organizationId), eq(contracts.createdBy, userId))
           )
         ).orderBy(desc(contracts.updatedAt));
       }
@@ -2299,6 +2307,17 @@ var init_storage = __esm({
       }
       async getSongAssets(userId) {
         return await db.select().from(songAssets).where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, "active"))).orderBy(desc(songAssets.createdAt));
+      }
+      async getSongAssetsForOrganization(organizationId, userId) {
+        return await db.select().from(songAssets).where(
+          and(
+            eq(songAssets.status, "active"),
+            or(
+              eq(songAssets.organizationId, organizationId),
+              and(isNull(songAssets.organizationId), eq(songAssets.createdBy, userId))
+            )
+          )
+        ).orderBy(desc(songAssets.createdAt));
       }
       async getSongAsset(id) {
         const [asset] = await db.select().from(songAssets).where(eq(songAssets.id, id));
@@ -2880,7 +2899,7 @@ __export(org_context_exports, {
   setActiveOrganization: () => setActiveOrganization
 });
 import crypto2 from "crypto";
-import { eq as eq2, and as and2, isNull, sql as sql4 } from "drizzle-orm";
+import { eq as eq2, and as and2, isNull as isNull2, sql as sql4 } from "drizzle-orm";
 async function generateUniqueSlOrgId() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const shortId = crypto2.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
@@ -2947,8 +2966,8 @@ async function ensurePersonalOrganization(userId) {
   return org.id;
 }
 async function backfillUserResourcesToOrg(userId, organizationId) {
-  await db.update(contracts).set({ organizationId }).where(and2(eq2(contracts.createdBy, userId), isNull(contracts.organizationId)));
-  await db.update(songAssets).set({ organizationId }).where(and2(eq2(songAssets.createdBy, userId), isNull(songAssets.organizationId)));
+  await db.update(contracts).set({ organizationId }).where(and2(eq2(contracts.createdBy, userId), isNull2(contracts.organizationId)));
+  await db.update(songAssets).set({ organizationId }).where(and2(eq2(songAssets.createdBy, userId), isNull2(songAssets.organizationId)));
 }
 async function getMembership(organizationId, userId) {
   return storage.getOrganizationMember(organizationId, userId);
@@ -4681,6 +4700,20 @@ import { eq as eq5 } from "drizzle-orm";
 function sessionUserId(req) {
   return req.user?.claims?.sub;
 }
+async function resolveRequestOrgId(req) {
+  const attached = req.orgAuth?.organizationId;
+  if (attached) return attached;
+  const userId = sessionUserId(req);
+  if (!userId) return null;
+  const active = await resolveActiveOrganization(userId);
+  return active?.organizationId ?? null;
+}
+function resourceBelongsToOrg(resource, activeOrgId, userId) {
+  if (resource.organizationId) {
+    return !!activeOrgId && resource.organizationId === activeOrgId;
+  }
+  return resource.createdBy === userId;
+}
 async function requireOwnedContract(req, res, contractId) {
   const userId = sessionUserId(req);
   if (!userId) {
@@ -4692,7 +4725,8 @@ async function requireOwnedContract(req, res, contractId) {
     res.status(404).json({ message: "Contract not found" });
     return null;
   }
-  if (contract.createdBy !== userId) {
+  const orgId = await resolveRequestOrgId(req);
+  if (!resourceBelongsToOrg(contract, orgId, userId)) {
     res.status(403).json({ message: "Access denied" });
     return null;
   }
@@ -4709,7 +4743,8 @@ async function requireOwnedAsset(req, res, assetId) {
     res.status(404).json({ message: "Asset not found" });
     return null;
   }
-  if (asset.createdBy !== userId) {
+  const orgId = await resolveRequestOrgId(req);
+  if (!resourceBelongsToOrg(asset, orgId, userId)) {
     res.status(403).json({ message: "Access denied" });
     return null;
   }
@@ -4724,13 +4759,15 @@ async function requireOwnedRevenueEvent(req, res, eventId) {
   const [row] = await db.select({
     eventId: revenueEvents.id,
     assetId: revenueEvents.assetId,
-    createdBy: songAssets.createdBy
+    createdBy: songAssets.createdBy,
+    organizationId: songAssets.organizationId
   }).from(revenueEvents).innerJoin(songAssets, eq5(revenueEvents.assetId, songAssets.id)).where(eq5(revenueEvents.id, eventId)).limit(1);
   if (!row) {
     res.status(404).json({ message: "Revenue event not found" });
     return null;
   }
-  if (row.createdBy !== userId) {
+  const orgId = await resolveRequestOrgId(req);
+  if (!resourceBelongsToOrg(row, orgId, userId)) {
     res.status(403).json({ message: "Access denied" });
     return null;
   }
@@ -4748,11 +4785,27 @@ async function requireOwnedCollaborator(req, res, collaboratorId) {
     return null;
   }
   const contract = await storage.getContract(row.contractId);
-  if (!contract || contract.createdBy !== userId) {
+  const orgId = await resolveRequestOrgId(req);
+  if (!contract || !resourceBelongsToOrg(contract, orgId, userId)) {
     res.status(403).json({ message: "Access denied" });
     return null;
   }
   return { collaborator: row, contract };
+}
+async function canReadContract(req, contractId) {
+  const userId = sessionUserId(req);
+  if (!userId) return { ok: false, status: 401, message: "Unauthorized" };
+  const contract = await storage.getContract(contractId);
+  if (!contract) return { ok: false, status: 404, message: "Contract not found" };
+  const orgId = await resolveRequestOrgId(req);
+  if (resourceBelongsToOrg(contract, orgId, userId)) {
+    return { ok: true, contract };
+  }
+  const collaborators = await storage.getContractCollaborators(contractId);
+  if (collaborators.some((c) => c.userId === userId)) {
+    return { ok: true, contract };
+  }
+  return { ok: false, status: 403, message: "Access denied" };
 }
 var init_authz_helpers = __esm({
   "server/authz-helpers.ts"() {
@@ -4760,6 +4813,7 @@ var init_authz_helpers = __esm({
     init_db();
     init_schema();
     init_storage();
+    init_org_context();
   }
 });
 
@@ -4919,21 +4973,9 @@ function registerConfirmationRoutes(app) {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
       try {
-        const contractRows = await db.execute(sql6`
-          SELECT id, title, status, created_by
-          FROM contracts
-          WHERE id = ${contractId}
-          LIMIT 1
-        `);
-        const contract = contractRows.rows[0];
-        if (!contract) {
-          res.status(404).json({ error: "Contract not found" });
-          return;
-        }
-        if (contract.created_by !== userId) {
-          res.status(403).json({ error: "Not authorized" });
-          return;
-        }
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
         const collabRows = await db.execute(sql6`
           SELECT id, name, email, role, ownership_percentage
           FROM contract_collaborators
@@ -5028,19 +5070,9 @@ function registerConfirmationRoutes(app) {
       const contractId = req.params.id;
       const userId = req.user?.claims?.sub;
       try {
-        const contractRows = await db.execute(sql6`
-          SELECT id, title, status, created_by FROM contracts
-          WHERE id = ${contractId} LIMIT 1
-        `);
-        const contract = contractRows.rows[0];
-        if (!contract) {
-          res.status(404).json({ error: "Contract not found" });
-          return;
-        }
-        if (contract.created_by !== userId) {
-          res.status(403).json({ error: "Not authorized" });
-          return;
-        }
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status };
         const rows = await db.execute(sql6`
           SELECT
             sc.id,
@@ -7870,7 +7902,8 @@ async function retrieveRightsContext(input) {
     if (input.contractId || input.projectId) {
       const id = input.contractId || input.projectId;
       const contract = await storage.getContract(id);
-      if (!contract || contract.createdBy !== input.userId) {
+      const orgId = input.organizationId ?? (await resolveActiveOrganization(input.userId))?.organizationId ?? null;
+      if (!contract || !resourceBelongsToOrg(contract, orgId, input.userId)) {
         return { available: false, reason: "Agreement not found or not authorized" };
       }
       const collaborators = await storage.getContractCollaborators(id);
@@ -7930,6 +7963,8 @@ var init_rights_context = __esm({
   "server/voice/rights-context.ts"() {
     "use strict";
     init_storage();
+    init_authz_helpers();
+    init_org_context();
   }
 });
 
@@ -8526,14 +8561,17 @@ function contractToProject(contract) {
     updatedAt: contract.updatedAt
   };
 }
-async function assertContractOwner(contractId, userId) {
+async function assertContractAccess(req, contractId, userId) {
   const contract = await storage.getContract(contractId);
   if (!contract) return { ok: false, error: "Project not found", status: 404 };
-  if (contract.createdBy !== userId) return { ok: false, error: "Not authorized", status: 403 };
+  const orgId = req.orgAuth?.organizationId ?? await resolveRequestOrgId(req);
+  if (!resourceBelongsToOrg(contract, orgId, userId)) {
+    return { ok: false, error: "Not authorized", status: 403 };
+  }
   return { ok: true, contract };
 }
-async function buildClientList(userId) {
-  const userContracts = await storage.getContracts(userId);
+async function buildClientList(userId, organizationId) {
+  const userContracts = organizationId ? await storage.getContractsForOrganization(organizationId, userId) : await storage.getContracts(userId);
   const clientMap = /* @__PURE__ */ new Map();
   for (const contract of userContracts) {
     const collabs = await storage.getContractCollaborators(contract.id);
@@ -8566,7 +8604,8 @@ function registerServiceRoutes(app) {
   app.get("/api/workflow/status", isAuthenticated, async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const userContracts = await storage.getContracts(userId);
+      const orgId = await resolveRequestOrgId(req);
+      const userContracts = orgId ? await storage.getContractsForOrganization(orgId, userId) : await storage.getContracts(userId);
       let totalContributors = 0;
       let pendingConfirmations = 0;
       let confirmedProjects = 0;
@@ -8579,7 +8618,7 @@ function registerServiceRoutes(app) {
           pendingConfirmations += 1;
         }
       }
-      const clients = await buildClientList(userId);
+      const clients = await buildClientList(userId, orgId);
       res.json({
         clients: clients.length,
         projects: userContracts.length,
@@ -8600,7 +8639,8 @@ function registerServiceRoutes(app) {
   });
   app.get("/api/clients", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
-      res.json(await buildClientList(req.user.claims.sub));
+      const userId = req.user.claims.sub;
+      res.json(await buildClientList(userId, req.orgAuth?.organizationId));
     } catch (error) {
       console.error("[CLIENTS LIST]", error);
       res.status(500).json({ message: "Failed to fetch clients" });
@@ -8608,7 +8648,8 @@ function registerServiceRoutes(app) {
   });
   app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
-      const clients = await buildClientList(req.user.claims.sub);
+      const userId = req.user.claims.sub;
+      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
       const client4 = clients.find((c) => c.id === req.params.id);
       if (!client4) {
         res.status(404).json({ message: "Client not found" });
@@ -8622,13 +8663,13 @@ function registerServiceRoutes(app) {
   app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const clients = await buildClientList(userId);
+      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
       const client4 = clients.find((c) => c.id === req.params.id);
       if (!client4) {
         res.status(404).json({ message: "Client not found" });
         return;
       }
-      const userContracts = await storage.getContracts(userId);
+      const userContracts = req.orgAuth?.organizationId ? await storage.getContractsForOrganization(req.orgAuth.organizationId, userId) : await storage.getContracts(userId);
       const email = client4.email;
       const name = client4.name;
       const projects = [];
@@ -8673,7 +8714,8 @@ function registerServiceRoutes(app) {
   });
   app.get("/api/projects", ...requireActivePermission("project.read"), async (req, res) => {
     try {
-      const userContracts = await storage.getContracts(req.user.claims.sub);
+      const userId = req.user.claims.sub;
+      const userContracts = req.orgAuth?.organizationId ? await storage.getContractsForOrganization(req.orgAuth.organizationId, userId) : await storage.getContracts(userId);
       const projects = await Promise.all(
         userContracts.map(async (contract) => {
           const collabs = await storage.getContractCollaborators(contract.id);
@@ -8696,7 +8738,7 @@ function registerServiceRoutes(app) {
   });
   app.get("/api/projects/:id", ...requireActivePermission("project.read"), async (req, res) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8708,7 +8750,7 @@ function registerServiceRoutes(app) {
   });
   app.patch("/api/projects/:id", ...requireActivePermission("project.update"), async (req, res) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8729,7 +8771,7 @@ function registerServiceRoutes(app) {
   });
   app.get("/api/projects/:id/contributors", ...requireActivePermission("project.read"), async (req, res) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8774,7 +8816,7 @@ function registerServiceRoutes(app) {
         res.status(400).json({ message: "Invalid contributor data", issues: parsed.error.issues });
         return;
       }
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8814,7 +8856,7 @@ function registerServiceRoutes(app) {
   });
   app.patch("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req, res) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8843,7 +8885,7 @@ function registerServiceRoutes(app) {
   });
   app.delete("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req, res) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -8858,7 +8900,7 @@ function registerServiceRoutes(app) {
     const contractId = req.params.id;
     const userId = req.user?.claims?.sub;
     try {
-      const result = await assertContractOwner(contractId, userId);
+      const result = await assertContractAccess(req, contractId, userId);
       if ("error" in result) {
         res.status(result.status).json({ error: result.error });
         return;
@@ -10265,12 +10307,14 @@ import { sql as sql11 } from "drizzle-orm";
 async function registerSecurityRoutes(app) {
   app.post(
     "/api/splits",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     splitRateLimit,
     async (req, res) => {
       const userId = req.user?.claims?.sub;
       try {
         const body = splitSheetSchema.parse(req.body);
+        const owned = await requireOwnedContract(req, res, body.contractId);
+        if (!owned) return;
         const prevRows = await db.execute(sql11`
           SELECT version_number, collaborators, content_hash, created_at
           FROM split_versions
@@ -10622,15 +10666,15 @@ async function registerSecurityRoutes(app) {
     `);
     res.json(rows.rows);
   });
-  app.get("/api/splits/:contractId/history", isAuthenticated, async (req, res) => {
-    const userId = req.user?.claims?.sub;
+  app.get("/api/splits/:contractId/history", ...requireActivePermission("agreement.read"), async (req, res) => {
+    const owned = await requireOwnedContract(req, res, req.params.contractId);
+    if (!owned) return;
     const rows = await db.execute(sql11`
       SELECT version_number, content_hash, prev_hash, status,
              total_pct, created_at, signed_at, locked_at,
              jsonb_array_length(collaborators) AS collaborator_count
       FROM split_versions
       WHERE contract_id = ${req.params.contractId}
-        AND created_by = ${userId}
       ORDER BY version_number DESC
     `);
     res.json(rows.rows);
@@ -10656,6 +10700,7 @@ var init_security_routes = __esm({
     init_replitAuth();
     init_adminAuth();
     init_rbac_middleware();
+    init_authz_helpers();
     init_security();
     splitRateLimit = createRateLimiter(10, 6e4);
     signRateLimit = createRateLimiter(5, 6e4);
@@ -10901,7 +10946,7 @@ var init_compliance_routes = __esm({
 // server/verification-routes.ts
 import crypto7 from "crypto";
 import { z as z11 } from "zod";
-import { and as and4, desc as desc3, eq as eq8, gt, isNull as isNull2 } from "drizzle-orm";
+import { and as and4, desc as desc3, eq as eq8, gt, isNull as isNull3 } from "drizzle-orm";
 function generateSixDigitCode() {
   return crypto7.randomInt(0, 1e6).toString().padStart(6, "0");
 }
@@ -10958,7 +11003,7 @@ function registerVerificationRoutes(app) {
           eq8(verificationCodes.userId, userId),
           eq8(verificationCodes.destination, body.destination),
           eq8(verificationCodes.purpose, body.purpose),
-          isNull2(verificationCodes.consumedAt),
+          isNull3(verificationCodes.consumedAt),
           gt(verificationCodes.expiresAt, /* @__PURE__ */ new Date())
         )
       ).orderBy(desc3(verificationCodes.createdAt)).limit(1);
@@ -11700,14 +11745,10 @@ function registerTemplateRoutes(app) {
       res.status(500).json({ message: "Failed to archive template" });
     }
   });
-  app.get("/api/projects/:id/recommended-agreements", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id/recommended-agreements", ...requireActivePermission("project.read"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const project = await storage.getContract(req.params.id);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.createdBy !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
+      const project = await requireOwnedContract(req, res, req.params.id);
+      if (!project) return;
       const collaborators = await storage.getContractCollaborators(project.id);
       const roles = collaborators.map((c) => c.role);
       const data = project.data || {};
@@ -11749,12 +11790,11 @@ function registerTemplateRoutes(app) {
       res.status(500).json({ message: "Failed to recommend agreements" });
     }
   });
-  app.post("/api/projects/:id/workflow/sync-ledger", isAuthenticated, async (req, res) => {
+  app.post("/api/projects/:id/workflow/sync-ledger", ...requireActivePermission("rights.update"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const project = await storage.getContract(req.params.id);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const project = await requireOwnedContract(req, res, req.params.id);
+      if (!project) return;
       const result = await syncAgreementToRightsLedger(project.id, userId);
       res.json(result);
     } catch (error) {
@@ -11762,12 +11802,11 @@ function registerTemplateRoutes(app) {
       res.status(500).json({ message: "Failed to sync rights ledger" });
     }
   });
-  app.post("/api/contracts/:id/sync-ledger", isAuthenticated, async (req, res) => {
+  app.post("/api/contracts/:id/sync-ledger", ...requireActivePermission("rights.update"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       const result = await syncAgreementToRightsLedger(contract.id, userId);
       res.json(result);
     } catch (error) {
@@ -11786,6 +11825,8 @@ var init_template_routes = __esm({
     init_schema();
     init_agreement_catalog();
     init_agreement_ledger();
+    init_authz_helpers();
+    init_rbac_middleware();
   }
 });
 
@@ -11871,17 +11912,7 @@ async function generateUniqueSlSongId() {
   return `SL-SONG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 async function requireAssetOwner(req, res) {
-  const userId = req.user.claims.sub;
-  const asset = await storage.getSongAsset(req.params.id);
-  if (!asset) {
-    res.status(404).json({ message: "Asset not found" });
-    return null;
-  }
-  if (asset.createdBy !== userId) {
-    res.status(403).json({ message: "Access denied" });
-    return null;
-  }
-  return asset;
+  return requireOwnedAsset(req, res, req.params.id);
 }
 function registerRightsLedgerRoutes(app) {
   app.post("/api/assets/:id/assign-sl-id", isAuthenticated, async (req, res) => {
@@ -12076,6 +12107,7 @@ var init_rights_ledger_routes = __esm({
     "use strict";
     init_storage();
     init_replitAuth();
+    init_authz_helpers();
     init_schema();
     init_security();
     init_license_readiness();
@@ -12445,7 +12477,8 @@ async function registerRoutes(app) {
   app.get("/api/contracts", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
       const userId = req.user.claims.sub;
-      const contracts2 = await storage.getContracts(userId);
+      const orgId = req.orgAuth?.organizationId;
+      const contracts2 = orgId ? await storage.getContractsForOrganization(orgId, userId) : await storage.getContracts(userId);
       res.json(contracts2);
     } catch (error) {
       console.error("Error fetching contracts:", error);
@@ -12454,21 +12487,11 @@ async function registerRoutes(app) {
   });
   app.get("/api/contracts/:id", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
+      const access = await canReadContract(req, req.params.id);
+      if (!access.ok) {
+        return res.status(access.status).json({ message: access.message });
       }
-      if (contract.createdBy !== userId) {
-        const collaborators = await storage.getContractCollaborators(
-          req.params.id
-        );
-        const isCollaborator = collaborators.some((c) => c.userId === userId);
-        if (!isCollaborator) {
-          return res.status(403).json({ message: "Access denied" });
-        }
-      }
-      res.json(contract);
+      res.json(access.contract);
     } catch (error) {
       console.error("Error fetching contract:", error);
       res.status(500).json({ message: "Failed to fetch contract" });
@@ -12527,20 +12550,8 @@ async function registerRoutes(app) {
   });
   app.patch("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
-      }
-      if (contract.createdBy !== userId) {
-        const collaborators = await storage.getContractCollaborators(
-          req.params.id
-        );
-        const userCollaborator = collaborators.find((c) => c.userId === userId);
-        if (!userCollaborator || userCollaborator.status !== "accepted") {
-          return res.status(403).json({ message: "Access denied" });
-        }
-      }
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       const updates = req.body;
       const updatedContract = await storage.updateContract(
         req.params.id,
@@ -12554,16 +12565,8 @@ async function registerRoutes(app) {
   });
   app.delete("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
-      }
-      if (contract.createdBy !== userId) {
-        return res.status(403).json({
-          message: "Only the contract owner can delete this contract"
-        });
-      }
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       await storage.deleteContract(req.params.id);
       res.json({ message: "Contract deleted successfully" });
     } catch (error) {
@@ -12573,22 +12576,12 @@ async function registerRoutes(app) {
   });
   app.get(
     "/api/contracts/:id/collaborators",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-        if (contract.createdBy !== userId) {
-          const collaborators2 = await storage.getContractCollaborators(
-            req.params.id
-          );
-          const isCollaborator = collaborators2.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
         const collaborators = await storage.getContractCollaborators(
           req.params.id
@@ -12602,17 +12595,11 @@ async function registerRoutes(app) {
   );
   app.post(
     "/api/contracts/:id/collaborators",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-        if (contract.createdBy !== userId) {
-          return res.status(403).json({ message: "Only the contract owner can add collaborators" });
-        }
+        const contract = await requireOwnedContract(req, res, req.params.id);
+        if (!contract) return;
         const collaboratorData = insertContractCollaboratorSchema.parse({
           ...req.body,
           contractId: req.params.id
@@ -12633,22 +12620,12 @@ async function registerRoutes(app) {
   );
   app.get(
     "/api/contracts/:id/signatures",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
         const signatures = await storage.getContractSignatures(req.params.id);
         res.json(signatures);
@@ -12660,22 +12637,13 @@ async function registerRoutes(app) {
   );
   app.post(
     "/api/contracts/:id/signatures",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req, res) => {
       try {
         const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
         const signatureData = insertContractSignatureSchema.parse({
           ...req.body,
@@ -12698,23 +12666,15 @@ async function registerRoutes(app) {
   );
   app.post(
     "/api/contracts/:id/sign",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req, res) => {
       try {
         const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
-        }
+        const contract = access.contract;
         const {
           signatureData,
           signerName,
@@ -13607,7 +13567,9 @@ async function registerRoutes(app) {
   );
   app.get("/api/assets", ...requireActivePermission("rights.read"), async (req, res) => {
     try {
-      const assets = await storage.getSongAssets(req.user.claims.sub);
+      const userId = req.user.claims.sub;
+      const orgId = req.orgAuth?.organizationId;
+      const assets = orgId ? await storage.getSongAssetsForOrganization(orgId, userId) : await storage.getSongAssets(userId);
       res.json(assets);
     } catch (error) {
       console.error("Error fetching assets:", error);
@@ -13643,10 +13605,8 @@ async function registerRoutes(app) {
   });
   app.patch("/api/assets/:id", ...requireActivePermission("rights.update"), async (req, res) => {
     try {
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== req.user.claims.sub)
-        return res.status(403).json({ message: "Access denied" });
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       const updated = await storage.updateSongAsset(req.params.id, req.body);
       res.json(updated);
     } catch (error) {
@@ -13697,14 +13657,12 @@ async function registerRoutes(app) {
   );
   app.post(
     "/api/assets/:id/ownership",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req, res) => {
       try {
         const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const record = await storage.createOwnershipRecord({
           ...req.body,
           assetId: req.params.id,
@@ -13730,14 +13688,12 @@ async function registerRoutes(app) {
   );
   app.put(
     "/api/assets/:id/ownership",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req, res) => {
       try {
         const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const { splits, changeReason } = req.body;
         if (!Array.isArray(splits) || splits.length === 0)
           return res.status(400).json({ message: "splits array is required" });
@@ -13790,14 +13746,11 @@ async function registerRoutes(app) {
   });
   app.post(
     "/api/assets/:id/revenue",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
         const event = await storage.recordRevenueEvent({
           ...req.body,
           assetId: req.params.id
@@ -13887,10 +13840,8 @@ async function registerRoutes(app) {
   });
   app.post("/api/contracts/:id/confirmations", ...requireActivePermission("agreement.send"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       const collaborators = await storage.getContractCollaborators(req.params.id);
       const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
       const newConfirmations = [];
@@ -13920,10 +13871,8 @@ async function registerRoutes(app) {
   });
   app.get("/api/contracts/:id/confirmations", ...requireActivePermission("agreement.read"), async (req, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       const confirmations2 = await storage.getConfirmationsByContract(req.params.id);
       res.json(confirmations2);
     } catch (error) {

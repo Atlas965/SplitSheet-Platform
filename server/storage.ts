@@ -77,7 +77,7 @@ import {
   type LegalDocType,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, sql, count, gte, lt, max, ilike } from "drizzle-orm";
+import { eq, desc, and, or, sql, count, gte, lt, max, ilike, isNull } from "drizzle-orm";
 
 export type TemplateListFilters = {
   category?: string;
@@ -108,6 +108,8 @@ export interface IStorage {
 
   // Contract operations
   getContracts(userId: string): Promise<Contract[]>;
+  /** Org-scoped contracts (+ legacy unstamped rows created by user). */
+  getContractsForOrganization(organizationId: string, userId: string): Promise<Contract[]>;
   getContract(id: string): Promise<Contract | undefined>;
   createContract(contract: InsertContract): Promise<Contract>;
   updateContract(id: string, updates: Partial<Contract>): Promise<Contract>;
@@ -164,6 +166,7 @@ export interface IStorage {
   // Ownership ledger — song assets
   createSongAsset(asset: InsertSongAsset): Promise<SongAsset>;
   getSongAssets(userId: string): Promise<SongAsset[]>;
+  getSongAssetsForOrganization(organizationId: string, userId: string): Promise<SongAsset[]>;
   getSongAsset(id: string): Promise<SongAsset | undefined>;
   getSongAssetBySlSongId(slSongId: string): Promise<SongAsset | undefined>;
   getSongAssetsByContract(contractId: string): Promise<SongAsset[]>;
@@ -421,6 +424,19 @@ export class DatabaseStorage implements IStorage {
           eq(contracts.createdBy, userId),
           // TODO: Add join for collaborators
         )
+      )
+      .orderBy(desc(contracts.updatedAt));
+  }
+
+  async getContractsForOrganization(organizationId: string, userId: string): Promise<Contract[]> {
+    return await db
+      .select()
+      .from(contracts)
+      .where(
+        or(
+          eq(contracts.organizationId, organizationId),
+          and(isNull(contracts.organizationId), eq(contracts.createdBy, userId)),
+        ),
       )
       .orderBy(desc(contracts.updatedAt));
   }
@@ -1087,6 +1103,22 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(songAssets)
       .where(and(eq(songAssets.createdBy, userId), eq(songAssets.status, "active")))
+      .orderBy(desc(songAssets.createdAt));
+  }
+
+  async getSongAssetsForOrganization(organizationId: string, userId: string): Promise<SongAsset[]> {
+    return await db
+      .select()
+      .from(songAssets)
+      .where(
+        and(
+          eq(songAssets.status, "active"),
+          or(
+            eq(songAssets.organizationId, organizationId),
+            and(isNull(songAssets.organizationId), eq(songAssets.createdBy, userId)),
+          ),
+        ),
+      )
       .orderBy(desc(songAssets.createdAt));
   }
 

@@ -17,6 +17,8 @@ import {
   validateTemplateFieldValues,
 } from "@shared/agreement-catalog";
 import { syncAgreementToRightsLedger } from "./agreement-ledger";
+import { requireOwnedContract } from "./authz-helpers";
+import { requireActivePermission } from "./rbac-middleware";
 
 async function writeTemplateAudit(
   templateId: string | null,
@@ -279,14 +281,10 @@ export function registerTemplateRoutes(app: Express) {
   });
 
   // Project recommendations
-  app.get("/api/projects/:id/recommended-agreements", isAuthenticated, async (req: any, res) => {
+  app.get("/api/projects/:id/recommended-agreements", ...requireActivePermission("project.read"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const project = await storage.getContract(req.params.id);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.createdBy !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
+      const project = await requireOwnedContract(req, res, req.params.id);
+      if (!project) return;
 
       const collaborators = await storage.getContractCollaborators(project.id);
       const roles = collaborators.map((c) => c.role);
@@ -337,12 +335,11 @@ export function registerTemplateRoutes(app: Express) {
   });
 
   // Rights ledger sync (explicit + used after confirmation)
-  app.post("/api/projects/:id/workflow/sync-ledger", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/workflow/sync-ledger", ...requireActivePermission("rights.update"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const project = await storage.getContract(req.params.id);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const project = await requireOwnedContract(req, res, req.params.id);
+      if (!project) return;
       const result = await syncAgreementToRightsLedger(project.id, userId);
       res.json(result);
     } catch (error) {
@@ -351,12 +348,11 @@ export function registerTemplateRoutes(app: Express) {
     }
   });
 
-  app.post("/api/contracts/:id/sync-ledger", isAuthenticated, async (req: any, res) => {
+  app.post("/api/contracts/:id/sync-ledger", ...requireActivePermission("rights.update"), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Forbidden" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
       const result = await syncAgreementToRightsLedger(contract.id, userId);
       res.json(result);
     } catch (error) {

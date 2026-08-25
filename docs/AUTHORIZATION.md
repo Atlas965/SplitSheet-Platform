@@ -1,4 +1,4 @@
-# Authorization & tenancy (Phases 3–4 — as implemented)
+# Authorization & tenancy (Phases 3–5 — as implemented)
 
 SplitSheet is B2B/RaaS. Operators act **inside an organization (tenant)**. Contributors stay accountless.
 
@@ -15,6 +15,7 @@ SplitSheet is B2B/RaaS. Operators act **inside an organization (tenant)**. Contr
 | Resource tenancy | `contracts.organization_id`, `song_assets.organization_id` |
 | Personal workspace | Auto-created on first org resolve / login (`ensurePersonalOrganization`) |
 | RBAC middleware | `server/rbac-middleware.ts` |
+| Resource IDOR | Org-scoped helpers in `server/authz-helpers.ts` |
 
 ## Roles (minimum)
 
@@ -40,7 +41,18 @@ Exact permission lists: `permissionsForRole()` in `shared/org-rbac.ts`.
 | `requireActivePermission(...perms)` | Auth + active org + permission(s) |
 | `requireActiveOrg()` | Auth + active org (no specific permission) |
 
-Wired onto: org member/API-key routes, contracts/assets (create/read/update/delete), projects/clients, confirmation send, Stripe Connect/refund (billing), payment flow (active org).
+## Phase 5 resource authz
+
+| Rule | Behavior |
+| --- | --- |
+| Stamped resource (`organization_id` set) | Access only if it equals the caller's **active** org |
+| Unstamped legacy (`organization_id` null) | Access only if `created_by` = caller (until backfill) |
+| Lists | `getContractsForOrganization` / `getSongAssetsForOrganization` |
+| Helpers | `requireOwnedContract` / `Asset` / `RevenueEvent` / `Collaborator`, `canReadContract`, `resourceBelongsToOrg` |
+
+Wired onto contracts, assets, projects, clients, confirmations, rights ledger, template sync, voice rights context.
+
+**Still creator-scoped (no org column yet):** `creators` table, some negotiations/personal surfaces.
 
 ## APIs
 
@@ -55,8 +67,8 @@ New contracts/assets are stamped with the active `organizationId`.
 
 ## Not done yet (later phases)
 
-- Strict org-scoped IDOR on all reads/writes (Phase 5) — many routes still use `createdBy` after permission checks
 - Stripe customer per organization (Phase 12)
 - Enterprise SSO / SCIM (Phases 9–10)
+- Org column on every remaining resource type (creators, etc.)
 
-Do not treat Phase 4 as complete multi-tenant resource isolation.
+Do not claim “fully multi-tenant secure” without cross-tenant IDOR tests in CI against a live DB.

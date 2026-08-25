@@ -18,6 +18,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
+import { requireOwnedAsset } from "./authz-helpers";
 import { insertCompositionAssetSchema, insertMasterAssetSchema } from "@shared/schema";
 import { auditLog } from "./security";
 import { recalculateLicenseReadiness, tierForScore, tierLabel } from "./license-readiness";
@@ -33,18 +34,8 @@ async function generateUniqueSlSongId(): Promise<string> {
   return `SL-SONG-${Date.now().toString(36).toUpperCase().slice(-8)}`;
 }
 
-async function requireAssetOwner(req: Request, res: Response): Promise<{ id: string; contractId: string | null; createdBy: string } | null> {
-  const userId = (req as any).user.claims.sub;
-  const asset = await storage.getSongAsset(req.params.id);
-  if (!asset) {
-    res.status(404).json({ message: "Asset not found" });
-    return null;
-  }
-  if (asset.createdBy !== userId) {
-    res.status(403).json({ message: "Access denied" });
-    return null;
-  }
-  return asset as any;
+async function requireAssetOwner(req: Request, res: Response) {
+  return requireOwnedAsset(req, res, req.params.id);
 }
 
 export function registerRightsLedgerRoutes(app: Express): void {

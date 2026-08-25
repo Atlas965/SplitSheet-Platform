@@ -7,11 +7,12 @@ import crypto from "crypto";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
-import { requireOwnedCollaborator } from "./authz-helpers";
+import { requireOwnedCollaborator, resourceBelongsToOrg, resolveRequestOrgId } from "./authz-helpers";
 import { requireActivePermission } from "./rbac-middleware";
 import { storage } from "./storage";
 import { db } from "./db";
 import type { Contract } from "@shared/schema";
+import type { OrgAuthedRequest } from "./rbac-middleware";
 
 function generateToken(): string {
   return crypto.randomBytes(32).toString("hex");
@@ -67,15 +68,24 @@ type ContractOwnerResult =
   | { ok: false; error: string; status: number }
   | { ok: true; contract: Contract };
 
-async function assertContractOwner(contractId: string, userId: string): Promise<ContractOwnerResult> {
+async function assertContractAccess(
+  req: OrgAuthedRequest,
+  contractId: string,
+  userId: string,
+): Promise<ContractOwnerResult> {
   const contract = await storage.getContract(contractId);
   if (!contract) return { ok: false, error: "Project not found", status: 404 };
-  if (contract.createdBy !== userId) return { ok: false, error: "Not authorized", status: 403 };
+  const orgId = req.orgAuth?.organizationId ?? (await resolveRequestOrgId(req));
+  if (!resourceBelongsToOrg(contract, orgId, userId)) {
+    return { ok: false, error: "Not authorized", status: 403 };
+  }
   return { ok: true, contract };
 }
 
-async function buildClientList(userId: string) {
-  const userContracts = await storage.getContracts(userId);
+async function buildClientList(userId: string, organizationId?: string | null) {
+  const userContracts = organizationId
+    ? await storage.getContractsForOrganization(organizationId, userId)
+    : await storage.getContracts(userId);
   const clientMap = new Map<string, Record<string, unknown>>();
   for (const contract of userContracts) {
     const collabs = await storage.getContractCollaborators(contract.id);
@@ -119,7 +129,10 @@ export function registerServiceRoutes(app: Express): void {
   app.get("/api/workflow/status", isAuthenticated, async (req: any, res: Response) => {
     try {
       const userId = req.user.claims.sub;
-      const userContracts = await storage.getContracts(userId);
+      const orgId = await resolveRequestOrgId(req);
+      const userContracts = orgId
+        ? await storage.getContractsForOrganization(orgId, userId)
+        : await storage.getContracts(userId);
       let totalContributors = 0;
       let pendingConfirmations = 0;
       let confirmedProjects = 0;
@@ -134,7 +147,7 @@ export function registerServiceRoutes(app: Express): void {
         }
       }
 
-      const clients = await buildClientList(userId);
+      const clients = await buildClientList(userId, orgId);
       res.json({
         clients: clients.length,
         projects: userContracts.length,
@@ -155,18 +168,20 @@ export function registerServiceRoutes(app: Express): void {
   });
 
   // ── Clients (derived from collaborators) ────────────────────────────────────
-  app.get("/api/clients", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
+  app.get("/api/clients", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
-      res.json(await buildClientList(req.user.claims.sub));
+      const userId = (req as any).user.claims.sub;
+      res.json(await buildClientList(userId, req.orgAuth?.organizationId));
     } catch (error) {
       console.error("[CLIENTS LIST]", error);
       res.status(500).json({ message: "Failed to fetch clients" });
     }
   });
 
-  app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
+  app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
-      const clients = await buildClientList(req.user.claims.sub);
+      const userId = (req as any).user.claims.sub;
+      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
       const client = clients.find((c) => c.id === req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
@@ -178,16 +193,18 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
+  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
-      const userId = req.user.claims.sub;
-      const clients = await buildClientList(userId);
+      const userId = (req as any).user.claims.sub;
+      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
       const client = clients.find((c) => c.id === req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
         return;
       }
-      const userContracts = await storage.getContracts(userId);
+      const userContracts = req.orgAuth?.organizationId
+        ? await storage.getContractsForOrganization(req.orgAuth.organizationId, userId)
+        : await storage.getContracts(userId);
       const email = client.email as string | null;
       const name = client.name as string;
       const projects = [];
@@ -234,9 +251,12 @@ export function registerServiceRoutes(app: Express): void {
   });
 
   // ── Projects (contract alias) ───────────────────────────────────────────────
-  app.get("/api/projects", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
+  app.get("/api/projects", ...requireActivePermission("project.read"), async (req: OrgAuthedRequest, res: Response) => {
     try {
-      const userContracts = await storage.getContracts(req.user.claims.sub);
+      const userId = (req as any).user.claims.sub;
+      const userContracts = req.orgAuth?.organizationId
+        ? await storage.getContractsForOrganization(req.orgAuth.organizationId, userId)
+        : await storage.getContracts(userId);
       const projects = await Promise.all(
         userContracts.map(async (contract) => {
           const collabs = await storage.getContractCollaborators(contract.id);
@@ -260,7 +280,7 @@ export function registerServiceRoutes(app: Express): void {
 
   app.get("/api/projects/:id", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -273,7 +293,7 @@ export function registerServiceRoutes(app: Express): void {
 
   app.patch("/api/projects/:id", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -295,7 +315,7 @@ export function registerServiceRoutes(app: Express): void {
 
   app.get("/api/projects/:id/contributors", ...requireActivePermission("project.read"), async (req: any, res: Response) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -341,7 +361,7 @@ export function registerServiceRoutes(app: Express): void {
         res.status(400).json({ message: "Invalid contributor data", issues: parsed.error.issues });
         return;
       }
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -382,7 +402,7 @@ export function registerServiceRoutes(app: Express): void {
 
   app.patch("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -412,7 +432,7 @@ export function registerServiceRoutes(app: Express): void {
 
   app.delete("/api/projects/:id/contributors/:contribId", ...requireActivePermission("project.update"), async (req: any, res: Response) => {
     try {
-      const result = await assertContractOwner(req.params.id, req.user.claims.sub);
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
         return;
@@ -428,7 +448,7 @@ export function registerServiceRoutes(app: Express): void {
     const contractId = req.params.id;
     const userId = (req as any).user?.claims?.sub;
     try {
-      const result = await assertContractOwner(contractId, userId);
+      const result = await assertContractAccess(req, contractId, userId);
       if ("error" in result) {
         res.status(result.status).json({ error: result.error });
         return;

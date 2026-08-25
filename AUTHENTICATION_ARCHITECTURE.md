@@ -401,3 +401,18 @@ Phase 1 hardening is implemented in code. Redeploy Production, then manually ver
 | Docs | `docs/AUTHORIZATION.md` |
 
 **Not claimed:** Org-scoped IDOR on every by-id resource (Phase 5). Permission checks do not replace `createdBy` ownership yet.
+
+---
+
+## 22. Phase 5 — Resource-level org IDOR (implemented for contracts/assets)
+
+| Item | Result |
+| --- | --- |
+| Policy | Stamped `organization_id` must match active org; null → legacy `createdBy` |
+| Helpers | `resourceBelongsToOrg`, upgraded `requireOwned*`, `canReadContract` |
+| Lists | `getContractsForOrganization`, `getSongAssetsForOrganization` |
+| Surfaces | Contracts, assets, projects, clients, confirmations, rights ledger, template sync, voice context |
+| Tests | `server/__tests__/org-resource-authz.test.ts` |
+| Docs | `docs/AUTHORIZATION.md` |
+
+**Remaining:** creators (no org column), some negotiation/personal routes still `createdBy`-only; live cross-tenant IDOR suite not yet in CI.

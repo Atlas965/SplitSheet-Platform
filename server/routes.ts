@@ -52,6 +52,7 @@ import {
   requireOwnedAsset,
   requireOwnedContract,
   requireOwnedRevenueEvent,
+  canReadContract,
 } from "./authz-helpers";
 import { resolveActiveOrganization } from "./org-context";
 import {
@@ -291,10 +292,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contract routes
-  app.get("/api/contracts", ...requireActivePermission("agreement.read"), async (req: any, res) => {
+  app.get("/api/contracts", ...requireActivePermission("agreement.read"), async (req: OrgAuthedRequest, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contracts = await storage.getContracts(userId);
+      const userId = (req as any).user.claims.sub;
+      const orgId = req.orgAuth?.organizationId;
+      const contracts = orgId
+        ? await storage.getContractsForOrganization(orgId, userId)
+        : await storage.getContracts(userId);
       res.json(contracts);
     } catch (error) {
       console.error("Error fetching contracts:", error);
@@ -304,24 +308,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/contracts/:id", ...requireActivePermission("agreement.read"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
+      const access = await canReadContract(req, req.params.id);
+      if (!access.ok) {
+        return res.status(access.status).json({ message: access.message });
       }
-
-      // Check if user owns this contract or is a collaborator
-      if (contract.createdBy !== userId) {
-        const collaborators = await storage.getContractCollaborators(
-          req.params.id,
-        );
-        const isCollaborator = collaborators.some((c) => c.userId === userId);
-        if (!isCollaborator) {
-          return res.status(403).json({ message: "Access denied" });
-        }
-      }
-
-      res.json(contract);
+      res.json(access.contract);
     } catch (error) {
       console.error("Error fetching contract:", error);
       res.status(500).json({ message: "Failed to fetch contract" });
@@ -395,22 +386,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
-      }
-
-      // Check if user owns this contract or is a collaborator with edit permission
-      if (contract.createdBy !== userId) {
-        const collaborators = await storage.getContractCollaborators(
-          req.params.id,
-        );
-        const userCollaborator = collaborators.find((c) => c.userId === userId);
-        if (!userCollaborator || userCollaborator.status !== "accepted") {
-          return res.status(403).json({ message: "Access denied" });
-        }
-      }
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
 
       const updates = req.body;
       const updatedContract = await storage.updateContract(
@@ -426,20 +403,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/contracts/:id", ...requireActivePermission("agreement.update"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) {
-        return res.status(404).json({ message: "Contract not found" });
-      }
-
-      // Only the contract owner can delete the contract
-      if (contract.createdBy !== userId) {
-        return res
-          .status(403)
-          .json({
-            message: "Only the contract owner can delete this contract",
-          });
-      }
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
 
       await storage.deleteContract(req.params.id);
       res.json({ message: "Contract deleted successfully" });
@@ -452,24 +417,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Contract collaborator routes
   app.get(
     "/api/contracts/:id/collaborators",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req: any, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-
-        // Check if user owns this contract or is a collaborator
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id,
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
 
         const collaborators = await storage.getContractCollaborators(
@@ -485,21 +438,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post(
     "/api/contracts/:id/collaborators",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req: any, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-
-        // Only the contract owner can add collaborators
-        if (contract.createdBy !== userId) {
-          return res
-            .status(403)
-            .json({ message: "Only the contract owner can add collaborators" });
-        }
+        const contract = await requireOwnedContract(req, res, req.params.id);
+        if (!contract) return;
 
         const collaboratorData = insertContractCollaboratorSchema.parse({
           ...req.body,
@@ -527,24 +470,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Contract signature routes
   app.get(
     "/api/contracts/:id/signatures",
-    isAuthenticated,
+    ...requireActivePermission("agreement.read"),
     async (req: any, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-
-        // Check if user owns this contract or is a collaborator
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id,
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
 
         const signatures = await storage.getContractSignatures(req.params.id);
@@ -558,24 +489,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post(
     "/api/contracts/:id/signatures",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req: any, res) => {
       try {
         const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
-        }
-
-        // Check if user owns this contract or is a collaborator
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id,
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
 
         const signatureData = insertContractSignatureSchema.parse({
@@ -603,26 +523,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Owner e-signature endpoint — stores drawn signature as Base64 in contract metadata
   app.post(
     "/api/contracts/:id/sign",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     async (req: any, res) => {
       try {
         const userId = req.user.claims.sub;
-        const contract = await storage.getContract(req.params.id);
-        if (!contract) {
-          return res.status(404).json({ message: "Contract not found" });
+        const access = await canReadContract(req, req.params.id);
+        if (!access.ok) {
+          return res.status(access.status).json({ message: access.message });
         }
-
-        // Only the contract owner or a collaborator may sign
-        if (contract.createdBy !== userId) {
-          const collaborators = await storage.getContractCollaborators(
-            req.params.id,
-          );
-          const isCollaborator = collaborators.some((c) => c.userId === userId);
-          if (!isCollaborator) {
-            return res.status(403).json({ message: "Access denied" });
-          }
-        }
-
+        const contract = access.contract;
         const {
           signatureData,
           signerName,
@@ -1781,9 +1690,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ─── SONG ASSETS (CAP TABLE) ─────────────────────────────────────────────
 
-  app.get("/api/assets", ...requireActivePermission("rights.read"), async (req: any, res) => {
+  app.get("/api/assets", ...requireActivePermission("rights.read"), async (req: OrgAuthedRequest, res) => {
     try {
-      const assets = await storage.getSongAssets(req.user.claims.sub);
+      const userId = (req as any).user.claims.sub;
+      const orgId = req.orgAuth?.organizationId;
+      const assets = orgId
+        ? await storage.getSongAssetsForOrganization(orgId, userId)
+        : await storage.getSongAssets(userId);
       res.json(assets);
     } catch (error) {
       console.error("Error fetching assets:", error);
@@ -1822,10 +1735,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/assets/:id", ...requireActivePermission("rights.update"), async (req: any, res) => {
     try {
-      const asset = await storage.getSongAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      if (asset.createdBy !== req.user.claims.sub)
-        return res.status(403).json({ message: "Access denied" });
+      const asset = await requireOwnedAsset(req, res, req.params.id);
+      if (!asset) return;
       const updated = await storage.updateSongAsset(req.params.id, req.body);
       res.json(updated);
     } catch (error) {
@@ -1886,14 +1797,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST initial ownership record for a new asset
   app.post(
     "/api/assets/:id/ownership",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req: any, res) => {
       try {
         const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
 
         const record = await storage.createOwnershipRecord({
           ...req.body,
@@ -1923,14 +1832,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // PUT update ownership split — versioned, never overwrites
   app.put(
     "/api/assets/:id/ownership",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req: any, res) => {
       try {
         const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
 
         const { splits, changeReason } = req.body;
         if (!Array.isArray(splits) || splits.length === 0)
@@ -1993,14 +1900,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post(
     "/api/assets/:id/revenue",
-    isAuthenticated,
+    ...requireActivePermission("rights.update"),
     async (req: any, res) => {
       try {
-        const userId = req.user.claims.sub;
-        const asset = await storage.getSongAsset(req.params.id);
-        if (!asset) return res.status(404).json({ message: "Asset not found" });
-        if (asset.createdBy !== userId)
-          return res.status(403).json({ message: "Access denied" });
+        const asset = await requireOwnedAsset(req, res, req.params.id);
+        if (!asset) return;
 
         const event = await storage.recordRevenueEvent({
           ...req.body,
@@ -2113,10 +2017,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Generate confirmation links for a contract
   app.post('/api/contracts/:id/confirmations', ...requireActivePermission("agreement.send"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
 
       const collaborators = await storage.getContractCollaborators(req.params.id);
       const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
@@ -2153,10 +2055,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get confirmations for a contract (operator view)
   app.get('/api/contracts/:id/confirmations', ...requireActivePermission("agreement.read"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const contract = await storage.getContract(req.params.id);
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (contract.createdBy !== userId) return res.status(403).json({ message: "Access denied" });
+      const contract = await requireOwnedContract(req, res, req.params.id);
+      if (!contract) return;
 
       const confirmations = await storage.getConfirmationsByContract(req.params.id);
       res.json(confirmations);

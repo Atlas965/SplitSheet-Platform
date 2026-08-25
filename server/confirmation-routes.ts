@@ -62,16 +62,9 @@ export function registerConfirmationRoutes(app: Express): void {
       const userId = (req as any).user?.claims?.sub;
 
       try {
-        // Verify this user owns the contract
-        const contractRows = await db.execute(sql`
-          SELECT id, title, status, created_by
-          FROM contracts
-          WHERE id = ${contractId}
-          LIMIT 1
-        `);
-        const contract = contractRows.rows[0] as any;
-        if (!contract) { res.status(404).json({ error: "Contract not found" }); return; }
-        if (contract.created_by !== userId) { res.status(403).json({ error: "Not authorized" }); return; }
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
 
         // Get all collaborators
         const collabRows = await db.execute(sql`
@@ -184,14 +177,9 @@ export function registerConfirmationRoutes(app: Express): void {
       const userId = (req as any).user?.claims?.sub;
 
       try {
-        // Auth check
-        const contractRows = await db.execute(sql`
-          SELECT id, title, status, created_by FROM contracts
-          WHERE id = ${contractId} LIMIT 1
-        `);
-        const contract = contractRows.rows[0] as any;
-        if (!contract) { res.status(404).json({ error: "Contract not found" }); return; }
-        if (contract.created_by !== userId) { res.status(403).json({ error: "Not authorized" }); return; }
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status };
 
         // Join confirmations with collaborators
         const rows = await db.execute(sql`

@@ -16,7 +16,8 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
 import { isAdmin } from "./adminAuth";
-import { requireActiveOrg } from "./rbac-middleware";
+import { requireActiveOrg, requireActivePermission } from "./rbac-middleware";
+import { requireOwnedContract } from "./authz-helpers";
 import {
   splitSheetSchema,
   computeContentHash,
@@ -55,12 +56,14 @@ export async function registerSecurityRoutes(app: Express): Promise<void> {
    */
   app.post(
     "/api/splits",
-    isAuthenticated,
+    ...requireActivePermission("agreement.update"),
     splitRateLimit,
     async (req: Request, res: Response): Promise<void> => {
       const userId = (req as any).user?.claims?.sub;
       try {
         const body = splitSheetSchema.parse(req.body);
+        const owned = await requireOwnedContract(req, res, body.contractId);
+        if (!owned) return;
 
         const prevRows = await db.execute(sql`
           SELECT version_number, collaborators, content_hash, created_at
@@ -473,15 +476,15 @@ export async function registerSecurityRoutes(app: Express): Promise<void> {
     res.json(rows.rows);
   });
 
-  app.get("/api/splits/:contractId/history", isAuthenticated, async (req: Request, res: Response): Promise<void> => {
-    const userId = (req as any).user?.claims?.sub;
+  app.get("/api/splits/:contractId/history", ...requireActivePermission("agreement.read"), async (req: Request, res: Response): Promise<void> => {
+    const owned = await requireOwnedContract(req, res, req.params.contractId);
+    if (!owned) return;
     const rows = await db.execute(sql`
       SELECT version_number, content_hash, prev_hash, status,
              total_pct, created_at, signed_at, locked_at,
              jsonb_array_length(collaborators) AS collaborator_count
       FROM split_versions
       WHERE contract_id = ${req.params.contractId}
-        AND created_by = ${userId}
       ORDER BY version_number DESC
     `);
     res.json(rows.rows);
