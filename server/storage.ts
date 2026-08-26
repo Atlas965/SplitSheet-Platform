@@ -274,18 +274,46 @@ export class DatabaseStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return user;
+    try {
+      const [user] = await db
+        .insert(users)
+        .values(userData)
+        .onConflictDoUpdate({
+          target: users.id,
+          set: {
+            ...userData,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+      return user;
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const email =
+        typeof userData.email === "string" ? userData.email.trim().toLowerCase() : null;
+      if ((err?.code === "23505" || /users_email_unique/i.test(msg)) && email) {
+        const [existing] = await db
+          .select()
+          .from(users)
+          .where(sql`lower(${users.email}) = ${email}`)
+          .limit(1);
+        if (existing) {
+          const [updated] = await db
+            .update(users)
+            .set({
+              firstName: userData.firstName ?? existing.firstName,
+              lastName: userData.lastName ?? existing.lastName,
+              profileImageUrl: userData.profileImageUrl ?? existing.profileImageUrl,
+              email,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, existing.id))
+            .returning();
+          return updated;
+        }
+      }
+      throw err;
+    }
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User> {

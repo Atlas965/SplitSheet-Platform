@@ -9,6 +9,7 @@ import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import { db } from "./db";
 import { users } from "@shared/schema";
+import { sql } from "drizzle-orm";
 import {
   isVercelRuntime,
   isProductionLike,
@@ -97,23 +98,68 @@ function updateUserSession(
 }
 
 async function upsertUser(claims: any) {
-  const existingUser = await storage.getUser(claims["sub"]);
+  const id = claims["sub"];
+  const email = typeof claims["email"] === "string"
+    ? claims["email"].trim().toLowerCase()
+    : claims["email"];
 
+  const existingUser = await storage.getUser(id);
   if (existingUser) {
-    await storage.updateUser(claims["sub"], {
-      email: claims["email"],
+    await storage.updateUser(id, {
+      email,
       firstName: claims["first_name"],
       lastName: claims["last_name"],
       profileImageUrl: claims["profile_image_url"],
     });
-  } else {
+    return;
+  }
+
+  if (email) {
+    const [byEmail] = await db
+      .select()
+      .from(users)
+      .where(sql`lower(${users.email}) = ${email}`)
+      .limit(1);
+    if (byEmail) {
+      await storage.updateUser(byEmail.id, {
+        email: email || byEmail.email,
+        firstName: claims["first_name"] || byEmail.firstName,
+        lastName: claims["last_name"] || byEmail.lastName,
+        profileImageUrl: claims["profile_image_url"] || byEmail.profileImageUrl,
+      });
+      // Session still uses claims.sub — rewrite claims so /api/auth/user finds the row
+      claims["sub"] = byEmail.id;
+      return;
+    }
+  }
+
+  try {
     await db.insert(users).values({
-      id: claims["sub"],
-      email: claims["email"],
+      id,
+      email,
       firstName: claims["first_name"],
       lastName: claims["last_name"],
       profileImageUrl: claims["profile_image_url"],
     });
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (err?.code === "23505" || /users_email_unique/i.test(msg)) {
+      if (email) {
+        const [byEmail] = await db
+          .select()
+          .from(users)
+          .where(sql`lower(${users.email}) = ${email}`)
+          .limit(1);
+        if (byEmail) {
+          claims["sub"] = byEmail.id;
+          return;
+        }
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method.",
+      );
+    }
+    throw err;
   }
 }
 

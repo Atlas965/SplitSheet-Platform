@@ -6,13 +6,19 @@
  */
 import type { Express, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import * as client from "openid-client";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { storage } from "./storage";
 import { establishSession } from "./session-security";
 import { createPgRateLimiter } from "./security";
+
+function isPgUniqueViolation(err: unknown): boolean {
+  const e = err as any;
+  const msg = String(e?.message || e?.cause?.message || e?.detail || "");
+  return e?.code === "23505" || /users_email_unique|unique constraint/i.test(msg);
+}
 
 export type SocialProviderId = "google" | "apple" | "github" | "microsoft";
 
@@ -79,10 +85,24 @@ export function hasAnySocialProvider(): boolean {
 }
 
 async function getUserByEmail(email: string) {
-  const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return undefined;
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = ${normalized}`)
+    .limit(1);
   return row;
 }
 
+/**
+ * Resolve OAuth login to a SplitSheet user id.
+ * users.email is UNIQUE — inserting a second row for an existing email throws
+ * users_email_unique and leaves the operator with no session (/api/auth/user 401).
+ *
+ * Default: link verified-email logins onto the existing account id.
+ * Opt out: DISALLOW_EMAIL_ACCOUNT_LINKING=true
+ */
 async function upsertSocialUser(input: {
   provider: SocialProviderId;
   providerUserId: string;
@@ -92,40 +112,37 @@ async function upsertSocialUser(input: {
   profileImageUrl?: string | null;
   emailVerified?: boolean;
 }) {
-  // Ensure Phase 3+ columns exist before Drizzle selects users.*
   const { ensureOrgTenantSchema } = await import("./org-context");
   await ensureOrgTenantSchema();
 
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
+  const disallowLink =
+    process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "true" ||
+    process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "1";
 
   let existing = await storage.getUser(preferredId);
 
-  // Do not auto-link by email across identities (account-takeover risk).
-  // Optional explicit opt-in: ALLOW_EMAIL_ACCOUNT_LINKING=true AND verified email
-  // AND existing user already uses the same provider prefix.
-  if (
-    !existing &&
-    email &&
-    input.emailVerified &&
-    process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true"
-  ) {
+  if (!existing && email) {
     const byEmail = await getUserByEmail(email);
-    if (byEmail?.id?.startsWith(`${input.provider}:`)) {
-      existing = byEmail;
-    } else if (byEmail) {
-      console.warn(
-        `[auth] Refusing email link for ${input.provider}: existing account uses a different identity id`,
-      );
+    if (byEmail) {
+      const sameProvider = byEmail.id.startsWith(`${input.provider}:`);
+      if (sameProvider || (input.emailVerified && !disallowLink)) {
+        if (!sameProvider) {
+          console.warn(
+            `[auth] Linking ${input.provider} login to existing user ${byEmail.id} via verified email`,
+          );
+        }
+        existing = byEmail;
+      } else {
+        throw new Error(
+          "This email is already registered with a different sign-in method. Use the original provider or contact support.",
+        );
+      }
     }
   }
 
   if (existing) {
-    if (existing.id !== preferredId && !existing.id.startsWith(`${input.provider}:`)) {
-      throw new Error(
-        "This email is already linked to a different sign-in method. Use the original provider or contact support.",
-      );
-    }
     await storage.updateUser(existing.id, {
       email: email || existing.email,
       firstName: input.firstName || existing.firstName,
@@ -135,14 +152,36 @@ async function upsertSocialUser(input: {
     return existing.id;
   }
 
-  await db.insert(users).values({
-    id: preferredId,
-    email,
-    firstName: input.firstName || null,
-    lastName: input.lastName || null,
-    profileImageUrl: input.profileImageUrl || null,
-  });
-  return preferredId;
+  try {
+    await db.insert(users).values({
+      id: preferredId,
+      email,
+      firstName: input.firstName || null,
+      lastName: input.lastName || null,
+      profileImageUrl: input.profileImageUrl || null,
+    });
+    return preferredId;
+  } catch (err) {
+    if (isPgUniqueViolation(err) && email) {
+      const byEmail = await getUserByEmail(email);
+      if (byEmail && !disallowLink) {
+        console.warn(
+          `[auth] Recovered from users_email_unique for ${input.provider}; reusing ${byEmail.id}`,
+        );
+        await storage.updateUser(byEmail.id, {
+          email: email || byEmail.email,
+          firstName: input.firstName || byEmail.firstName,
+          lastName: input.lastName || byEmail.lastName,
+          profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl,
+        });
+        return byEmail.id;
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method. Use the original provider or contact support.",
+      );
+    }
+    throw err;
+  }
 }
 
 function sessionUserFromClaims(claims: Record<string, any>, provider: SocialProviderId) {

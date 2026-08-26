@@ -5,16 +5,21 @@
  */
 import type { Express, Request, Response } from "express";
 import * as client from "openid-client";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { storage } from "./storage";
 import { establishSession, destroySession } from "./session-security";
 import { createPgRateLimiter } from "./security";
-import { sql } from "drizzle-orm";
 
 const SESSION_TTL_SEC = 7 * 24 * 60 * 60;
 const OAUTH_COOKIE = "oauth_state_auth0";
+
+function isPgUniqueViolation(err: unknown): boolean {
+  const e = err as any;
+  const msg = String(e?.message || e?.cause?.message || e?.detail || "");
+  return e?.code === "23505" || /users_email_unique|unique constraint/i.test(msg);
+}
 
 export function hasAuth0Credentials(): boolean {
   return Boolean(
@@ -112,13 +117,20 @@ async function getUserByAuth0Sub(auth0Sub: string) {
 }
 
 async function getUserByEmail(email: string) {
-  const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return undefined;
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = ${normalized}`)
+    .limit(1);
   return row;
 }
 
 /**
  * Map Auth0 identity → SplitSheet user.
- * Prefer auth0_sub link; never silently steal accounts across providers.
+ * Prefer auth0_sub / preferred id; on email conflict, link verified emails to
+ * the existing row so login never dies on users_email_unique.
  */
 async function upsertAuth0User(input: {
   auth0Sub: string;
@@ -130,28 +142,32 @@ async function upsertAuth0User(input: {
 }): Promise<string> {
   const preferredId = `auth0:${input.auth0Sub}`;
   const email = input.email?.trim().toLowerCase() || null;
+  const disallowLink =
+    process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "true" ||
+    process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "1";
 
   let existing = await getUserByAuth0Sub(input.auth0Sub);
   if (!existing) {
     existing = await storage.getUser(preferredId);
   }
 
-  if (
-    !existing &&
-    email &&
-    input.emailVerified &&
-    process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true"
-  ) {
+  if (!existing && email) {
     const byEmail = await getUserByEmail(email);
     if (byEmail) {
-      await storage.updateUser(byEmail.id, {
-        auth0Sub: input.auth0Sub,
-        email: email || byEmail.email,
-        firstName: input.firstName || byEmail.firstName,
-        lastName: input.lastName || byEmail.lastName,
-        profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl,
-      } as any);
-      return byEmail.id;
+      const sameAuth0 =
+        byEmail.auth0Sub === input.auth0Sub || byEmail.id.startsWith("auth0:");
+      if (sameAuth0 || (input.emailVerified && !disallowLink)) {
+        if (!sameAuth0) {
+          console.warn(
+            `[auth0] Linking Auth0 sub to existing user ${byEmail.id} via verified email`,
+          );
+        }
+        existing = byEmail;
+      } else {
+        throw new Error(
+          "This email is already registered with a different sign-in method. Use the original provider or contact support.",
+        );
+      }
     }
   }
 
@@ -166,15 +182,36 @@ async function upsertAuth0User(input: {
     return existing.id;
   }
 
-  await db.insert(users).values({
-    id: preferredId,
-    auth0Sub: input.auth0Sub,
-    email,
-    firstName: input.firstName || null,
-    lastName: input.lastName || null,
-    profileImageUrl: input.profileImageUrl || null,
-  } as any);
-  return preferredId;
+  try {
+    await db.insert(users).values({
+      id: preferredId,
+      auth0Sub: input.auth0Sub,
+      email,
+      firstName: input.firstName || null,
+      lastName: input.lastName || null,
+      profileImageUrl: input.profileImageUrl || null,
+    } as any);
+    return preferredId;
+  } catch (err) {
+    if (isPgUniqueViolation(err) && email) {
+      const byEmail = await getUserByEmail(email);
+      if (byEmail && !disallowLink) {
+        console.warn(`[auth0] Recovered from users_email_unique; reusing ${byEmail.id}`);
+        await storage.updateUser(byEmail.id, {
+          auth0Sub: input.auth0Sub,
+          email: email || byEmail.email,
+          firstName: input.firstName || byEmail.firstName,
+          lastName: input.lastName || byEmail.lastName,
+          profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl,
+        } as any);
+        return byEmail.id;
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method. Use the original provider or contact support.",
+      );
+    }
+    throw err;
+  }
 }
 
 function loginFailure(res: Response, message: string) {
