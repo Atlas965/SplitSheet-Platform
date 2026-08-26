@@ -1,569 +1,621 @@
-import { useState } from "react";
 import Logo from "@/components/Logo";
 import Footer from "@/components/Footer";
 
-// ── Quick Split Calculator ────────────────────────────────────────────────────
-function QuickSplitCalculator() {
-  const [names, setNames] = useState(["", ""]);
-  const [percentages, setPercentages] = useState([50, 50]);
+/** Mirrors billing.tsx plan names/prices — do not invent. */
+const OPERATOR_PLANS = [
+  {
+    name: "Starter Split",
+    price: "$0",
+    billing: "Free · no card needed",
+    features: [
+      "1 collaboration project",
+      "Up to 2 contributors",
+      "Basic split allocation",
+      "Contributor confirmation links",
+      "Timestamped agreement summary",
+      "PDF export",
+    ],
+    featured: false,
+  },
+  {
+    name: "Pay-Per-Session",
+    price: "$25 CAD",
+    billing: "Per completed session",
+    features: [
+      "Up to 5 contributors",
+      "Split percentage configuration",
+      "Contributor verification workflow",
+      "Agreement completion tracking",
+      "PDF export package",
+      "Audit log storage",
+      "Email confirmations",
+    ],
+    featured: true,
+  },
+  {
+    name: "Creator Pro",
+    price: "$15 CAD/mo",
+    billing: "Unlimited sessions",
+    features: [
+      "Unlimited sessions (no per-session fee)",
+      "Project history storage",
+      "Saved contributor profiles",
+      "Discounted premium exports",
+    ],
+    featured: false,
+  },
+  {
+    name: "Studio Pro",
+    price: "$49 CAD/mo",
+    billing: "Unlimited projects & team",
+    features: [
+      "Unlimited projects and contributors",
+      "Team management dashboard",
+      "Role-based permissions",
+      "Advanced audit logs",
+      "Bulk exports",
+      "Priority support",
+    ],
+    featured: false,
+  },
+] as const;
 
-  const equalize = () => {
-    const equal = Math.floor(100 / names.length);
-    const remainder = 100 - equal * names.length;
-    setPercentages(names.map((_, i) => (i === 0 ? equal + remainder : equal)));
-  };
+const WORKFLOW_STEPS = [
+  { n: "01", title: "Create project", desc: "Open a song or project and enter contributors." },
+  { n: "02", title: "Set splits", desc: "Define roles and ownership percentages." },
+  { n: "03", title: "Build agreement", desc: "Populate the agreement workflow from your project data." },
+  { n: "04", title: "Validate", desc: "Check required fields and ownership totals before sending." },
+  { n: "05", title: "Confirm", desc: "Send contributors a secure link to review and confirm." },
+  { n: "06", title: "Capture evidence", desc: "Record confirmation status, timestamps, and related event data." },
+  { n: "07", title: "Record rights", desc: "Keep resulting ownership information in the rights ledger." },
+] as const;
 
-  const addPerson = () => {
-    setNames([...names, ""]);
-    setPercentages([...percentages, 0]);
-  };
+const TEMPLATE_CATEGORIES = [
+  "Split sheets",
+  "Producer agreements",
+  "Master rights",
+  "Publishing",
+  "Licensing",
+  "Artist / label",
+  "Management",
+  "Live / touring",
+] as const;
 
-  const removePerson = (i: number) => {
-    if (names.length <= 2) return;
-    setNames(names.filter((_, idx) => idx !== i));
-    setPercentages(percentages.filter((_, idx) => idx !== i));
-  };
-
-  const updatePct = (i: number, val: number) => {
-    const updated = [...percentages];
-    updated[i] = Math.max(0, Math.min(100, val));
-    setPercentages(updated);
-  };
-
-  const total = percentages.reduce((a, b) => a + b, 0);
-
+function ProductMock() {
   return (
-    <div className="bg-card border border-border rounded-xl p-6">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <h3 className="font-semibold text-foreground text-lg">Quick Split Preview</h3>
-          <p className="text-sm text-muted-foreground mt-0.5">Try it — no account required</p>
-        </div>
-        <button
-          onClick={equalize}
-          className="bg-accent text-accent-foreground text-sm font-semibold px-4 py-2 rounded-lg hover:bg-accent/90 transition-colors"
-        >
-          ⚖ Equal Split
-        </button>
-      </div>
-
-      <div className="space-y-3 mb-4">
-        {names.map((name, i) => (
-          <div key={i} className="flex items-center gap-3">
-            <input
-              type="text"
-              placeholder={`Collaborator ${i + 1}`}
-              value={name}
-              onChange={(e) => {
-                const n = [...names];
-                n[i] = e.target.value;
-                setNames(n);
-              }}
-              className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-accent transition-colors"
-            />
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={percentages[i]}
-              onChange={(e) => updatePct(i, parseInt(e.target.value) || 0)}
-              className="w-16 bg-muted border border-border rounded-lg px-2 py-2 text-sm text-center text-foreground outline-none focus:border-accent transition-colors"
-            />
-            <span className="text-sm text-muted-foreground">%</span>
-            {names.length > 2 && (
-              <button
-                onClick={() => removePerson(i)}
-                className="text-muted-foreground hover:text-destructive transition-colors text-xl leading-none w-6 text-center"
-              >
-                ×
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div
-        className={`rounded-lg px-4 py-2.5 mb-4 flex items-center justify-between text-sm font-medium ${
-          total === 100
-            ? "bg-green-50 text-green-800 border border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800"
-            : "bg-yellow-50 text-yellow-800 border border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800"
-        }`}
-      >
-        <span>Total ownership</span>
-        <span className="font-bold">
-          {total}%{" "}
-          {total === 100
-            ? "✓"
-            : total < 100
-            ? `(${100 - total}% remaining)`
-            : `(${total - 100}% over)`}
+    <div
+      className="relative w-full overflow-hidden rounded-xl border border-border bg-card shadow-xl shadow-black/[0.06]"
+      aria-hidden
+    >
+      <div className="flex items-center gap-2 border-b border-border bg-muted/60 px-4 py-2.5">
+        <span className="h-2.5 w-2.5 rounded-full bg-border" />
+        <span className="h-2.5 w-2.5 rounded-full bg-border" />
+        <span className="h-2.5 w-2.5 rounded-full bg-border" />
+        <span className="ml-3 text-xs font-medium text-muted-foreground">
+          Operator workspace · Projects
         </span>
       </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={addPerson}
-          className="flex-1 border border-border text-muted-foreground text-sm py-2 rounded-lg hover:border-accent hover:text-accent transition-colors"
-        >
-          + Add collaborator
-        </button>
-        <a
-          href="/login"
-          className={`flex-1 text-center text-sm py-2 rounded-lg font-semibold transition-opacity ${
-            total === 100
-              ? "bg-accent text-accent-foreground hover:opacity-90"
-              : "bg-muted text-muted-foreground opacity-50 pointer-events-none"
-          }`}
-        >
-          Save &amp; Send →
-        </a>
+      <div className="grid gap-0 md:grid-cols-[11rem_1fr]">
+        <aside className="hidden space-y-2 border-r border-border bg-muted/30 p-4 md:block">
+          {["Projects", "Clients", "Agreements", "Ownership", "Billing"].map((item, i) => (
+            <div
+              key={item}
+              className={`rounded-md px-3 py-2 text-xs font-medium ${
+                i === 0 ? "bg-accent/15 text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              {item}
+            </div>
+          ))}
+        </aside>
+        <div className="space-y-4 p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Active project
+              </p>
+              <p className="text-lg font-semibold text-foreground">Midnight Drive</p>
+              <p className="text-xs text-muted-foreground">3 contributors · splits set</p>
+            </div>
+            <span className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-semibold text-foreground">
+              Pending confirmation
+            </span>
+          </div>
+          <div className="space-y-2">
+            {[
+              { name: "Jordan S.", role: "Producer", pct: "40%", status: "Confirmed" },
+              { name: "Maya C.", role: "Writer", pct: "35%", status: "Sent" },
+              { name: "Dev P.", role: "Co-writer", pct: "25%", status: "Not sent" },
+            ].map((row) => (
+              <div
+                key={row.name}
+                className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2.5"
+              >
+                <div>
+                  <p className="text-sm font-medium text-foreground">{row.name}</p>
+                  <p className="text-xs text-muted-foreground">{row.role}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-foreground">{row.pct}</p>
+                  <p className="text-[11px] text-muted-foreground">{row.status}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">
+              Send confirmations
+            </span>
+            <span className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
+              Open agreement
+            </span>
+          </div>
+        </div>
       </div>
-      <p className="text-xs text-muted-foreground text-center mt-3">
-        Signing up takes under 60 seconds.
-      </p>
     </div>
   );
 }
 
-// ── Landing Page ──────────────────────────────────────────────────────────────
 export default function Landing() {
-  const demoSplits = [
-    { name: "Jordan S.", role: "Producer",  pct: 40, color: "#3b6ef5" },
-    { name: "Maya C.",   role: "Writer",    pct: 35, color: "#22a06b" },
-    { name: "Dev P.",    role: "Co-writer", pct: 25, color: "#f59e0b" },
-  ];
-
   return (
-    <div className="min-h-screen bg-background">
-
-      {/* Navigation */}
-      <nav className="bg-card/80 backdrop-blur-md border-b border-border sticky top-0 z-50 supports-[backdrop-filter]:bg-card/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-3">
-              <Logo />
-              <span className="text-xl font-bold text-primary tracking-tight">SplitSheet</span>
-            </div>
-            <div className="hidden md:flex items-center space-x-8">
-              <a href="#features"     className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
-              <a href="#how-it-works" className="text-muted-foreground hover:text-foreground transition-colors">How It Works</a>
-              <a href="#pricing"      className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
-              <a href="/login"    className="text-muted-foreground hover:text-foreground transition-colors">Sign In</a>
-              <a href="/login"    className="bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 hover:shadow-md transition-all font-semibold">
-                Get Started Free
-              </a>
-            </div>
-            <div className="md:hidden">
-              <a href="/login" className="bg-primary text-primary-foreground px-3 py-1.5 rounded-lg text-sm font-semibold">
-                Get Started
-              </a>
-            </div>
+    <div className="min-h-screen bg-background text-foreground">
+      <nav className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-md supports-[backdrop-filter]:bg-card/70">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+          <a href="/" className="flex items-center gap-2.5">
+            <Logo />
+            <span className="text-lg font-bold tracking-tight text-primary">SplitSheet</span>
+          </a>
+          <div className="hidden items-center gap-7 text-sm md:flex">
+            <a href="#how-it-works" className="text-muted-foreground transition-colors hover:text-foreground">
+              How It Works
+            </a>
+            <a href="#product" className="text-muted-foreground transition-colors hover:text-foreground">
+              Product
+            </a>
+            <a href="#templates" className="text-muted-foreground transition-colors hover:text-foreground">
+              Templates
+            </a>
+            <a href="#pricing" className="text-muted-foreground transition-colors hover:text-foreground">
+              Pricing
+            </a>
+            <a href="#security" className="text-muted-foreground transition-colors hover:text-foreground">
+              Security
+            </a>
+            <a href="/login" className="text-muted-foreground transition-colors hover:text-foreground">
+              Sign In
+            </a>
+            <a
+              href="/login"
+              className="rounded-lg bg-primary px-4 py-2 font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Get Started
+            </a>
           </div>
+          <a
+            href="/login"
+            className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground md:hidden"
+          >
+            Get Started
+          </a>
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="relative py-20 px-4 sm:px-6 lg:px-8 overflow-hidden">
+      <section className="relative overflow-hidden border-b border-border">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 -top-40 h-[32rem] bg-[radial-gradient(ellipse_60%_50%_at_50%_0%,var(--tw-gradient-stops))] from-accent/15 via-accent/5 to-transparent"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_50%_-10%,hsl(210_100%_60%/0.14),transparent_60%)]"
         />
-        <div className="max-w-7xl mx-auto relative">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            <div className="max-w-xl">
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-3 py-1 mb-5">
-                <i className="fas fa-sparkles text-[11px]" /> Built for the modern music business
-              </span>
-              <h1 className="text-4xl md:text-6xl font-bold text-foreground mb-6 leading-tight tracking-tight">
-                Professional Music Agreements Made{" "}
-                <span className="text-accent">Simple</span>
-              </h1>
-              <p className="text-xl text-muted-foreground mb-8 leading-relaxed">
-                Create and manage split sheets, performance agreements, producer
-                agreements, and management deals. Built for indie artists, producers,
-                and music industry professionals — with Canadian copyright principles
-                in mind.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 items-center mb-6">
-                <a
-                  href="/login"
-                  className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold shadow-lg shadow-primary/20 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/25 hover:-translate-y-0.5 transition-all w-full sm:w-auto text-center"
-                >
-                  Start Creating Agreements
-                </a>
-                <a
-                  href="#demo"
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <i className="fas fa-play mr-2" />
-                  See Example Split
-                </a>
-              </div>
-              <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <i className="fas fa-check text-green-500" /> Free to start
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <i className="fas fa-check text-green-500" /> e-Sign included
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <i className="fas fa-check text-green-500" /> No credit card
-                </span>
-              </div>
-            </div>
-            <QuickSplitCalculator />
-          </div>
-        </div>
-      </section>
-
-      {/* Sample Split Sheet */}
-      <section id="demo" className="py-20 bg-muted px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              See a Sample Split Sheet
-            </h2>
-            <p className="text-xl text-muted-foreground">
-              A clear, structured agreement that all parties can review and sign.
+        <div className="relative mx-auto grid max-w-6xl gap-12 px-4 py-16 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:py-24">
+          <div>
+            <p className="mb-4 text-sm font-semibold tracking-wide text-accent">SplitSheet</p>
+            <h1 className="max-w-xl text-4xl font-bold leading-[1.1] tracking-tight text-foreground sm:text-5xl">
+              Music rights documentation, built for the people who run it.
+            </h1>
+            <p className="mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">
+              SplitSheet helps studios, producers, and labels manage splits,
+              agreements, contributor confirmations, evidence, and rights records
+              in one operator-managed workflow.
             </p>
-          </div>
-
-          <div className="max-w-2xl mx-auto bg-card rounded-xl border border-border p-6 shadow-xl shadow-black/[0.04]">
-            <div className="flex items-center justify-between mb-5 pb-4 border-b border-border">
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">
-                  Split Sheet — Sample Only
-                </p>
-                <h3 className="text-xl font-bold text-foreground">Midnight Drive</h3>
-              </div>
-              <span className="bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800 text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                All Signed
-              </span>
-            </div>
-
-            <div className="flex rounded-full overflow-hidden h-3 mb-4">
-              {demoSplits.map((s) => (
-                <div key={s.name} style={{ width: `${s.pct}%`, background: s.color }} />
-              ))}
-            </div>
-
-            <div className="space-y-2.5 mb-5">
-              {demoSplits.map((s) => (
-                <div key={s.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: s.color }} />
-                    <span className="text-sm font-medium text-foreground">{s.name}</span>
-                    <span className="text-xs text-muted-foreground">{s.role}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-foreground">{s.pct}%</span>
-                    <span className="text-xs text-green-600 dark:text-green-400">✓ Signed</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-muted rounded-xl p-3 border border-border/50 mb-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                Activity Log
-              </p>
-              <div className="space-y-1.5">
-                {[
-                  { event: "Agreement created", who: "Jordan S.", time: "Today 2:14 PM" },
-                  { event: "Viewed",             who: "Maya C.",   time: "Today 2:22 PM" },
-                  { event: "Signed",             who: "Maya C.",   time: "Today 2:23 PM" },
-                  { event: "Signed",             who: "Dev P.",    time: "Today 2:31 PM" },
-                  { event: "Signed",             who: "Jordan S.", time: "Today 2:35 PM" },
-                ].map((entry, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">
-                      <span className="text-accent mr-1.5">⊙</span>
-                      {entry.event} · <span className="font-medium">{entry.who}</span>
-                    </span>
-                    <span className="text-muted-foreground">{entry.time}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="text-center">
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
               <a
                 href="/login"
-                className="bg-accent text-accent-foreground px-6 py-2.5 rounded-lg font-semibold text-sm hover:bg-accent/90 transition-colors inline-block"
+                className="inline-flex items-center justify-center rounded-lg bg-primary px-7 py-3.5 text-base font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
               >
-                Create Your Split Sheet →
+                Get Started
+              </a>
+              <a
+                href="#how-it-works"
+                className="inline-flex items-center justify-center rounded-lg border border-border bg-card px-7 py-3.5 text-base font-semibold text-foreground transition-colors hover:bg-muted"
+              >
+                See How It Works
               </a>
             </div>
+            <p className="mt-5 text-sm text-muted-foreground">
+              Software for rights workflows — not a law firm, marketplace, or escrow service.
+            </p>
           </div>
+          <ProductMock />
         </div>
       </section>
 
-      {/* Features */}
-      <section id="features" className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Everything You Need to Manage Music Agreements
-            </h2>
-            <p className="text-xl text-muted-foreground">
-              Professional templates, secure storage, and collaboration tools — all in one place.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {[
-              {
-                icon:  "fas fa-file-contract",
-                title: "Structured Contract Templates",
-                desc:  "Templates for split sheets, performance agreements, producer contracts, and management deals — designed to help all parties clearly document their arrangement.",
-              },
-              {
-                icon:  "fas fa-equals",
-                title: "One-Click Equal Split",
-                desc:  "Divide ownership evenly across all collaborators in a single click. Adjust individual percentages at any time before the agreement is finalised.",
-              },
-              {
-                icon:  "fas fa-eye",
-                title: "Collaborator Status Tracking",
-                desc:  "See when each party has received, opened, and signed the agreement. Full visibility throughout the signing process for everyone involved.",
-              },
-              {
-                icon:  "fas fa-pen-nib",
-                title: "Electronic Signature",
-                desc:  "Parties can draw or type their signature on any device. Each signature is recorded with a timestamp for reference in your activity log.",
-              },
-              {
-                icon:  "fas fa-shield-alt",
-                title: "Secure Document Storage",
-                desc:  "Agreements are stored securely in the cloud. Export a PDF copy at any time for your own records or to share with your PRO or publisher.",
-              },
-              {
-                icon:  "fas fa-mobile-alt",
-                title: "Works on Any Device",
-                desc:  "Access, review, and sign agreements from any phone, tablet, or desktop. No app download required — everything runs in the browser.",
-              },
-            ].map((f) => (
-              <div
-                key={f.title}
-                className="group bg-card p-6 rounded-xl border border-border hover:border-accent/40 hover:shadow-lg hover:-translate-y-0.5 transition-all"
-              >
-                <div className="w-12 h-12 bg-gradient-to-br from-accent to-accent/80 rounded-lg flex items-center justify-center mb-4 shadow-sm shadow-accent/30 group-hover:scale-105 transition-transform">
-                  <i className={`${f.icon} text-white text-xl`} />
-                </div>
-                <h3 className="text-xl font-semibold mb-2 text-foreground">{f.title}</h3>
-                <p className="text-muted-foreground leading-relaxed">{f.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works */}
-      <section id="how-it-works" className="py-20 bg-muted px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              How It Works
-            </h2>
-            <p className="text-xl text-muted-foreground">
-              From track name to signed agreement — straightforward from start to finish.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {[
-              {
-                step:  "01",
-                icon:  "🎵",
-                title: "Enter your song details",
-                desc:  "Add the track title, list each collaborator by name and role, and assign ownership percentages. Use Equal Split or set custom splits.",
-              },
-              {
-                step:  "02",
-                icon:  "📱",
-                title: "Invite collaborators to sign",
-                desc:  "Each party receives a link by email. They can review the full agreement and add their signature on any device — no app needed.",
-              },
-              {
-                step:  "03",
-                icon:  "📄",
-                title: "Download your signed agreement",
-                desc:  "Once all parties have signed, download a PDF copy. An activity log records every step — created, viewed, and signed — with timestamps.",
-              },
-            ].map((s) => (
-              <div key={s.step} className="bg-card border border-border rounded-xl p-6 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-                <div className="flex items-center gap-3 mb-4">
-                  <span className="text-2xl">{s.icon}</span>
-                  <span className="text-xs font-bold text-accent bg-accent/10 border border-accent/20 rounded-full px-2.5 py-0.5">
-                    Step {s.step}
-                  </span>
-                </div>
-                <h3 className="font-bold text-foreground mb-2 text-lg">{s.title}</h3>
-                <p className="text-muted-foreground leading-relaxed">{s.desc}</p>
-              </div>
-            ))}
-          </div>
-
-          <p className="text-center text-sm text-muted-foreground max-w-2xl mx-auto mt-10">
-            SplitSheet provides tools to help you document and manage your agreements.
-            For complex arrangements or legal advice, we recommend consulting a qualified
-            music industry lawyer.
+      <section className="border-b border-border bg-muted/50">
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+          <p className="text-sm font-semibold text-foreground">
+            Built by{" "}
+            <a
+              href="https://soundledger.ca"
+              className="text-accent underline-offset-2 hover:underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              SoundLedger Technologies Inc.
+            </a>
+          </p>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            SplitSheet is the first product from SoundLedger Technologies Inc.,
+            an Ontario technology company building infrastructure for music rights
+            and creator workflows.
           </p>
         </div>
       </section>
 
-      {/* Pricing */}
-      <section id="pricing" className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-6">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Hybrid Pricing Built for Music
-            </h2>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Session-based for individual creators. Subscriptions for recurring workflows. Enterprise for institutions.
-            </p>
-          </div>
-
-          {/* Positioning clarifier */}
-          <div className="max-w-2xl mx-auto mb-10 bg-muted border border-border rounded-xl px-6 py-4 text-center">
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              <span className="font-semibold text-foreground">SplitSheet is a collaboration workflow platform</span> — not a law firm or legal service.
-              We help you organise agreements, confirm contributors, and export documented records.
-            </p>
-          </div>
-
-          {/* Transaction Layer Label */}
-          <div className="max-w-5xl mx-auto mb-3">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">📦 Transaction Layer — Pay Per Project</p>
-          </div>
-
-          {/* 2-column transaction plans */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-6">
-
-            {/* Free */}
-            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎵 Free</p>
-              <div className="text-4xl font-bold text-primary mb-1">$0</div>
-              <p className="text-muted-foreground text-sm mb-4">No credit card · no time limit</p>
-              <ul className="space-y-2 mb-8 flex-1">
-                {["1 project","Up to 2 contributors","Basic splits","PDF export"].map(f => (
-                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
-                ))}
-              </ul>
-              <a href="/login" className="block w-full bg-secondary text-secondary-foreground py-3 rounded-lg font-semibold hover:bg-secondary/80 transition-colors text-center text-sm">Start Free</a>
-            </div>
-
-            {/* Pay Per Project $29 */}
-            <div className="bg-card p-8 rounded-xl border-2 border-accent relative flex flex-col shadow-xl shadow-accent/10">
-              <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                <span className="bg-accent text-accent-foreground px-4 py-1 rounded-full text-sm font-semibold whitespace-nowrap">Most Popular</span>
-              </div>
-              <p className="text-xs font-semibold text-accent uppercase tracking-wider mb-3">📁 Pay Per Project</p>
-              <div className="text-4xl font-bold text-primary mb-1">$29 <span className="text-base font-normal text-muted-foreground">CAD</span></div>
-              <p className="text-sm font-medium text-accent mb-4">Per project · pay as you go</p>
-              <ul className="space-y-2 mb-8 flex-1">
-                {["Up to 10 contributors","Unlimited revisions until finalized","Audit log","Email confirmations","PDF export package","Cloud storage"].map(f => (
-                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
-                ))}
-              </ul>
-              <a href="/login" className="block w-full bg-accent text-accent-foreground py-3 rounded-lg font-semibold hover:bg-accent/90 transition-colors text-center text-sm">Start a Project →</a>
-            </div>
-          </div>
-
-          {/* Express add-on */}
-          <div className="max-w-5xl mx-auto mb-10">
-            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/40 rounded-lg flex items-center justify-center shrink-0 text-xl">⚡</div>
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="font-bold text-foreground">Express Processing Add-On</p>
-                    <span className="text-xs font-bold bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded-full">+$25 CAD per session</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">Priority processing queue, fast contributor notifications, and expedited completion. High-margin add-on for urgent workflows — perfect before a release deadline.</p>
-                </div>
-              </div>
-              <a href="mailto:hello@splitsheet.ca?subject=Express Processing" className="shrink-0 bg-amber-500 text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-amber-600 transition-colors text-sm whitespace-nowrap">Request Express →</a>
-            </div>
-          </div>
-
-          {/* Subscription Layer */}
-          <div className="max-w-5xl mx-auto mb-4">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🔁 Subscription Layer — Recurring SaaS Revenue</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto mb-10">
-            {/* Creator Pro $19/mo */}
-            <div className="bg-card p-8 rounded-xl border border-border flex flex-col">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">🎼 Creator Pro</p>
-              <div className="text-4xl font-bold text-primary mb-1">$19 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
-              <p className="text-muted-foreground text-sm mb-4">For active independent creators</p>
-              <ul className="space-y-2 mb-8 flex-1">
-                {["Unlimited projects","Unlimited contributors","AI Assistant enabled","Saved contributor profiles","Templates","Analytics dashboard","Priority support","Discounted exports"].map(f => (
-                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
-                ))}
-              </ul>
-              <a href="/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
-            </div>
-            {/* Studio Pro $59/mo */}
-            <div className="bg-card p-8 rounded-xl border-2 border-primary/40 flex flex-col relative">
-              <div className="absolute -top-3.5 right-5">
-                <span className="bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full">Studio &amp; Teams</span>
-              </div>
-              <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-3">🎧 Studio Pro</p>
-              <div className="text-4xl font-bold text-primary mb-1">$59 <span className="text-base font-normal text-muted-foreground">CAD/month</span></div>
-              <p className="text-muted-foreground text-sm mb-4">For studios, teams, and small labels</p>
-              <ul className="space-y-2 mb-8 flex-1">
-                {["Everything in Creator Pro","Team workspaces","Role-based permissions","Organization dashboard","Bulk exports","Advanced audit logs","API access (starter)","Priority support"].map(f => (
-                  <li key={f} className="flex items-start gap-2 text-sm"><i className="fas fa-check text-green-500 mt-0.5 shrink-0 text-xs" /><span>{f}</span></li>
-                ))}
-              </ul>
-              <a href="/login" className="block w-full bg-primary text-primary-foreground py-3 rounded-lg font-semibold hover:bg-primary/90 transition-colors text-center text-sm">Start Free Trial →</a>
-            </div>
-          </div>
-
-          {/* Enterprise Layer */}
-          <div className="max-w-5xl mx-auto mb-4">
-            <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">🏢 Enterprise Layer — Institutional Licensing</p>
-          </div>
-          <div className="max-w-5xl mx-auto">
-            <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl shadow-slate-900/30">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">Enterprise Licensing</p>
-                <h3 className="text-2xl font-bold mb-2">Custom Pricing</h3>
-                <p className="text-slate-300 text-sm max-w-lg leading-relaxed">For labels, publishers, rights organizations, distribution companies, and PRO/CMO integrations. Includes API access, white-label deployment, bulk ingestion tools, compliance reporting, dedicated account management, and custom integrations.</p>
-                <div className="flex flex-wrap gap-2 mt-4">
-                  {["Labels","Publishers","Rights Orgs","Distributors","PROs / CMOs"].map(t => (
-                    <span key={t} className="text-xs bg-white/10 border border-white/20 text-white px-2.5 py-1 rounded-full">{t}</span>
-                  ))}
-                </div>
-              </div>
-              <a href="mailto:enterprise@splitsheet.ca?subject=Enterprise Licensing Inquiry" className="shrink-0 bg-white text-slate-900 px-6 py-3 rounded-lg font-semibold hover:bg-slate-100 transition-colors text-sm whitespace-nowrap">Contact Enterprise →</a>
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      {/* Final CTA */}
-      <section className="py-20 bg-muted px-4 sm:px-6 lg:px-8">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-            Start Documenting Your Music Agreements Today
+      <section id="product" className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="max-w-2xl text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Music rights workflows become complicated fast.
           </h2>
-          <p className="text-xl text-muted-foreground mb-8">
-            Join artists and producers who use SplitSheet to keep their
-            collaborations clear, organised, and properly documented.
+          <p className="mt-4 max-w-2xl text-lg text-muted-foreground">
+            SplitSheet replaces fragmented documents, messages, spreadsheets, and
+            follow-ups with a structured workflow.
           </p>
-          <a
-            href="/login"
-            className="bg-primary text-primary-foreground px-8 py-4 rounded-lg text-lg font-semibold hover:bg-primary/90 transition-colors inline-block"
-          >
-            Create Your First Split Sheet Free →
-          </a>
-          <p className="text-sm text-muted-foreground mt-4">
-            No credit card required to get started.
+          <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              "Split information gets scattered across tools",
+              "Contributors need a clear way to confirm ownership",
+              "Agreements need consistent project information",
+              "Teams need to know who has confirmed",
+              "Records need to stay organized and retrievable",
+              "Operators need an auditable history of what happened",
+            ].map((item) => (
+              <li
+                key={item}
+                className="border-l-2 border-accent/40 pl-4 text-sm leading-relaxed text-foreground"
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section id="how-it-works" className="border-b border-border bg-muted/40">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            How SplitSheet works
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Project → Contributors → Splits → Agreement → Review → Confirmation →
+            Evidence → Rights ledger
           </p>
+          <ol className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {WORKFLOW_STEPS.map((step) => (
+              <li key={step.n} className="rounded-xl border border-border bg-card p-5">
+                <p className="text-xs font-bold tracking-widest text-accent">{step.n}</p>
+                <h3 className="mt-2 text-base font-semibold text-foreground">{step.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{step.desc}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Built around the operator workspace
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Projects, contributors, agreements, confirmation status, rights ledger,
+            and billing — the surfaces operators use day to day.
+          </p>
+          <div className="mt-10 max-w-4xl">
+            <ProductMock />
+          </div>
+          <ul className="mt-8 flex flex-wrap gap-2 text-sm text-muted-foreground">
+            {[
+              "Operator dashboard",
+              "Projects",
+              "Contributors",
+              "Agreements",
+              "Confirmation workflow",
+              "Rights ledger",
+              "Billing",
+            ].map((s) => (
+              <li key={s} className="rounded-full border border-border bg-card px-3 py-1">
+                {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="border-b border-border bg-muted/40">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Who it is for
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Built for operators who manage rights workflows for other people.
+          </p>
+          <div className="mt-10 grid gap-6 md:grid-cols-3">
+            {[
+              {
+                title: "Studios",
+                body: "Manage split sheets and contributor documentation across projects.",
+              },
+              {
+                title: "Producers",
+                body: "Keep collaborator information, agreements, confirmations, and rights records organized.",
+              },
+              {
+                title: "Labels / music administrators",
+                body: "Manage documentation and rights workflows across multiple creators and projects.",
+              },
+            ].map((card) => (
+              <div key={card.title} className="rounded-xl border border-border bg-card p-6">
+                <h3 className="text-lg font-semibold text-foreground">{card.title}</h3>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{card.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Contributors don&apos;t need another account.
+          </h2>
+          <p className="mt-4 max-w-2xl text-lg text-muted-foreground">
+            The operator sends a secure confirmation link. Contributors review the
+            relevant information, confirm their details and participation, and
+            complete the workflow without creating a SplitSheet account.
+          </p>
+          <ol className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+            {["Secure link", "Review", "Confirm", "Evidence recorded"].map((step, i, arr) => (
+              <li key={step} className="flex items-center gap-3">
+                <span className="rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground">
+                  {step}
+                </span>
+                {i < arr.length - 1 && (
+                  <span className="hidden text-muted-foreground sm:inline" aria-hidden>
+                    →
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section id="templates" className="border-b border-border bg-muted/40">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            One workflow for the documents your projects require.
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Use catalog templates across common music documentation categories.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-2">
+            {TEMPLATE_CATEGORIES.map((cat) => (
+              <span
+                key={cat}
+                className="rounded-full border border-border bg-card px-3.5 py-1.5 text-sm text-foreground"
+              >
+                {cat}
+              </span>
+            ))}
+          </div>
+          <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            Templates are workflow and documentation tools. They are not legal
+            advice and are not represented as counsel-approved legal instruments
+            unless explicitly identified as such.
+          </p>
+        </div>
+      </section>
+
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Turn completed workflows into organized rights records.
+          </h2>
+          <p className="mt-4 max-w-2xl text-lg text-muted-foreground">
+            Once contributor information and confirmations are complete, SplitSheet
+            keeps the resulting ownership information organized as a rights record
+            that can be referenced later.
+          </p>
+          <div className="mt-10 flex flex-wrap items-center gap-2 text-sm">
+            {[
+              "Song",
+              "Composition",
+              "Master",
+              "Contributors",
+              "Ownership",
+              "Confirmation history",
+            ].map((node, i, arr) => (
+              <span key={node} className="flex items-center gap-2">
+                <span className="rounded-md border border-border bg-card px-3 py-2 font-medium text-foreground">
+                  {node}
+                </span>
+                {i < arr.length - 1 && (
+                  <span className="text-muted-foreground" aria-hidden>
+                    →
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-b border-border bg-muted/40">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Know what happened.
+          </h2>
+          <p className="mt-4 max-w-2xl text-lg text-muted-foreground">
+            SplitSheet can retain operational evidence associated with the
+            workflow. Evidence supports your records; it does not guarantee a
+            legal outcome.
+          </p>
+          <ul className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              "Confirmation status",
+              "Timestamps",
+              "Contributor information",
+              "IP address where applicable",
+              "User-agent information where applicable",
+              "Document / version information",
+              "Signature information where used",
+            ].map((item) => (
+              <li
+                key={item}
+                className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground"
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section id="security" className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Security, privacy, and control
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Practical controls for operator access and contributor links — without
+            overstating certifications we do not hold.
+          </p>
+          <ul className="mt-8 grid gap-3 sm:grid-cols-2">
+            {[
+              "Authenticated operator access",
+              "Controlled contributor confirmation links",
+              "Server-side authorization",
+              "PostgreSQL-backed data",
+              "Session management",
+              "Stripe billing for operators",
+              "Audit and evidence records",
+              "Data export and account deletion where implemented",
+            ].map((item) => (
+              <li
+                key={item}
+                className="border-l-2 border-border pl-4 text-sm leading-relaxed text-foreground"
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section id="pricing" className="border-b border-border bg-muted/40">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Simple operator billing
+          </h2>
+          <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+            Operators pay for the workspace. Contributors do not need a paid account.
+          </p>
+          <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {OPERATOR_PLANS.map((plan) => (
+              <div
+                key={plan.name}
+                className={`flex flex-col rounded-xl border bg-card p-6 ${
+                  plan.featured
+                    ? "border-accent shadow-lg shadow-accent/10"
+                    : "border-border"
+                }`}
+              >
+                {plan.featured && (
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-accent">
+                    Popular
+                  </p>
+                )}
+                <h3 className="text-base font-semibold text-foreground">{plan.name}</h3>
+                <p className="mt-3 text-3xl font-bold text-foreground">{plan.price}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{plan.billing}</p>
+                <ul className="mt-5 flex-1 space-y-2">
+                  {plan.features.map((f) => (
+                    <li key={f} className="text-sm text-muted-foreground">
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <a
+                  href="/login"
+                  className={`mt-6 block rounded-lg py-2.5 text-center text-sm font-semibold transition-colors ${
+                    plan.featured
+                      ? "bg-accent text-accent-foreground hover:bg-accent/90"
+                      : "bg-primary text-primary-foreground hover:bg-primary/90"
+                  }`}
+                >
+                  Get Started
+                </a>
+              </div>
+            ))}
+          </div>
+          <p className="mt-8 text-sm text-muted-foreground">
+            Multi-Creator ($50–$75 CAD, quote-based) and custom operator plans are
+            available.{" "}
+            <a
+              href="mailto:enterprise@splitsheet.ca?subject=Multi-Creator%20plan%20quote"
+              className="font-medium text-accent underline-offset-2 hover:underline"
+            >
+              Request a quote
+            </a>
+            .
+          </p>
+        </div>
+      </section>
+
+      <section id="legal" className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+          <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            SplitSheet provides software for documenting music rights workflows. It
+            does not provide legal advice, and use of the platform does not guarantee
+            the enforceability of an agreement. Users remain responsible for the
+            accuracy of their information and for obtaining legal advice where
+            appropriate. See Terms of Service and Privacy Policy in the site footer
+            for the documents that apply.
+          </p>
+        </div>
+      </section>
+
+      <section className="bg-muted/50">
+        <div className="mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 lg:py-20">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Move your next rights workflow out of the inbox.
+          </h2>
+          <p className="mt-4 text-lg text-muted-foreground">
+            Create a project, organize the splits, collect confirmations, and
+            maintain the record.
+          </p>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <a
+              href="/login"
+              className="inline-flex w-full items-center justify-center rounded-lg bg-primary px-7 py-3.5 text-base font-semibold text-primary-foreground hover:bg-primary/90 sm:w-auto"
+            >
+              Get Started
+            </a>
+            <a
+              href="#how-it-works"
+              className="inline-flex w-full items-center justify-center rounded-lg border border-border bg-card px-7 py-3.5 text-base font-semibold text-foreground hover:bg-muted sm:w-auto"
+            >
+              Explore SplitSheet
+            </a>
+          </div>
         </div>
       </section>
 
