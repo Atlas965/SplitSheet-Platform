@@ -92,6 +92,10 @@ async function upsertSocialUser(input: {
   profileImageUrl?: string | null;
   emailVerified?: boolean;
 }) {
+  // Ensure Phase 3+ columns exist before Drizzle selects users.*
+  const { ensureOrgTenantSchema } = await import("./org-context");
+  await ensureOrgTenantSchema();
+
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
 

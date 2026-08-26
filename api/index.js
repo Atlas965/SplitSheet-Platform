@@ -3188,6 +3188,8 @@ async function getUserByEmail(email) {
   return row;
 }
 async function upsertSocialUser(input) {
+  const { ensureOrgTenantSchema: ensureOrgTenantSchema2 } = await Promise.resolve().then(() => (init_org_context(), org_context_exports));
+  await ensureOrgTenantSchema2();
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
   let existing = await storage.getUser(preferredId);
@@ -15521,6 +15523,14 @@ async function buildApp() {
   const skipMigrations = shouldSkipBootMigrations() && !useLocalAuthProvider();
   if (skipMigrations) {
     log2("Skipping boot migrations (SKIP_BOOT_MIGRATIONS or Vercel runtime)");
+    try {
+      const { ensureOrgTenantSchema: ensureOrgTenantSchema2 } = await Promise.resolve().then(() => (init_org_context(), org_context_exports));
+      await ensureOrgTenantSchema2();
+      log2("Org tenant schema ensured (Vercel lightweight path)");
+    } catch (err) {
+      console.error("[boot] ensureOrgTenantSchema failed:", err?.message || err);
+      throw err;
+    }
   } else {
     try {
       await runBootMigrations();

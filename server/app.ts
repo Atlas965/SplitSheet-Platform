@@ -143,6 +143,15 @@ async function buildApp(): Promise<AppBundle> {
 
   if (skipMigrations) {
     log("Skipping boot migrations (SKIP_BOOT_MIGRATIONS or Vercel runtime)");
+    // Still apply lightweight org-tenant columns — Phase 3+ code selects them.
+    try {
+      const { ensureOrgTenantSchema } = await import("./org-context");
+      await ensureOrgTenantSchema();
+      log("Org tenant schema ensured (Vercel lightweight path)");
+    } catch (err: any) {
+      console.error("[boot] ensureOrgTenantSchema failed:", err?.message || err);
+      throw err;
+    }
   } else {
     try {
       await runBootMigrations();
