@@ -208,9 +208,19 @@ export async function registerAuth0Auth(app: Express): Promise<void> {
   const clientSecret = process.env.AUTH0_CLIENT_SECRET!.trim();
   const audience = (process.env.AUTH0_AUDIENCE || "").trim();
 
-  const config = await client.discovery(auth0IssuerUrl(), clientId, {
-    client_secret: clientSecret,
-  });
+  let config: client.Configuration;
+  try {
+    config = await client.discovery(auth0IssuerUrl(), clientId, {
+      client_secret: clientSecret,
+    });
+  } catch (err: any) {
+    const domain = (process.env.AUTH0_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    throw new Error(
+      `Auth0 discovery failed for https://${domain}/ (${err?.message || err}). ` +
+        `Open Auth0 Dashboard → Applications → copy Domain exactly. ` +
+        `Test: https://${domain}/.well-known/openid-configuration`,
+    );
+  }
 
   const limiter = createPgRateLimiter(30, 60_000, "auth-auth0");
   app.use("/api/auth/auth0", limiter);

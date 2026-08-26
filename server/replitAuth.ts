@@ -315,8 +315,26 @@ export async function setupAuth(app: Express) {
       );
     }
     console.log("[auth] Using Auth0 Universal Login");
-    await setupAuth0Auth(app);
-    return;
+    try {
+      await setupAuth0Auth(app);
+      return;
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      console.error("[auth] Auth0 setup failed:", msg);
+      // Do not brick the whole site when AUTH0_DOMAIN is wrong/unreachable.
+      if (hasAnySocialProvider()) {
+        console.warn(
+          "[auth] Falling back to social OAuth after Auth0 failure. Fix AUTH0_DOMAIN in Vercel, then redeploy.",
+        );
+        await setupSocialAuth(app);
+        return;
+      }
+      throw new Error(
+        `Auth0 OIDC discovery failed (${msg}). Verify AUTH0_DOMAIN resolves ` +
+          `(https://YOUR_DOMAIN/.well-known/openid-configuration). ` +
+          `Or set AUTH_PROVIDER=social with Google credentials to restore login.`,
+      );
+    }
   }
 
   if (useSocialAuthProvider()) {

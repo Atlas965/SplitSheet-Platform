@@ -3929,9 +3929,17 @@ async function registerAuth0Auth(app) {
   const clientId = process.env.AUTH0_CLIENT_ID.trim();
   const clientSecret = process.env.AUTH0_CLIENT_SECRET.trim();
   const audience = (process.env.AUTH0_AUDIENCE || "").trim();
-  const config = await client2.discovery(auth0IssuerUrl(), clientId, {
-    client_secret: clientSecret
-  });
+  let config;
+  try {
+    config = await client2.discovery(auth0IssuerUrl(), clientId, {
+      client_secret: clientSecret
+    });
+  } catch (err) {
+    const domain = (process.env.AUTH0_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+    throw new Error(
+      `Auth0 discovery failed for https://${domain}/ (${err?.message || err}). Open Auth0 Dashboard \u2192 Applications \u2192 copy Domain exactly. Test: https://${domain}/.well-known/openid-configuration`
+    );
+  }
   const limiter = createPgRateLimiter(30, 6e4, "auth-auth0");
   app.use("/api/auth/auth0", limiter);
   app.get("/api/auth/providers", (_req, res) => {
@@ -4327,8 +4335,23 @@ async function setupAuth(app) {
       );
     }
     console.log("[auth] Using Auth0 Universal Login");
-    await setupAuth0Auth(app);
-    return;
+    try {
+      await setupAuth0Auth(app);
+      return;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      console.error("[auth] Auth0 setup failed:", msg);
+      if (hasAnySocialProvider()) {
+        console.warn(
+          "[auth] Falling back to social OAuth after Auth0 failure. Fix AUTH0_DOMAIN in Vercel, then redeploy."
+        );
+        await setupSocialAuth(app);
+        return;
+      }
+      throw new Error(
+        `Auth0 OIDC discovery failed (${msg}). Verify AUTH0_DOMAIN resolves (https://YOUR_DOMAIN/.well-known/openid-configuration). Or set AUTH_PROVIDER=social with Google credentials to restore login.`
+      );
+    }
   }
   if (useSocialAuthProvider()) {
     if (!hasAnySocialProvider()) {
