@@ -561,8 +561,8 @@ export default function Footer() {
                   lineHeight: "1.5",
                 }}
               >
-                Professional music contracts for indie artists, producers, and
-                labels.
+                Operator-managed music rights documentation for studios,
+                producers, and labels.
               </p>
             </div>
 
@@ -630,7 +630,7 @@ export default function Footer() {
               {[
                 { icon: "fa-shield-alt", label: "Ontario Law" },
                 { icon: "fa-lock", label: "Encrypted" },
-                { icon: "fa-file-signature", label: "e-Sign Ready" },
+                { icon: "fa-file-signature", label: "Signature capture" },
                 { icon: "fa-user-check", label: "18+ Only" },
               ].map(({ icon, label }) => (
                 <span
@@ -665,12 +665,12 @@ export default function Footer() {
               opacity: 0.75,
             }}
           >
-            <strong>Disclaimer:</strong> SplitSheet acts solely as a platform to
-            facilitate agreements and is not a party to any agreement between
-            users. All documents are provided "as-is" without guarantees or
-            warranties, express or implied. Users are solely responsible for the
-            accuracy, legality, and enforceability of all agreements created.
-            Not a substitute for legal advice. Governed by Ontario law.
+            <strong>Disclaimer:</strong> SplitSheet provides software for
+            documenting music rights workflows. It does not provide legal advice,
+            and use of the platform does not guarantee the enforceability of an
+            agreement. Users remain responsible for the accuracy of their
+            information and for obtaining legal advice where appropriate.
+            Governed by Ontario law.
           </p>
         </div>
       </footer>
