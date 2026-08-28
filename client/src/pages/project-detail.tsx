@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import ConfirmationTracker from "@/components/ConfirmationTracker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -184,6 +185,7 @@ export default function ProjectDetail() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/contracts/${id}/confirmations`] });
       setConfirmLinks(data.contributors);
       setShowLinks(true);
       toast({ title: "Confirmation Links Generated", description: "Share each link with the contributor." });
@@ -487,6 +489,10 @@ export default function ProjectDetail() {
                 )}
               </CardContent>
             </Card>
+
+            {id && project && (
+              <ConfirmationTracker contractId={id} contractTitle={project.title || project.songTitle || "Project"} />
+            )}
 
             {/* Generated links */}
             {showLinks && confirmLinks.length > 0 && (

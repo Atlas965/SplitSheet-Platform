@@ -14,7 +14,7 @@ export type ConfirmationTokenRow = {
 
 export type TokenGateResult =
   | { ok: true }
-  | { ok: false; status: 410 | 403; error: string };
+  | { ok: false; status: 410 | 403; error: string; code: "revoked" | "expired" };
 
 export function evaluateConfirmationToken(
   row: ConfirmationTokenRow,
@@ -25,6 +25,7 @@ export function evaluateConfirmationToken(
       ok: false,
       status: 410,
       error: "This confirmation link was revoked. Ask the operator for a new link.",
+      code: "revoked",
     };
   }
   if (row.expires_at && new Date(row.expires_at) < new Date()) {
@@ -32,6 +33,7 @@ export function evaluateConfirmationToken(
       ok: false,
       status: 410,
       error: "This confirmation link has expired. Ask the operator to resend.",
+      code: "expired",
     };
   }
   if (opts.forSubmit && row.consumed_at && row.status === "confirmed") {
@@ -43,6 +45,7 @@ export function evaluateConfirmationToken(
       ok: false,
       status: 410,
       error: "This confirmation link was revoked. Ask the operator for a new link.",
+      code: "revoked",
     };
   }
   return { ok: true };
@@ -61,6 +64,26 @@ export async function ensureContributorTokenSchema(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE split_confirmations
       ADD COLUMN IF NOT EXISTS consent_versions jsonb;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS qr_generated_at timestamp;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS access_method varchar;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS first_accessed_at timestamp;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS last_accessed_at timestamp;
+  `);
+  await db.execute(sql`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS access_count integer DEFAULT 0;
   `);
 }
 

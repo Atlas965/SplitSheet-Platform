@@ -64,11 +64,19 @@ function SplitBar({ collaborators }: { collaborators: { name: string; ownershipP
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ConfirmSplit() {
-  const { contractId, token } = useParams<{ contractId: string; token: string }>();
+  const params = useParams<{ contractId?: string; token?: string }>();
+  const token = params.token;
+  const contractId = params.contractId;
+  const viaQr = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("via") === "qr";
+  const apiPath = contractId
+    ? `/api/confirm/${contractId}/${token}`
+    : `/api/confirm/${token}`;
+  const apiQs = viaQr ? "?via=qr" : "";
 
   const [pageData, setPageData]     = useState<ConfirmPageData | null>(null);
   const [loadError, setLoadError]   = useState("");
   const [isExpired, setIsExpired]   = useState(false);
+  const [isRevoked, setIsRevoked]   = useState(false);
   const [showAll, setShowAll]       = useState(false);
 
   // Form state
@@ -85,22 +93,22 @@ export default function ConfirmSplit() {
 
   // Load page data
   useEffect(() => {
-    if (!contractId || !token) return;
-    fetch(`/api/confirm/${contractId}/${token}`)
+    if (!token) return;
+    fetch(`${apiPath}${apiQs}`)
       .then(async (r) => {
         const data = await r.json();
         if (!r.ok) {
-          if (r.status === 410) setIsExpired(true);
+          if (data.code === "revoked") setIsRevoked(true);
+          else if (r.status === 410) setIsExpired(true);
           setLoadError(data.error ?? "Could not load this confirmation link.");
           return;
         }
         setPageData(data);
-        // Pre-fill name/email if known
         if (data.collaboratorName)  setName(data.collaboratorName);
         if (data.collaboratorEmail) setEmail(data.collaboratorEmail);
       })
       .catch(() => setLoadError("Network error. Please check your connection and try again."));
-  }, [contractId, token]);
+  }, [apiPath, apiQs, token]);
 
   async function handleSubmit(action: "confirm" | "request_change") {
     if (action === "confirm" && !agreed) return;
@@ -108,10 +116,10 @@ export default function ConfirmSplit() {
     setSubmitError("");
 
     try {
-      const r = await fetch(`/api/confirm/${contractId}/${token}`, {
+      const r = await fetch(`${apiPath}${apiQs}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ action, name, email, note }),
+        body:    JSON.stringify({ action, name, email, note, accessMethod: viaQr ? "qr" : "link" }),
       });
       const data = await r.json();
       if (!r.ok) { setSubmitError(data.error ?? "Something went wrong. Please try again."); return; }
@@ -160,11 +168,13 @@ export default function ConfirmSplit() {
             <span style={{ fontWeight: 700, fontSize: "18px", color: "#1a1d2e" }}>SplitSheet</span>
           </div>
           <div style={{ textAlign: "center", padding: "20px 0" }}>
-            {isExpired
+            {isRevoked
+              ? <AlertCircle size={40} color="#7c84a0" style={{ marginBottom: 12 }} />
+              : isExpired
               ? <Clock size={40} color="#f59e0b" style={{ marginBottom: 12 }} />
               : <AlertCircle size={40} color="#e05252" style={{ marginBottom: 12 }} />}
             <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1d2e", marginBottom: 8 }}>
-              {isExpired ? "Link Expired" : "Invalid Link"}
+              {isRevoked ? "Link Revoked" : isExpired ? "Link Expired" : "Invalid Link"}
             </h2>
             <p style={{ fontSize: "14px", color: "#7c84a0", lineHeight: 1.6 }}>{loadError}</p>
           </div>
@@ -215,7 +225,7 @@ export default function ConfirmSplit() {
             {doneAction === "confirm" && (
               <div style={{ marginTop: 20, padding: "14px", background: "#edfdf7", borderRadius: "10px", border: "1px solid #a7f0cf" }}>
                 <p style={{ fontSize: "13px", color: "#1a7a52", fontWeight: 500 }}>
-                  Your agreement has been recorded with a timestamp and IP address for legal reference.
+                  Your confirmation has been recorded with a timestamp and the operational evidence SplitSheet already stores.
                 </p>
               </div>
             )}
@@ -248,6 +258,11 @@ export default function ConfirmSplit() {
         <p style={{ fontSize: "14px", color: "#7c84a0", marginBottom: 20 }}>
           Hey <strong>{data.collaboratorName}</strong> — please review your split and confirm below.
         </p>
+        {viaQr && (
+          <p style={{ fontSize: "12px", color: "#5b7be8", marginBottom: 16 }}>
+            You opened this confirmation from a Rights Capture QR code. No SplitSheet account is required.
+          </p>
+        )}
 
         <hr style={styles.divider} />
 

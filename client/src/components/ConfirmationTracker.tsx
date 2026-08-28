@@ -16,10 +16,12 @@ import { useToast } from "@/hooks/use-toast";
 import {
   CheckCircle2, Clock, Send, Copy, RefreshCw,
   MessageCircle, Smartphone, Link2, ChevronDown,
-  ChevronUp, AlertTriangle, Loader2, Share2,
+  ChevronUp, AlertTriangle, Loader2, Share2, QrCode, Ban, Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { confirmationQrDataUrl, downloadRightsCapturePdf } from "@/lib/qr-rights-capture";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Collaborator {
@@ -33,10 +35,14 @@ interface Collaborator {
 interface ConfirmationRecord {
   id:               string;
   token:            string;
-  status:           "not_sent" | "sent" | "confirmed" | "change_requested";
+  status:           "not_sent" | "sent" | "confirmed" | "change_requested" | "revoked";
   sentAt?:          string;
   confirmedAt?:     string;
   expiresAt?:       string;
+  revokedAt?:       string;
+  qrGeneratedAt?:   string;
+  accessMethod?:    string;
+  accessCount?:     number;
   confirmedName?:   string;
   confirmedEmail?:  string;
   confirmationNote?: string;
@@ -68,6 +74,7 @@ function StatusBadge({ status }: { status: ConfirmationRecord["status"] }) {
     sent:            { label: "Sent · Pending",  className: "bg-yellow-50 text-yellow-800 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-800" },
     confirmed:       { label: "Confirmed",       className: "bg-green-50 text-green-800 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800" },
     change_requested:{ label: "Change Requested",className: "bg-orange-50 text-orange-800 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400 dark:border-orange-800" },
+    revoked:         { label: "Revoked",         className: "bg-muted text-muted-foreground border-border" },
   };
   const { label, className } = config[status] ?? config.not_sent;
   return (
@@ -191,6 +198,164 @@ function SharePanel({
   );
 }
 
+function RightsCapturePanel({
+  contractId,
+  contractTitle,
+  record,
+  onChanged,
+}: {
+  contractId: string;
+  contractTitle: string;
+  record: ConfirmationRecord;
+  onChanged: () => void;
+}) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [qrUrl, setQrUrl] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const complete = record.status === "confirmed";
+
+  async function generate(regenerate = false) {
+    setLoading(true);
+    try {
+      const res = await apiRequest(
+        "POST",
+        `/api/contracts/${contractId}/confirmations/${record.id}/qr`,
+        { regenerate },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not generate QR");
+      const img = await confirmationQrDataUrl(data.link);
+      setQrUrl(img);
+      setOpen(true);
+      onChanged();
+      toast({
+        title: regenerate ? "QR regenerated" : "QR ready",
+        description: "Contributors can scan this code to open the confirmation workflow.",
+      });
+    } catch (err: any) {
+      toast({ title: "QR failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyLink() {
+    await navigator.clipboard.writeText(record.link);
+    toast({ title: "Link copied", description: "Confirmation URL copied." });
+  }
+
+  async function downloadPdf() {
+    try {
+      await downloadRightsCapturePdf({
+        confirmUrl: record.link.includes("via=qr") ? record.link : `${record.link}${record.link.includes("?") ? "&" : "?"}via=qr`,
+        projectName: contractTitle,
+        contributorName: record.collaborator.name,
+      });
+    } catch {
+      toast({ title: "Download failed", description: "Could not create the QR PDF.", variant: "destructive" });
+    }
+  }
+
+  async function revoke() {
+    setLoading(true);
+    try {
+      const res = await apiRequest(
+        "POST",
+        `/api/contracts/${contractId}/confirmations/${record.id}/revoke`,
+        {},
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not revoke");
+      setOpen(false);
+      onChanged();
+      toast({ title: "Revoked", description: "This confirmation link and QR can no longer be used." });
+    } catch (err: any) {
+      toast({ title: "Revoke failed", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 text-xs"
+          disabled={complete || loading}
+          onClick={() => generate(false)}
+          data-testid={`btn-qr-${record.collaborator.id}`}
+        >
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <QrCode className="h-3.5 w-3.5" />}
+          {record.qrGeneratedAt ? "Show QR" : "Generate QR"}
+        </Button>
+        <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={copyLink}>
+          <Copy className="h-3.5 w-3.5" />
+          Copy Link
+        </Button>
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rights Capture</DialogTitle>
+            <DialogDescription>
+              Generate a secure QR code that allows a contributor to access and complete
+              their SplitSheet confirmation workflow from a mobile device.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-foreground">{record.collaborator.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {record.collaborator.role} · {record.collaborator.ownershipPercentage}%
+            </p>
+            {qrUrl && (
+              <div className="flex flex-col items-center rounded-xl border border-border bg-card p-4">
+                <img src={qrUrl} alt="Scan to confirm your contribution" className="h-52 w-52" />
+                <p className="mt-2 text-[11px] font-semibold tracking-wide text-muted-foreground">
+                  SCAN TO CONFIRM YOUR CONTRIBUTION
+                </p>
+              </div>
+            )}
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Status: {record.status === "sent" ? "Awaiting confirmation" : record.status.replace("_", " ")}</span>
+            </div>
+            {record.expiresAt && (
+              <p className="text-xs text-muted-foreground">
+                Expires {new Date(record.expiresAt).toLocaleString("en-CA")}
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              QR Rights Capture provides a convenient way for contributors to access a
+              SplitSheet confirmation workflow from a mobile device.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" className="text-xs gap-1" onClick={downloadPdf}>
+                <Download className="h-3.5 w-3.5" /> Download QR
+              </Button>
+              <Button size="sm" variant="outline" className="text-xs gap-1" onClick={copyLink}>
+                <Copy className="h-3.5 w-3.5" /> Copy Link
+              </Button>
+              {!complete && (
+                <Button size="sm" variant="outline" className="text-xs gap-1" disabled={loading} onClick={revoke}>
+                  <Ban className="h-3.5 w-3.5" /> Revoke
+                </Button>
+              )}
+              {!complete && (
+                <Button size="sm" className="text-xs gap-1" disabled={loading} onClick={() => generate(true)}>
+                  <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 interface ConfirmationTrackerProps {
   contractId:    string;
@@ -236,11 +401,11 @@ export default function ConfirmationTracker({ contractId, contractTitle }: Confi
       <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
         <div>
           <h3 className="font-semibold text-foreground flex items-center gap-2">
-            <Send className="h-4 w-4 text-accent" />
-            Confirmation Tracking
+            <QrCode className="h-4 w-4 text-accent" />
+            Rights Capture
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Send links via WhatsApp, SMS, or Instagram — track confirmations here
+            Send a link or QR so contributors can confirm without creating an account
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -360,11 +525,19 @@ export default function ConfirmationTracker({ contractId, contractTitle }: Confi
                 )}
               </div>
 
-              {/* Share button */}
-              <SharePanel
-                record={record}
-                onMarkSent={(id) => markSentMutation.mutate(id)}
-              />
+              {/* Share + QR */}
+              <div className="flex flex-col items-end gap-2">
+                <SharePanel
+                  record={record}
+                  onMarkSent={(id) => markSentMutation.mutate(id)}
+                />
+                <RightsCapturePanel
+                  contractId={contractId}
+                  contractTitle={contractTitle}
+                  record={record}
+                  onChanged={() => qc.invalidateQueries({ queryKey: [`/api/contracts/${contractId}/confirmations`] })}
+                />
+              </div>
             </div>
           </div>
         ))}
@@ -374,7 +547,7 @@ export default function ConfirmationTracker({ contractId, contractTitle }: Confi
       {hasLinks && (
         <div className="px-5 py-3 bg-muted/20 border-t border-border">
           <p className="text-[11px] text-muted-foreground text-center">
-            Links expire 72 hours after generation · Auto-refreshes every 30s · Clicks "Open WhatsApp" auto-marks as Sent
+            Links expire 72 hours after generation · QR opens the same confirmation workflow · Auto-refreshes every 30s
           </p>
         </div>
       )}

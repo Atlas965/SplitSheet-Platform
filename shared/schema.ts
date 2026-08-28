@@ -437,6 +437,13 @@ export const splitConfirmations = pgTable("split_confirmations", {
   confirmationNote: text("confirmation_note"),
   ipAddress: varchar("ip_address"),
   userAgent: text("user_agent"),
+  /** QR Rights Capture — operator generated a QR for this confirmation request */
+  qrGeneratedAt: timestamp("qr_generated_at"),
+  /** How the contributor opened the workflow: link | qr */
+  accessMethod: varchar("access_method"),
+  firstAccessedAt: timestamp("first_accessed_at"),
+  lastAccessedAt: timestamp("last_accessed_at"),
+  accessCount: integer("access_count").default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

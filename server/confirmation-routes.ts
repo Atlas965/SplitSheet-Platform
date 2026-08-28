@@ -9,13 +9,15 @@
  *   POST /api/contracts/:id/generate-confirmations   — create tokens per collaborator
  *   GET  /api/contracts/:id/confirmations            — operator: get tracking status
  *   POST /api/contracts/:id/confirmations/resend     — mark as re-sent (new sentAt)
- *   GET  /api/confirm/:contractId/:token             — PUBLIC: load confirmation page data
+ *   POST /api/contracts/:id/confirmations/:confirmId/qr — generate/regenerate QR
+ *   GET  /api/confirm/:token                         — PUBLIC: opaque token (QR)
+ *   GET  /api/confirm/:contractId/:token             — PUBLIC: legacy two-segment links
+ *   POST /api/confirm/:token                         — PUBLIC: submit via opaque token
  *   POST /api/confirm/:contractId/:token             — PUBLIC: submit confirmation
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import type { Express, Request, Response } from "express";
-import crypto from "crypto";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { sendEmail, confirmationLinkEmail } from "./email-service";
@@ -23,30 +25,25 @@ import { storage } from "./storage";
 import { createPgRateLimiter } from "./security";
 import { requireOwnedContract } from "./authz-helpers";
 import { requireActivePermission } from "./rbac-middleware";
-import {
-  ensureContributorTokenSchema,
-  evaluateConfirmationToken,
-} from "./confirmation-token-policy";
+import { ensureContributorTokenSchema } from "./confirmation-token-policy";
 import { logAuthEvent, AUTH_EVENTS } from "./auth-events";
+import { handlePublicConfirmGet, handlePublicConfirmPost } from "./confirmation-public";
+import {
+  confirmationExpiresAt,
+  generateConfirmationToken,
+  opaqueConfirmUrl,
+} from "./confirmation-url";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** 64-char hex token — cryptographically random, unguessable */
 function generateToken(): string {
-  return crypto.randomBytes(32).toString("hex");
+  return generateConfirmationToken();
 }
 
-/** 72 hours from now */
 function expiresAt72h(): Date {
-  return new Date(Date.now() + 72 * 60 * 60 * 1000);
+  return confirmationExpiresAt();
 }
 
-function getIp(req: Request): string {
-  return (
-    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ??
-    req.socket.remoteAddress ??
-    "unknown"
-  );
+function requestBaseUrl(req: Request): string {
+  return process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
 }
 
 // ── Register routes ───────────────────────────────────────────────────────────
@@ -125,13 +122,13 @@ export function registerConfirmationRoutes(app: Express): void {
           }
         }
 
-        const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
+        const baseUrl = requestBaseUrl(req);
         const operator = await storage.getUser(userId).catch(() => undefined);
         const operatorName = operator ? `${operator.firstName ?? ""} ${operator.lastName ?? ""}`.trim() : undefined;
 
         const confirmations = await Promise.all(
           results.map(async (r) => {
-            const link = `${baseUrl}/confirm/${contractId}/${r.token}`;
+            const link = opaqueConfirmUrl(baseUrl, r.token);
             const collab = collaborators.find((c: any) => c.id === r.collaboratorId);
             let emailSent = false;
 
@@ -206,6 +203,12 @@ export function registerConfirmationRoutes(app: Express): void {
             sc.confirmed_email,
             sc.confirmation_note,
             sc.ip_address,
+            sc.revoked_at,
+            sc.qr_generated_at,
+            sc.access_method,
+            sc.access_count,
+            sc.first_accessed_at,
+            sc.last_accessed_at,
             cc.id   AS collaborator_id,
             cc.name AS collaborator_name,
             cc.email AS collaborator_email,
@@ -217,14 +220,22 @@ export function registerConfirmationRoutes(app: Express): void {
           ORDER BY cc.created_at ASC
         `);
 
-        const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
-        const confirmations = (rows.rows as any[]).map((r) => ({
+        const baseUrl = requestBaseUrl(req);
+        const confirmations = (rows.rows as any[]).map((r) => {
+          const link = opaqueConfirmUrl(baseUrl, r.token);
+          return {
           id:               r.id,
           token:            r.token,
           status:           r.status,
           sentAt:           r.sent_at,
           confirmedAt:      r.confirmed_at,
           expiresAt:        r.expires_at,
+          revokedAt:        r.revoked_at,
+          qrGeneratedAt:    r.qr_generated_at,
+          accessMethod:     r.access_method,
+          accessCount:      Number(r.access_count ?? 0),
+          firstAccessedAt:  r.first_accessed_at,
+          lastAccessedAt:   r.last_accessed_at,
           confirmedName:    r.confirmed_name,
           confirmedEmail:   r.confirmed_email,
           confirmationNote: r.confirmation_note,
@@ -235,14 +246,15 @@ export function registerConfirmationRoutes(app: Express): void {
             role:               r.role,
             ownershipPercentage: Number(r.ownership_percentage),
           },
-          link:      `${baseUrl}/confirm/${contractId}/${r.token}`,
+          link,
           whatsapp:  `https://wa.me/?text=${encodeURIComponent(
-            `Hey ${r.collaborator_name} — confirm your split for "${contract.title}": ${baseUrl}/confirm/${contractId}/${r.token}`
+            `Hey ${r.collaborator_name} — confirm your split for "${contract.title}": ${link}`
           )}`,
           sms: `sms:?body=${encodeURIComponent(
-            `Hey ${r.collaborator_name} — confirm your split for "${contract.title}": ${baseUrl}/confirm/${contractId}/${r.token}`
+            `Hey ${r.collaborator_name} — confirm your split for "${contract.title}": ${link}`
           )}`,
-        }));
+        };
+        });
 
         // Summary counts
         const total      = confirmations.length;
@@ -331,12 +343,114 @@ export function registerConfirmationRoutes(app: Express): void {
           afterState: { contractId },
           req,
         });
+        await logAuthEvent({
+          action: AUTH_EVENTS.QR_REVOKED,
+          userId,
+          resourceType: "split_confirmation",
+          resourceId: confirmId,
+          afterState: { contractId },
+          req,
+        });
         res.json({ revoked: true });
       } catch (err: any) {
         res.status(500).json({ error: err.message });
       }
     },
   );
+
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/qr",
+    ...requireActivePermission("agreement.send"),
+    async (req: Request, res: Response): Promise<void> => {
+      const { id: contractId, confirmId } = req.params;
+      const userId = (req as any).user?.claims?.sub;
+      const regenerate = Boolean((req.body ?? {}).regenerate);
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const rows = await db.execute(sql`
+          SELECT sc.id, sc.token, sc.status, sc.expires_at, sc.revoked_at,
+                 cc.name AS collaborator_name
+          FROM split_confirmations sc
+          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
+          WHERE sc.id = ${confirmId} AND sc.contract_id = ${contractId}
+          LIMIT 1
+        `);
+        if (!rows.rows.length) {
+          res.status(404).json({ error: "Confirmation request not found for this project." });
+          return;
+        }
+        const row = rows.rows[0] as any;
+        if (row.status === "confirmed") {
+          res.status(409).json({ error: "This confirmation is already complete. QR cannot be regenerated." });
+          return;
+        }
+        const expired = row.expires_at && new Date(row.expires_at) < new Date();
+        const rotate = regenerate || Boolean(row.revoked_at) || row.status === "revoked" || expired;
+        const expires = expiresAt72h();
+        let token = row.token as string;
+        if (rotate) {
+          token = generateToken();
+          await db.execute(sql`
+            UPDATE split_confirmations SET
+              token = ${token},
+              status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
+              revoked_at = NULL,
+              consumed_at = NULL,
+              expires_at = ${expires},
+              qr_generated_at = NOW(),
+              updated_at = NOW()
+            WHERE id = ${row.id} AND contract_id = ${contractId}
+          `);
+          await logAuthEvent({
+            action: AUTH_EVENTS.QR_REGENERATED,
+            userId,
+            resourceType: "split_confirmation",
+            resourceId: confirmId,
+            afterState: { contractId },
+            req,
+          });
+        } else {
+          await db.execute(sql`
+            UPDATE split_confirmations SET
+              qr_generated_at = NOW(),
+              expires_at = COALESCE(expires_at, ${expires}),
+              updated_at = NOW()
+            WHERE id = ${row.id} AND contract_id = ${contractId}
+          `);
+          await logAuthEvent({
+            action: AUTH_EVENTS.QR_GENERATED,
+            userId,
+            resourceType: "split_confirmation",
+            resourceId: confirmId,
+            afterState: { contractId },
+            req,
+          });
+        }
+        res.json({
+          id: confirmId,
+          status: rotate && row.status === "revoked" ? "not_sent" : row.status,
+          expiresAt: expires,
+          qrGeneratedAt: new Date().toISOString(),
+          rotated: rotate,
+          link: opaqueConfirmUrl(requestBaseUrl(req), token, true),
+          contributorName: row.collaborator_name,
+          projectName: owned.title,
+        });
+      } catch (err: any) {
+        console.error("[QR-GENERATE]", err.message);
+        res.status(500).json({ error: err.message });
+      }
+    },
+  );
+
+  // PUBLIC: opaque token (QR) and legacy two-segment links
+  app.get("/api/confirm/:token", async (req, res) => {
+    await handlePublicConfirmGet(req, res, req.params.token);
+  });
+  app.post("/api/confirm/:token", async (req, res) => {
+    await handlePublicConfirmPost(req, res, req.params.token);
+  });
 
   // ══════════════════════════════════════════════════════════════════════════
   // PUBLIC: Load confirmation page data (NO LOGIN REQUIRED)
@@ -345,228 +459,19 @@ export function registerConfirmationRoutes(app: Express): void {
   app.get(
     "/api/confirm/:contractId/:token",
     async (req: Request, res: Response): Promise<void> => {
-      const { contractId, token } = req.params;
-
-      try {
-        // Look up the confirmation record
-        const rows = await db.execute(sql`
-          SELECT
-            sc.id,
-            sc.status,
-            sc.expires_at,
-            sc.revoked_at,
-            sc.consumed_at,
-            sc.confirmed_at,
-            sc.collaborator_id,
-            cc.name   AS collaborator_name,
-            cc.email  AS collaborator_email,
-            cc.role,
-            cc.ownership_percentage,
-            c.id      AS contract_id,
-            c.title   AS contract_title,
-            c.data    AS contract_data
-          FROM split_confirmations sc
-          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
-          JOIN contracts c ON c.id = sc.contract_id
-          WHERE sc.token     = ${token}
-            AND sc.contract_id = ${contractId}
-          LIMIT 1
-        `);
-
-        if (!rows.rows.length) {
-          res.status(404).json({ error: "Confirmation link not found or invalid." });
-          return;
-        }
-
-        const row = rows.rows[0] as any;
-        const gate = evaluateConfirmationToken(row);
-        if (!gate.ok) {
-          res.status(gate.status).json({ error: gate.error });
-          return;
-        }
-
-        // Already confirmed — show success state to the user
-        if (row.status === "confirmed") {
-          res.json({
-            alreadyConfirmed: true,
-            confirmedAt:      row.confirmed_at,
-            collaboratorName: row.collaborator_name,
-            contractTitle:    row.contract_title,
-          });
-          return;
-        }
-
-        // Get all collaborators on this contract to show the full split
-        const allCollabs = await db.execute(sql`
-          SELECT name, role, ownership_percentage
-          FROM contract_collaborators
-          WHERE contract_id = ${contractId}
-          ORDER BY created_at ASC
-        `);
-
-        let contributorConsentVersion: string | null = null;
-        try {
-          const consent = await storage.getLatestLegalDocument("contributor_consent");
-          contributorConsentVersion = consent?.version ?? null;
-        } catch {
-          /* optional */
-        }
-
-        await logAuthEvent({
-          action: AUTH_EVENTS.CONFIRM_VIEW,
-          resourceType: "split_confirmation",
-          resourceId: row.id,
-          afterState: { contractId },
-          req,
-        });
-
-        res.json({
-          alreadyConfirmed:    false,
-          confirmationId:      row.id,
-          contractTitle:       row.contract_title,
-          collaboratorName:    row.collaborator_name,
-          collaboratorEmail:   row.collaborator_email,
-          collaboratorRole:    row.role,
-          ownershipPercentage: Number(row.ownership_percentage),
-          expiresAt:           row.expires_at,
-          contributorConsentVersion,
-          allCollaborators:    (allCollabs.rows as any[]).map((c) => ({
-            name:               c.name,
-            role:               c.role,
-            ownershipPercentage: Number(c.ownership_percentage),
-          })),
-        });
-      } catch (err: any) {
-        console.error("[PUBLIC-CONFIRM-GET]", err.message);
-        res.status(500).json({ error: "Could not load confirmation. Please try again." });
-      }
-    }
+      await handlePublicConfirmGet(req, res, req.params.token, req.params.contractId);
+    },
   );
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // PUBLIC: Submit confirmation (NO LOGIN REQUIRED)
-  // POST /api/confirm/:contractId/:token
-  // Body: { action: "confirm"|"request_change", name?, email?, note? }
-  // ══════════════════════════════════════════════════════════════════════════
   app.post(
     "/api/confirm/:contractId/:token",
     async (req: Request, res: Response): Promise<void> => {
-      const { contractId, token } = req.params;
-      const { action, name, email, note } = req.body ?? {};
-
-      if (!["confirm", "request_change"].includes(action)) {
-        res.status(400).json({ error: "action must be 'confirm' or 'request_change'" });
-        return;
-      }
-
-      try {
-        // Look up and validate token
-        const rows = await db.execute(sql`
-          SELECT sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at,
-                 cc.name AS collab_name, c.title AS contract_title
-          FROM split_confirmations sc
-          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
-          JOIN contracts c ON c.id = sc.contract_id
-          WHERE sc.token = ${token}
-            AND sc.contract_id = ${contractId}
-          LIMIT 1
-        `);
-
-        if (!rows.rows.length) {
-          res.status(404).json({ error: "Confirmation link not found." });
-          return;
-        }
-
-        const row = rows.rows[0] as any;
-
-        const gate = evaluateConfirmationToken(row, { forSubmit: true });
-        if (!gate.ok) {
-          res.status(gate.status).json({ error: gate.error });
-          return;
-        }
-
-        // Idempotent: already confirmed is fine — return success, don't double-write
-        if (row.status === "confirmed" && action === "confirm") {
-          res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
-          return;
-        }
-
-        if (row.consumed_at && action === "request_change") {
-          res.status(410).json({
-            error: "This confirmation was already completed and cannot be changed via this link.",
-          });
-          return;
-        }
-
-        const newStatus = action === "confirm" ? "confirmed" : "change_requested";
-        const ip = getIp(req);
-        const ua = req.headers["user-agent"] ?? null;
-
-        let consentVersions: Record<string, string> | null = null;
-        try {
-          const consent = await storage.getLatestLegalDocument("contributor_consent");
-          if (consent?.version) {
-            consentVersions = { contributor_consent: consent.version };
-          }
-        } catch {
-          /* optional evidence */
-        }
-        const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
-
-        const consumedAt = action === "confirm" ? new Date() : null;
-        await db.execute(sql`
-          UPDATE split_confirmations SET
-            status           = ${newStatus},
-            confirmed_name   = ${name ?? null},
-            confirmed_email  = ${email ?? null},
-            confirmation_note = ${note ?? null},
-            ip_address       = ${ip},
-            user_agent       = ${ua},
-            confirmed_at     = NOW(),
-            consumed_at      = COALESCE(${consumedAt}, consumed_at),
-            consent_versions = COALESCE(${consentJson}::jsonb, consent_versions),
-            updated_at       = NOW()
-          WHERE id = ${row.id}
-            AND revoked_at IS NULL
-        `);
-
-        // If all confirmed → update contract status to 'signed'
-        if (action === "confirm") {
-          const pendingRows = await db.execute(sql`
-            SELECT COUNT(*) AS cnt
-            FROM split_confirmations
-            WHERE contract_id = ${contractId}
-              AND status != 'confirmed'
-              AND (revoked_at IS NULL)
-          `);
-          const remaining = Number((pendingRows.rows[0] as any)?.cnt ?? 1);
-          if (remaining === 0) {
-            await db.execute(sql`
-              UPDATE contracts SET status = 'signed', updated_at = NOW()
-              WHERE id = ${contractId}
-            `);
-          }
-        }
-
-        await logAuthEvent({
-          action: AUTH_EVENTS.CONFIRM_SUBMIT,
-          resourceType: "split_confirmation",
-          resourceId: row.id,
-          afterState: { contractId, action: newStatus, hasConsentVersions: !!consentVersions },
-          req,
-        });
-
-        res.json({
-          success: true,
-          action:  newStatus,
-          message: action === "confirm"
-            ? `Thank you${name ? ` ${name}` : ""}! Your confirmation for "${row.contract_title}" has been recorded.`
-            : "Your change request has been recorded. The operator will follow up.",
-        });
-      } catch (err: any) {
-        console.error("[PUBLIC-CONFIRM-POST]", err.message);
-        res.status(500).json({ error: "Could not submit confirmation. Please try again." });
-      }
-    }
+      await handlePublicConfirmPost(req, res, req.params.token, req.params.contractId);
+    },
   );
 }
+
+
+
+
+

@@ -108,6 +108,7 @@ function Router() {
     <TermsGate>
       <Switch>
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
+        <Route path="/confirm/:token" component={ConfirmSplit} />
         {!isAuthenticated && <Route path="/login" component={Login} />}
         {!isAuthenticated && <Route path="/" component={Landing} />}
         {isAuthenticated && <Route component={AuthenticatedRoutes} />}

@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { downloadContractPDF } from "@/lib/pdfGenerator";
+import ConfirmationTracker from "@/components/ConfirmationTracker";
 import SignatureCanvas, { type SignaturePayload } from "@/components/SignatureCanvas";
 import IdentityVerification from "@/components/IdentityVerification";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +90,7 @@ export default function ContractDetails() {
 
   const generateConfirmationsMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("POST", `/api/contracts/${id}/confirmations`, {});
+      return await apiRequest("POST", `/api/contracts/${id}/generate-confirmations`, {});
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/contracts/${id}/confirmations`] });
@@ -757,6 +758,12 @@ export default function ContractDetails() {
             </Button>
           </div>
         </div>
+
+        {id && contract && (
+          <div className="mb-6">
+            <ConfirmationTracker contractId={id} contractTitle={contract.title} />
+          </div>
+        )}
 
         {/* E-Signature Section */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">

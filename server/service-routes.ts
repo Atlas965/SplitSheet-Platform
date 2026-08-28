@@ -3,7 +3,6 @@
  * Projects map to contracts; contributors map to contract_collaborators.
  */
 import type { Express, Request, Response } from "express";
-import crypto from "crypto";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
@@ -13,13 +12,14 @@ import { storage } from "./storage";
 import { db } from "./db";
 import type { Contract } from "@shared/schema";
 import type { OrgAuthedRequest } from "./rbac-middleware";
+import { confirmationExpiresAt, generateConfirmationToken, opaqueConfirmUrl } from "./confirmation-url";
 
 function generateToken(): string {
-  return crypto.randomBytes(32).toString("hex");
+  return generateConfirmationToken();
 }
 
 function expiresAt72h(): Date {
-  return new Date(Date.now() + 72 * 60 * 60 * 1000);
+  return confirmationExpiresAt();
 }
 
 function projectStatusFromContract(status?: string | null): string {
@@ -494,12 +494,23 @@ export function registerServiceRoutes(app: Express): void {
           collaboratorId: collab.id,
           name: collab.name,
           email: collab.email,
-          link: `${baseUrl}/confirm/${contractId}/${token}`,
+          link: opaqueConfirmUrl(baseUrl, token),
+          confirmUrl: opaqueConfirmUrl(baseUrl, token),
+          id: collab.id,
         });
       }
 
       await storage.updateContract(contractId, { status: "pending" });
-      res.json({ success: true, confirmations: links });
+      res.json({
+        success: true,
+        confirmations: links,
+        contributors: links.map((l) => ({
+          id: l.id,
+          name: l.name,
+          email: l.email,
+          confirmUrl: l.confirmUrl,
+        })),
+      });
     } catch (error) {
       console.error("[SEND CONFIRMATIONS]", error);
       res.status(500).json({ error: "Failed to generate confirmation links" });
