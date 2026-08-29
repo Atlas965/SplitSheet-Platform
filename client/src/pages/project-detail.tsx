@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import ConfirmationTracker from "@/components/ConfirmationTracker";
+import WorkflowStatus from "@/components/WorkflowStatus";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Music2, Plus, Trash2, Send, CheckCircle2, Clock, AlertCircle,
-  Copy, MoreVertical, Users, ChevronLeft, Pencil, Archive,
+  Copy, MoreVertical, ChevronLeft, Pencil, Archive,
   ExternalLink, FileText,
 } from "lucide-react";
 
@@ -152,6 +153,7 @@ export default function ProjectDetail() {
     mutationFn: (data: typeof contribForm) => apiRequest("POST", `/api/projects/${id}/contributors`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "workflow"] });
       setShowAddContrib(false);
       setContribForm(emptyContrib);
       toast({ title: "Contributor Added" });
@@ -164,6 +166,7 @@ export default function ProjectDetail() {
       apiRequest("PATCH", `/api/projects/${id}/contributors/${contribId}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "workflow"] });
       setEditContrib(null);
       toast({ title: "Contributor Updated" });
     },
@@ -174,6 +177,7 @@ export default function ProjectDetail() {
     mutationFn: (contribId: string) => apiRequest("DELETE", `/api/projects/${id}/contributors/${contribId}`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "workflow"] });
       setDeleteContrib(null);
       toast({ title: "Contributor Removed" });
     },
@@ -186,6 +190,7 @@ export default function ProjectDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
       queryClient.invalidateQueries({ queryKey: [`/api/contracts/${id}/confirmations`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "workflow"] });
       setConfirmLinks(data.contributors);
       setShowLinks(true);
       toast({ title: "Confirmation Links Generated", description: "Share each link with the contributor." });
@@ -317,23 +322,7 @@ export default function ProjectDetail() {
           </DropdownMenu>
         </div>
 
-        {/* Progress bar — confirmations */}
-        {contributors.length > 0 && (
-          <Card className="mb-6">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium flex items-center gap-2">
-                  <Users className="h-4 w-4" />
-                  Confirmation Progress — {confirmedCount}/{contributors.length} confirmed
-                </span>
-                {confirmedCount === contributors.length && contributors.length > 0 && (
-                  <Badge className="bg-green-100 text-green-700"><CheckCircle2 className="h-3 w-3 mr-1" /> All Confirmed</Badge>
-                )}
-              </div>
-              <Progress value={contributors.length > 0 ? (confirmedCount / contributors.length) * 100 : 0} className="h-2" />
-            </CardContent>
-          </Card>
-        )}
+        {id && <WorkflowStatus projectId={id} />}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Split Sheet / Contributors */}
@@ -491,7 +480,9 @@ export default function ProjectDetail() {
             </Card>
 
             {id && project && (
-              <ConfirmationTracker contractId={id} contractTitle={project.title || project.songTitle || "Project"} />
+              <div id="rights-capture">
+                <ConfirmationTracker contractId={id} contractTitle={project.title || project.songTitle || "Project"} />
+              </div>
             )}
 
             {/* Generated links */}

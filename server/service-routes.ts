@@ -13,6 +13,14 @@ import { db } from "./db";
 import type { Contract } from "@shared/schema";
 import type { OrgAuthedRequest } from "./rbac-middleware";
 import { confirmationExpiresAt, generateConfirmationToken, opaqueConfirmUrl } from "./confirmation-url";
+import {
+  evaluateEvent,
+  getProjectWorkflow,
+  loadWorkflowSnapshot,
+  recordWorkflowEvent,
+  RSEE_ACTIONS,
+} from "./rights-state-engine";
+import { validateSplits } from "@shared/split-validation";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -458,12 +466,34 @@ export function registerServiceRoutes(app: Express): void {
         res.status(400).json({ error: "Add at least one contributor before sending confirmation links." });
         return;
       }
-      const totalPct = collabs.reduce((sum, c) => sum + Number(c.ownershipPercentage ?? 0), 0);
-      if (Math.abs(totalPct - 100) > 0.01) {
+      const validation = validateSplits(
+        collabs.map((c) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          role: c.role,
+          ownershipPercentage: c.ownershipPercentage,
+        })),
+      );
+      if (!validation.valid) {
         res.status(400).json({
-          error: `Ownership must total 100% before sending links (currently ${totalPct.toFixed(1)}%).`,
+          error: validation.errors[0]?.message ?? "Splits must total 100% before sending links.",
+          code: validation.errors[0]?.code ?? "SPLIT_TOTAL_INVALID",
+          validation,
         });
         return;
+      }
+      const snapshot = await loadWorkflowSnapshot(contractId);
+      if (snapshot) {
+        const allowed = evaluateEvent(snapshot, "REQUEST_CONFIRMATIONS");
+        if (!allowed.ok) {
+          res.status(400).json({
+            error: allowed.error,
+            code: allowed.code,
+            validation: allowed.validation,
+          });
+          return;
+        }
       }
 
       const expires = expiresAt72h();
@@ -501,6 +531,15 @@ export function registerServiceRoutes(app: Express): void {
       }
 
       await storage.updateContract(contractId, { status: "pending" });
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CONFIRMATION_REQUESTED,
+        projectId: contractId,
+        previousState: snapshot ? "AGREEMENT_READY" : "AGREEMENT_READY",
+        newState: "CONFIRMATION_REQUESTED",
+        actorType: "operator",
+        actorId: userId,
+        req,
+      });
       res.json({
         success: true,
         confirmations: links,
@@ -514,6 +553,25 @@ export function registerServiceRoutes(app: Express): void {
     } catch (error) {
       console.error("[SEND CONFIRMATIONS]", error);
       res.status(500).json({ error: "Failed to generate confirmation links" });
+    }
+  });
+
+  app.get("/api/projects/:id/workflow", ...requireActivePermission("project.read"), async (req: Request, res: Response) => {
+    try {
+      const result = await assertContractAccess(req, req.params.id, (req as any).user.claims.sub);
+      if ("error" in result) {
+        res.status(result.status).json({ message: result.error });
+        return;
+      }
+      const workflow = await getProjectWorkflow(req.params.id);
+      if (!workflow) {
+        res.status(404).json({ message: "Project not found" });
+        return;
+      }
+      res.json(workflow);
+    } catch (error) {
+      console.error("[GET-PROJECT-WORKFLOW]", error);
+      res.status(500).json({ message: "Failed to load workflow status" });
     }
   });
 

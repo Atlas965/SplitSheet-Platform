@@ -328,7 +328,7 @@ export default function ConfirmSplit() {
             style={{ marginTop: 2, width: 18, height: 18, accentColor: "#3b6ef5", shrink: 0, cursor: "pointer" }}
           />
           <span style={{ fontSize: "14px", color: "#1a1d2e", lineHeight: 1.5 }}>
-            I agree to the ownership split shown above for <strong>"{data.contractTitle}"</strong>. I understand this is a legally binding confirmation.
+            I confirm the ownership split shown above for <strong>"{data.contractTitle}"</strong>. SplitSheet records this as operational documentation. SplitSheet is not a law firm and does not provide legal advice.
           </span>
         </label>
 
@@ -375,7 +375,7 @@ export default function ConfirmSplit() {
         {/* Footer */}
         <p style={{ fontSize: 11, color: "#a0a8c0", textAlign: "center", marginTop: 24, lineHeight: 1.5 }}>
           Powered by <strong>SplitSheet</strong> · SoundLedger Technologies Inc. · Ontario, Canada<br />
-          Your confirmation is timestamped and stored securely.
+          SplitSheet is not a law firm and does not provide legal advice. Your confirmation is timestamped as operational evidence.
         </p>
       </div>
     </div>

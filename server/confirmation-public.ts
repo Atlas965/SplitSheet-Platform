@@ -5,6 +5,14 @@ import { storage } from "./storage";
 import { evaluateConfirmationToken } from "./confirmation-token-policy";
 import { logAuthEvent, AUTH_EVENTS } from "./auth-events";
 import { accessMethodFromRequest } from "./confirmation-url";
+import {
+  completeConfirmedProject,
+  deriveRightsState,
+  evaluateEvent,
+  loadWorkflowSnapshot,
+  recordWorkflowEvent,
+  RSEE_ACTIONS,
+} from "./rights-state-engine";
 
 function getIp(req: Request): string {
   return (
@@ -49,16 +57,19 @@ async function recordConfirmationAccess(
   row: { id: string; contract_id: string },
   method: "qr" | "link",
 ) {
+  await db.execute(sql`
+    UPDATE split_confirmations SET
+      first_accessed_at = COALESCE(first_accessed_at, NOW()),
+      last_accessed_at = NOW(),
+      access_count = COALESCE(access_count, 0) + 1,
+      access_method = CASE
+        WHEN ${method} = 'qr' THEN 'qr'
+        ELSE COALESCE(access_method, 'link')
+      END,
+      updated_at = NOW()
+    WHERE id = ${row.id}
+  `);
   if (method === "qr") {
-    await db.execute(sql`
-      UPDATE split_confirmations SET
-        first_accessed_at = COALESCE(first_accessed_at, NOW()),
-        last_accessed_at = NOW(),
-        access_count = COALESCE(access_count, 0) + 1,
-        access_method = 'qr',
-        updated_at = NOW()
-      WHERE id = ${row.id}
-    `);
     await logAuthEvent({
       action: AUTH_EVENTS.QR_ACCESSED,
       resourceType: "split_confirmation",
@@ -66,13 +77,37 @@ async function recordConfirmationAccess(
       afterState: { contractId: row.contract_id, accessMethod: "qr" },
       req,
     });
-    return;
+  } else {
+    await logAuthEvent({
+      action: AUTH_EVENTS.CONFIRM_VIEW,
+      resourceType: "split_confirmation",
+      resourceId: row.id,
+      afterState: { contractId: row.contract_id, accessMethod: "link" },
+      req,
+    });
   }
-  await logAuthEvent({
-    action: AUTH_EVENTS.CONFIRM_VIEW,
-    resourceType: "split_confirmation",
-    resourceId: row.id,
-    afterState: { contractId: row.contract_id, accessMethod: "link" },
+  const snap = await loadWorkflowSnapshot(row.contract_id);
+  const previous = snap ? deriveRightsState(snap) : "CONFIRMATION_REQUESTED";
+  await recordWorkflowEvent({
+    action: RSEE_ACTIONS.CONFIRMATION_ACCESSED,
+    projectId: row.contract_id,
+    previousState: previous,
+    newState: "ACCESSED",
+    actorType: "contributor",
+    entityType: "split_confirmation",
+    entityId: row.id,
+    accessMethod: method,
+    req,
+  });
+  await recordWorkflowEvent({
+    action: RSEE_ACTIONS.CONFIRMATION_REVIEWED,
+    projectId: row.contract_id,
+    previousState: "ACCESSED",
+    newState: "REVIEWED",
+    actorType: "contributor",
+    entityType: "split_confirmation",
+    entityId: row.id,
+    accessMethod: method,
     req,
   });
 }
@@ -99,6 +134,15 @@ export async function handlePublicConfirmGet(
     }
 
     const method = accessMethodFromRequest(req.query.via);
+
+    const snapshot = await loadWorkflowSnapshot(resolvedContractId);
+    if (snapshot && deriveRightsState(snapshot) === "CANCELLED") {
+      res.status(410).json({
+        error: "This project is no longer accepting confirmations.",
+        code: "cancelled",
+      });
+      return;
+    }
 
     if (row.status === "confirmed") {
       res.json({
@@ -177,9 +221,32 @@ export async function handlePublicConfirmPost(
       return;
     }
 
+    if (action === "confirm" && !String(name ?? "").trim()) {
+      res.status(400).json({ error: "Name is required to confirm." });
+      return;
+    }
+
     if (row.status === "confirmed" && action === "confirm") {
       res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
       return;
+    }
+
+    const snapshot = await loadWorkflowSnapshot(resolvedContractId);
+    if (snapshot) {
+      const projectState = deriveRightsState(snapshot);
+      if (projectState === "CANCELLED") {
+        res.status(410).json({
+          error: "This project is no longer accepting confirmations.",
+          code: "cancelled",
+        });
+        return;
+      }
+      const event = action === "confirm" ? "SUBMIT_CONFIRMATION" : "REQUEST_CHANGE";
+      const allowed = evaluateEvent(snapshot, event);
+      if (!allowed.ok) {
+        res.status(409).json({ error: allowed.error, code: allowed.code });
+        return;
+      }
     }
 
     if (row.consumed_at && action === "request_change") {
@@ -207,7 +274,7 @@ export async function handlePublicConfirmPost(
     const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
     const consumedAt = action === "confirm" ? new Date() : null;
 
-    await db.execute(sql`
+    const updated = await db.execute(sql`
       UPDATE split_confirmations SET
         status            = ${newStatus},
         confirmed_name    = ${name ?? null},
@@ -225,9 +292,33 @@ export async function handlePublicConfirmPost(
         updated_at        = NOW()
       WHERE id = ${row.id}
         AND revoked_at IS NULL
+        AND status IS DISTINCT FROM 'confirmed'
+      RETURNING id
     `);
 
+    if (!updated.rows.length) {
+      const again = await lookupConfirmation(token, contractId);
+      const latest = again.rows[0] as any;
+      if (latest?.status === "confirmed" && action === "confirm") {
+        res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
+        return;
+      }
+      res.status(409).json({ error: "This confirmation can no longer be updated.", code: "conflict" });
+      return;
+    }
+
     if (action === "confirm") {
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CONFIRMATION_COMPLETED,
+        projectId: resolvedContractId,
+        previousState: snapshot ? deriveRightsState(snapshot) : "REVIEWED",
+        newState: "CONFIRMED",
+        actorType: "contributor",
+        entityType: "split_confirmation",
+        entityId: row.id,
+        accessMethod: method,
+        req,
+      });
       const pendingRows = await db.execute(sql`
         SELECT COUNT(*) AS cnt
         FROM split_confirmations
@@ -237,11 +328,25 @@ export async function handlePublicConfirmPost(
       `);
       const remaining = Number((pendingRows.rows[0] as any)?.cnt ?? 1);
       if (remaining === 0) {
-        await db.execute(sql`
-          UPDATE contracts SET status = 'signed', updated_at = NOW()
-          WHERE id = ${resolvedContractId}
-        `);
+        await completeConfirmedProject({
+          contractId: resolvedContractId,
+          actorType: "contributor",
+          accessMethod: method,
+          req,
+        });
       }
+    } else {
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CHANGE_REQUESTED,
+        projectId: resolvedContractId,
+        previousState: snapshot ? deriveRightsState(snapshot) : "REVIEWED",
+        newState: "CHANGE_REQUESTED",
+        actorType: "contributor",
+        entityType: "split_confirmation",
+        entityId: row.id,
+        accessMethod: method,
+        req,
+      });
     }
 
     await logAuthEvent({

@@ -53,10 +53,10 @@ function loadEnv() {
     for (const line of contents.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq11 = trimmed.indexOf("=");
-      if (eq11 === -1) continue;
-      const key = trimmed.slice(0, eq11).trim();
-      const value = sanitizeEnvValue(trimmed.slice(eq11 + 1));
+      const eq10 = trimmed.indexOf("=");
+      if (eq10 === -1) continue;
+      const key = trimmed.slice(0, eq10).trim();
+      const value = sanitizeEnvValue(trimmed.slice(eq10 + 1));
       if (!(key in process.env)) {
         process.env[key] = value;
       }
@@ -618,6 +618,13 @@ var init_schema = __esm({
       confirmationNote: text("confirmation_note"),
       ipAddress: varchar("ip_address"),
       userAgent: text("user_agent"),
+      /** QR Rights Capture — operator generated a QR for this confirmation request */
+      qrGeneratedAt: timestamp("qr_generated_at"),
+      /** How the contributor opened the workflow: link | qr */
+      accessMethod: varchar("access_method"),
+      firstAccessedAt: timestamp("first_accessed_at"),
+      lastAccessedAt: timestamp("last_accessed_at"),
+      accessCount: integer("access_count").default(0),
       createdAt: timestamp("created_at").defaultNow(),
       updatedAt: timestamp("updated_at").defaultNow()
     });
@@ -1788,14 +1795,33 @@ var init_storage = __esm({
         return user;
       }
       async upsertUser(userData) {
-        const [user] = await db.insert(users).values(userData).onConflictDoUpdate({
-          target: users.id,
-          set: {
-            ...userData,
-            updatedAt: /* @__PURE__ */ new Date()
+        try {
+          const [user] = await db.insert(users).values(userData).onConflictDoUpdate({
+            target: users.id,
+            set: {
+              ...userData,
+              updatedAt: /* @__PURE__ */ new Date()
+            }
+          }).returning();
+          return user;
+        } catch (err) {
+          const msg = String(err?.message || "");
+          const email = typeof userData.email === "string" ? userData.email.trim().toLowerCase() : null;
+          if ((err?.code === "23505" || /users_email_unique/i.test(msg)) && email) {
+            const [existing] = await db.select().from(users).where(sql3`lower(${users.email}) = ${email}`).limit(1);
+            if (existing) {
+              const [updated] = await db.update(users).set({
+                firstName: userData.firstName ?? existing.firstName,
+                lastName: userData.lastName ?? existing.lastName,
+                profileImageUrl: userData.profileImageUrl ?? existing.profileImageUrl,
+                email,
+                updatedAt: /* @__PURE__ */ new Date()
+              }).where(eq(users.id, existing.id)).returning();
+              return updated;
+            }
           }
-        }).returning();
-        return user;
+          throw err;
+        }
       }
       async updateUser(id, updates) {
         const [user] = await db.update(users).set({
@@ -2911,14 +2937,16 @@ function evaluateConfirmationToken(row, opts = {}) {
     return {
       ok: false,
       status: 410,
-      error: "This confirmation link was revoked. Ask the operator for a new link."
+      error: "This confirmation link was revoked. Ask the operator for a new link.",
+      code: "revoked"
     };
   }
   if (row.expires_at && new Date(row.expires_at) < /* @__PURE__ */ new Date()) {
     return {
       ok: false,
       status: 410,
-      error: "This confirmation link has expired. Ask the operator to resend."
+      error: "This confirmation link has expired. Ask the operator to resend.",
+      code: "expired"
     };
   }
   if (opts.forSubmit && row.consumed_at && row.status === "confirmed") {
@@ -2928,7 +2956,8 @@ function evaluateConfirmationToken(row, opts = {}) {
     return {
       ok: false,
       status: 410,
-      error: "This confirmation link was revoked. Ask the operator for a new link."
+      error: "This confirmation link was revoked. Ask the operator for a new link.",
+      code: "revoked"
     };
   }
   return { ok: true };
@@ -2945,6 +2974,26 @@ async function ensureContributorTokenSchema() {
   await db.execute(sql4`
     ALTER TABLE split_confirmations
       ADD COLUMN IF NOT EXISTS consent_versions jsonb;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS qr_generated_at timestamp;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS access_method varchar;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS first_accessed_at timestamp;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS last_accessed_at timestamp;
+  `);
+  await db.execute(sql4`
+    ALTER TABLE split_confirmations
+      ADD COLUMN IF NOT EXISTS access_count integer DEFAULT 0;
   `);
 }
 async function ensureLegalOrgAcceptanceSchema() {
@@ -3136,8 +3185,13 @@ var init_org_context = __esm({
 
 // server/social-auth.ts
 import crypto3 from "crypto";
-import { eq as eq3 } from "drizzle-orm";
+import { sql as sql6 } from "drizzle-orm";
 import * as client from "openid-client";
+function isPgUniqueViolation(err) {
+  const e = err;
+  const msg = String(e?.message || e?.cause?.message || e?.detail || "");
+  return e?.code === "23505" || /users_email_unique|unique constraint/i.test(msg);
+}
 function appBaseUrl(req) {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
   if (req) {
@@ -3184,7 +3238,9 @@ function hasAnySocialProvider() {
   return listSocialProviders().some((p) => p.enabled);
 }
 async function getUserByEmail(email) {
-  const [row] = await db.select().from(users).where(eq3(users.email, email)).limit(1);
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return void 0;
+  const [row] = await db.select().from(users).where(sql6`lower(${users.email}) = ${normalized}`).limit(1);
   return row;
 }
 async function upsertSocialUser(input) {
@@ -3192,23 +3248,27 @@ async function upsertSocialUser(input) {
   await ensureOrgTenantSchema2();
   const preferredId = `${input.provider}:${input.providerUserId}`;
   const email = input.email?.trim().toLowerCase() || null;
+  const disallowLink = process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "true" || process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "1";
   let existing = await storage.getUser(preferredId);
-  if (!existing && email && input.emailVerified && process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true") {
+  if (!existing && email) {
     const byEmail = await getUserByEmail(email);
-    if (byEmail?.id?.startsWith(`${input.provider}:`)) {
-      existing = byEmail;
-    } else if (byEmail) {
-      console.warn(
-        `[auth] Refusing email link for ${input.provider}: existing account uses a different identity id`
-      );
+    if (byEmail) {
+      const sameProvider = byEmail.id.startsWith(`${input.provider}:`);
+      if (sameProvider || input.emailVerified && !disallowLink) {
+        if (!sameProvider) {
+          console.warn(
+            `[auth] Linking ${input.provider} login to existing user ${byEmail.id} via verified email`
+          );
+        }
+        existing = byEmail;
+      } else {
+        throw new Error(
+          "This email is already registered with a different sign-in method. Use the original provider or contact support."
+        );
+      }
     }
   }
   if (existing) {
-    if (existing.id !== preferredId && !existing.id.startsWith(`${input.provider}:`)) {
-      throw new Error(
-        "This email is already linked to a different sign-in method. Use the original provider or contact support."
-      );
-    }
     await storage.updateUser(existing.id, {
       email: email || existing.email,
       firstName: input.firstName || existing.firstName,
@@ -3217,14 +3277,36 @@ async function upsertSocialUser(input) {
     });
     return existing.id;
   }
-  await db.insert(users).values({
-    id: preferredId,
-    email,
-    firstName: input.firstName || null,
-    lastName: input.lastName || null,
-    profileImageUrl: input.profileImageUrl || null
-  });
-  return preferredId;
+  try {
+    await db.insert(users).values({
+      id: preferredId,
+      email,
+      firstName: input.firstName || null,
+      lastName: input.lastName || null,
+      profileImageUrl: input.profileImageUrl || null
+    });
+    return preferredId;
+  } catch (err) {
+    if (isPgUniqueViolation(err) && email) {
+      const byEmail = await getUserByEmail(email);
+      if (byEmail && !disallowLink) {
+        console.warn(
+          `[auth] Recovered from users_email_unique for ${input.provider}; reusing ${byEmail.id}`
+        );
+        await storage.updateUser(byEmail.id, {
+          email: email || byEmail.email,
+          firstName: input.firstName || byEmail.firstName,
+          lastName: input.lastName || byEmail.lastName,
+          profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl
+        });
+        return byEmail.id;
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method. Use the original provider or contact support."
+      );
+    }
+    throw err;
+  }
 }
 function sessionUserFromClaims(claims, provider) {
   const exp = Math.floor(Date.now() / 1e3) + SESSION_TTL_SEC;
@@ -3786,6 +3868,10 @@ var init_auth_events = __esm({
       CONFIRM_VIEW: "AUTH_CONFIRM_VIEW",
       CONFIRM_SUBMIT: "AUTH_CONFIRM_SUBMIT",
       CONFIRM_REVOKE: "AUTH_CONFIRM_REVOKE",
+      QR_GENERATED: "AUTH_QR_GENERATED",
+      QR_ACCESSED: "AUTH_QR_ACCESSED",
+      QR_REVOKED: "AUTH_QR_REVOKED",
+      QR_REGENERATED: "AUTH_QR_REGENERATED",
       TERMS_ACCEPT: "AUTH_TERMS_ACCEPT"
     };
   }
@@ -3793,8 +3879,12 @@ var init_auth_events = __esm({
 
 // server/auth0-auth.ts
 import * as client2 from "openid-client";
-import { eq as eq4 } from "drizzle-orm";
-import { sql as sql6 } from "drizzle-orm";
+import { eq as eq3, sql as sql7 } from "drizzle-orm";
+function isPgUniqueViolation2(err) {
+  const e = err;
+  const msg = String(e?.message || e?.cause?.message || e?.detail || "");
+  return e?.code === "23505" || /users_email_unique|unique constraint/i.test(msg);
+}
 function hasAuth0Credentials2() {
   return Boolean(
     process.env.AUTH0_DOMAIN && process.env.AUTH0_CLIENT_ID && process.env.AUTH0_CLIENT_SECRET
@@ -3847,42 +3937,50 @@ function readAuth0Cookie(req) {
   return void 0;
 }
 async function ensureAuth0Schema() {
-  await db.execute(sql6`
+  await db.execute(sql7`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS auth0_sub varchar;
   `);
-  await db.execute(sql6`
+  await db.execute(sql7`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
   `);
 }
 async function getUserByAuth0Sub(auth0Sub) {
-  const [row] = await db.select().from(users).where(eq4(users.auth0Sub, auth0Sub)).limit(1);
+  const [row] = await db.select().from(users).where(eq3(users.auth0Sub, auth0Sub)).limit(1);
   return row;
 }
 async function getUserByEmail2(email) {
-  const [row] = await db.select().from(users).where(eq4(users.email, email)).limit(1);
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return void 0;
+  const [row] = await db.select().from(users).where(sql7`lower(${users.email}) = ${normalized}`).limit(1);
   return row;
 }
 async function upsertAuth0User(input) {
   const preferredId = `auth0:${input.auth0Sub}`;
   const email = input.email?.trim().toLowerCase() || null;
+  const disallowLink = process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "true" || process.env.DISALLOW_EMAIL_ACCOUNT_LINKING === "1";
   let existing = await getUserByAuth0Sub(input.auth0Sub);
   if (!existing) {
     existing = await storage.getUser(preferredId);
   }
-  if (!existing && email && input.emailVerified && process.env.ALLOW_EMAIL_ACCOUNT_LINKING === "true") {
+  if (!existing && email) {
     const byEmail = await getUserByEmail2(email);
     if (byEmail) {
-      await storage.updateUser(byEmail.id, {
-        auth0Sub: input.auth0Sub,
-        email: email || byEmail.email,
-        firstName: input.firstName || byEmail.firstName,
-        lastName: input.lastName || byEmail.lastName,
-        profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl
-      });
-      return byEmail.id;
+      const sameAuth0 = byEmail.auth0Sub === input.auth0Sub || byEmail.id.startsWith("auth0:");
+      if (sameAuth0 || input.emailVerified && !disallowLink) {
+        if (!sameAuth0) {
+          console.warn(
+            `[auth0] Linking Auth0 sub to existing user ${byEmail.id} via verified email`
+          );
+        }
+        existing = byEmail;
+      } else {
+        throw new Error(
+          "This email is already registered with a different sign-in method. Use the original provider or contact support."
+        );
+      }
     }
   }
   if (existing) {
@@ -3895,15 +3993,36 @@ async function upsertAuth0User(input) {
     });
     return existing.id;
   }
-  await db.insert(users).values({
-    id: preferredId,
-    auth0Sub: input.auth0Sub,
-    email,
-    firstName: input.firstName || null,
-    lastName: input.lastName || null,
-    profileImageUrl: input.profileImageUrl || null
-  });
-  return preferredId;
+  try {
+    await db.insert(users).values({
+      id: preferredId,
+      auth0Sub: input.auth0Sub,
+      email,
+      firstName: input.firstName || null,
+      lastName: input.lastName || null,
+      profileImageUrl: input.profileImageUrl || null
+    });
+    return preferredId;
+  } catch (err) {
+    if (isPgUniqueViolation2(err) && email) {
+      const byEmail = await getUserByEmail2(email);
+      if (byEmail && !disallowLink) {
+        console.warn(`[auth0] Recovered from users_email_unique; reusing ${byEmail.id}`);
+        await storage.updateUser(byEmail.id, {
+          auth0Sub: input.auth0Sub,
+          email: email || byEmail.email,
+          firstName: input.firstName || byEmail.firstName,
+          lastName: input.lastName || byEmail.lastName,
+          profileImageUrl: input.profileImageUrl || byEmail.profileImageUrl
+        });
+        return byEmail.id;
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method. Use the original provider or contact support."
+      );
+    }
+    throw err;
+  }
 }
 function loginFailure2(res, message) {
   res.redirect(`/login?error=${encodeURIComponent(message)}`);
@@ -4124,6 +4243,7 @@ import passport from "passport";
 import session from "express-session";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
+import { sql as sql8 } from "drizzle-orm";
 function callbackUrlForDomain(domain) {
   const protocol = domain.startsWith("localhost") || domain.startsWith("127.0.0.1") ? "http" : "https";
   return `${protocol}://${domain}/api/callback`;
@@ -4160,22 +4280,54 @@ function updateUserSession(user, tokens) {
   user.expires_at = user.claims?.exp;
 }
 async function upsertUser(claims) {
-  const existingUser = await storage.getUser(claims["sub"]);
+  const id = claims["sub"];
+  const email = typeof claims["email"] === "string" ? claims["email"].trim().toLowerCase() : claims["email"];
+  const existingUser = await storage.getUser(id);
   if (existingUser) {
-    await storage.updateUser(claims["sub"], {
-      email: claims["email"],
+    await storage.updateUser(id, {
+      email,
       firstName: claims["first_name"],
       lastName: claims["last_name"],
       profileImageUrl: claims["profile_image_url"]
     });
-  } else {
+    return;
+  }
+  if (email) {
+    const [byEmail] = await db.select().from(users).where(sql8`lower(${users.email}) = ${email}`).limit(1);
+    if (byEmail) {
+      await storage.updateUser(byEmail.id, {
+        email: email || byEmail.email,
+        firstName: claims["first_name"] || byEmail.firstName,
+        lastName: claims["last_name"] || byEmail.lastName,
+        profileImageUrl: claims["profile_image_url"] || byEmail.profileImageUrl
+      });
+      claims["sub"] = byEmail.id;
+      return;
+    }
+  }
+  try {
     await db.insert(users).values({
-      id: claims["sub"],
-      email: claims["email"],
+      id,
+      email,
       firstName: claims["first_name"],
       lastName: claims["last_name"],
       profileImageUrl: claims["profile_image_url"]
     });
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (err?.code === "23505" || /users_email_unique/i.test(msg)) {
+      if (email) {
+        const [byEmail] = await db.select().from(users).where(sql8`lower(${users.email}) = ${email}`).limit(1);
+        if (byEmail) {
+          claims["sub"] = byEmail.id;
+          return;
+        }
+      }
+      throw new Error(
+        "This email is already registered with a different sign-in method."
+      );
+    }
+    throw err;
   }
 }
 function mountSessionStack(app) {
@@ -4888,7 +5040,7 @@ var init_email_service = __esm({
 });
 
 // server/authz-helpers.ts
-import { eq as eq5 } from "drizzle-orm";
+import { eq as eq4 } from "drizzle-orm";
 function sessionUserId(req) {
   return req.user?.claims?.sub;
 }
@@ -4953,7 +5105,7 @@ async function requireOwnedRevenueEvent(req, res, eventId) {
     assetId: revenueEvents.assetId,
     createdBy: songAssets.createdBy,
     organizationId: songAssets.organizationId
-  }).from(revenueEvents).innerJoin(songAssets, eq5(revenueEvents.assetId, songAssets.id)).where(eq5(revenueEvents.id, eventId)).limit(1);
+  }).from(revenueEvents).innerJoin(songAssets, eq4(revenueEvents.assetId, songAssets.id)).where(eq4(revenueEvents.id, eventId)).limit(1);
   if (!row) {
     res.status(404).json({ message: "Revenue event not found" });
     return null;
@@ -4971,7 +5123,7 @@ async function requireOwnedCollaborator(req, res, collaboratorId) {
     res.status(401).json({ message: "Unauthorized" });
     return null;
   }
-  const [row] = await db.select().from(contractCollaborators).where(eq5(contractCollaborators.id, collaboratorId)).limit(1);
+  const [row] = await db.select().from(contractCollaborators).where(eq4(contractCollaborators.id, collaboratorId)).limit(1);
   if (!row) {
     res.status(404).json({ message: "Client not found" });
     return null;
@@ -5143,468 +5295,180 @@ var init_rbac_middleware = __esm({
   }
 });
 
-// server/confirmation-routes.ts
+// server/confirmation-url.ts
 import crypto4 from "crypto";
-import { sql as sql7 } from "drizzle-orm";
-function generateToken() {
+function generateConfirmationToken() {
   return crypto4.randomBytes(32).toString("hex");
 }
-function expiresAt72h() {
-  return new Date(Date.now() + 72 * 60 * 60 * 1e3);
+function confirmationExpiresAt(from = Date.now()) {
+  return new Date(from + CONFIRMATION_TTL_MS);
 }
-function getIp(req) {
-  return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
+function opaqueConfirmPath(token, viaQr = false) {
+  const path3 = `/confirm/${token}`;
+  return viaQr ? `${path3}?via=qr` : path3;
 }
-function registerConfirmationRoutes(app) {
-  const confirmPublicLimiter = createPgRateLimiter(40, 6e4, "confirm-public");
-  app.use("/api/confirm", confirmPublicLimiter);
-  void ensureContributorTokenSchema().catch(
-    (err) => console.warn("[confirm] schema ensure skipped:", err)
-  );
-  app.post(
-    "/api/contracts/:id/generate-confirmations",
-    ...requireActivePermission("agreement.send"),
-    async (req, res) => {
-      const contractId = req.params.id;
-      const userId = req.user?.claims?.sub;
-      try {
-        const owned = await requireOwnedContract(req, res, contractId);
-        if (!owned) return;
-        const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
-        const collabRows = await db.execute(sql7`
-          SELECT id, name, email, role, ownership_percentage
-          FROM contract_collaborators
-          WHERE contract_id = ${contractId}
-          ORDER BY created_at ASC
-        `);
-        const collaborators = collabRows.rows;
-        if (!collaborators.length) {
-          res.status(400).json({ error: "No collaborators on this contract" });
-          return;
+function opaqueConfirmUrl(baseUrl, token, viaQr = false) {
+  return `${baseUrl.replace(/\/$/, "")}${opaqueConfirmPath(token, viaQr)}`;
+}
+function accessMethodFromRequest(via, bodyMethod) {
+  if (via === "qr" || bodyMethod === "qr") return "qr";
+  return "link";
+}
+var CONFIRMATION_TTL_MS;
+var init_confirmation_url = __esm({
+  "server/confirmation-url.ts"() {
+    "use strict";
+    CONFIRMATION_TTL_MS = 72 * 60 * 60 * 1e3;
+  }
+});
+
+// server/agreement-ledger.ts
+import { eq as eq5, sql as sql9 } from "drizzle-orm";
+function generateSlSongId() {
+  const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
+  return `SL-SONG-${hex}`;
+}
+function asRecord(data) {
+  return data && typeof data === "object" ? data : {};
+}
+async function syncAgreementToRightsLedger(contractId, actorId) {
+  const contract = await storage.getContract(contractId);
+  if (!contract) return { synced: false, reason: "Contract not found" };
+  if (contract.status !== "signed" && contract.status !== "confirmed") {
+    return { synced: false, reason: "Contract is not fully executed" };
+  }
+  const existingSync = asRecord(asRecord(contract.metadata).rightsLedgerSync);
+  if (existingSync.ownershipVersion != null || existingSync.licenseId != null) {
+    return {
+      synced: true,
+      reason: "already_synced",
+      assetId: typeof existingSync.assetId === "string" ? existingSync.assetId : void 0,
+      ownershipVersion: existingSync.ownershipVersion != null ? Number(existingSync.ownershipVersion) : void 0,
+      licenseId: typeof existingSync.licenseId === "string" ? existingSync.licenseId : void 0
+    };
+  }
+  const template = contract.templateId ? await storage.getContractTemplate(contract.templateId) : await storage.getContractTemplateByType(contract.type);
+  const rights = template?.rightsCategories ?? [];
+  const data = asRecord(contract.data);
+  const createdBy = actorId || contract.createdBy;
+  const needsOwnership = rights.includes("OWNERSHIP") || rights.includes("COMPOSITION") || contract.type === "split-sheet" || Array.isArray(data.collaborators) || Array.isArray(data.ownershipSplit);
+  const needsLicense = rights.includes("LICENSE") || rights.includes("SYNCHRONIZATION") || (template?.agreementType ?? "").includes("license") || contract.type.includes("license");
+  if (!needsOwnership && !needsLicense) {
+    return { synced: false, reason: "Template does not map to ledger ownership or license records" };
+  }
+  let assetId;
+  let ownershipVersion;
+  let licenseId;
+  if (needsOwnership) {
+    const title = String(data.songTitle || data.recordingTitle || data.title || contract.title || "Untitled").trim();
+    const existingAssets = await storage.getSongAssetsByContract(contractId);
+    let asset = existingAssets[0];
+    if (!asset) {
+      asset = await storage.createSongAsset({
+        title,
+        artistName: String(data.artistName || data.artist || "") || null,
+        createdBy,
+        contractId,
+        status: "active",
+        slSongId: generateSlSongId(),
+        metadata: {
+          source: "agreement_sync",
+          contractType: contract.type,
+          templateId: contract.templateId,
+          templateVersion: contract.templateVersion ?? template?.version ?? null
         }
-        const results = [];
-        const expires = expiresAt72h();
-        for (const collab of collaborators) {
-          const existing = await db.execute(sql7`
-            SELECT id, token, status FROM split_confirmations
-            WHERE contract_id = ${contractId}
-              AND collaborator_id = ${collab.id}
-            LIMIT 1
-          `);
-          if (existing.rows.length > 0) {
-            const row = existing.rows[0];
-            await db.execute(sql7`
-              UPDATE split_confirmations
-              SET expires_at = ${expires},
-                  revoked_at = NULL,
-                  consumed_at = NULL,
-                  status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
-                  updated_at = NOW()
-              WHERE id = ${row.id}
-            `);
-            results.push({ collaboratorId: collab.id, name: collab.name, token: row.token, status: row.status, isNew: false });
-          } else {
-            const token = generateToken();
-            await db.execute(sql7`
-              INSERT INTO split_confirmations
-                (contract_id, collaborator_id, token, status, expires_at)
-              VALUES
-                (${contractId}, ${collab.id}, ${token}, 'not_sent', ${expires})
-            `);
-            results.push({ collaboratorId: collab.id, name: collab.name, token, status: "not_sent", isNew: true });
-          }
-        }
-        const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
-        const operator = await storage.getUser(userId).catch(() => void 0);
-        const operatorName = operator ? `${operator.firstName ?? ""} ${operator.lastName ?? ""}`.trim() : void 0;
-        const confirmations2 = await Promise.all(
-          results.map(async (r) => {
-            const link = `${baseUrl}/confirm/${contractId}/${r.token}`;
-            const collab = collaborators.find((c) => c.id === r.collaboratorId);
-            let emailSent = false;
-            if (collab?.email) {
-              const template = confirmationLinkEmail({
-                contributorName: r.name,
-                songTitle: contract.title,
-                operatorName,
-                confirmUrl: link
-              });
-              const delivery = await sendEmail({ to: collab.email, ...template });
-              emailSent = delivery.delivered;
-              if (delivery.delivered) {
-                await db.execute(sql7`
-                  UPDATE split_confirmations
-                  SET status = 'sent', sent_at = NOW(), updated_at = NOW()
-                  WHERE contract_id = ${contractId} AND collaborator_id = ${r.collaboratorId}
-                    AND status IN ('not_sent', 'sent')
-                `).catch(() => {
-                });
-              }
-            }
-            return {
-              ...r,
-              status: emailSent ? "sent" : r.status,
-              emailSent,
-              link,
-              whatsapp: `https://wa.me/?text=${encodeURIComponent(
-                `Hey ${r.name} \u2014 please review and confirm your split for "${contract.title}" here: ${link}`
-              )}`,
-              sms: `sms:?body=${encodeURIComponent(
-                `Hey ${r.name} \u2014 confirm your split for "${contract.title}": ${link}`
-              )}`
-            };
-          })
+      });
+    }
+    assetId = asset.id;
+    const tableCollabs = await storage.getContractCollaborators(contractId);
+    const splits = extractOwnershipSplits(contract, data, tableCollabs);
+    if (splits.length > 0) {
+      const prepared = await ensureUserIdsForSplits(splits, createdBy);
+      const total = prepared.reduce((s, p) => s + parseFloat(p.ownershipPercentage), 0);
+      if (Math.abs(total - 100) <= 0.01) {
+        const records = await storage.updateOwnershipSplit(
+          asset.id,
+          prepared,
+          createdBy,
+          `Synced from executed agreement ${contract.id} (${contract.type})`
         );
-        res.json({ contractId, contractTitle: contract.title, confirmations: confirmations2 });
-      } catch (err) {
-        console.error("[GENERATE-CONFIRMATIONS]", err.message);
-        res.status(500).json({ error: err.message });
+        ownershipVersion = records[0]?.version;
       }
     }
-  );
-  app.get(
-    "/api/contracts/:id/confirmations",
-    ...requireActivePermission("agreement.read"),
-    async (req, res) => {
-      const contractId = req.params.id;
-      const userId = req.user?.claims?.sub;
-      try {
-        const owned = await requireOwnedContract(req, res, contractId);
-        if (!owned) return;
-        const contract = { title: owned.title, status: owned.status };
-        const rows = await db.execute(sql7`
-          SELECT
-            sc.id,
-            sc.token,
-            sc.status,
-            sc.sent_at,
-            sc.confirmed_at,
-            sc.expires_at,
-            sc.confirmed_name,
-            sc.confirmed_email,
-            sc.confirmation_note,
-            sc.ip_address,
-            cc.id   AS collaborator_id,
-            cc.name AS collaborator_name,
-            cc.email AS collaborator_email,
-            cc.role,
-            cc.ownership_percentage
-          FROM split_confirmations sc
-          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
-          WHERE sc.contract_id = ${contractId}
-          ORDER BY cc.created_at ASC
-        `);
-        const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
-        const confirmations2 = rows.rows.map((r) => ({
-          id: r.id,
-          token: r.token,
-          status: r.status,
-          sentAt: r.sent_at,
-          confirmedAt: r.confirmed_at,
-          expiresAt: r.expires_at,
-          confirmedName: r.confirmed_name,
-          confirmedEmail: r.confirmed_email,
-          confirmationNote: r.confirmation_note,
-          collaborator: {
-            id: r.collaborator_id,
-            name: r.collaborator_name,
-            email: r.collaborator_email,
-            role: r.role,
-            ownershipPercentage: Number(r.ownership_percentage)
-          },
-          link: `${baseUrl}/confirm/${contractId}/${r.token}`,
-          whatsapp: `https://wa.me/?text=${encodeURIComponent(
-            `Hey ${r.collaborator_name} \u2014 confirm your split for "${contract.title}": ${baseUrl}/confirm/${contractId}/${r.token}`
-          )}`,
-          sms: `sms:?body=${encodeURIComponent(
-            `Hey ${r.collaborator_name} \u2014 confirm your split for "${contract.title}": ${baseUrl}/confirm/${contractId}/${r.token}`
-          )}`
-        }));
-        const total = confirmations2.length;
-        const confirmed = confirmations2.filter((c) => c.status === "confirmed").length;
-        const pending = confirmations2.filter((c) => c.status === "sent").length;
-        const notSent = confirmations2.filter((c) => c.status === "not_sent").length;
-        const changed = confirmations2.filter((c) => c.status === "change_requested").length;
-        const allConfirmed = confirmed === total && total > 0;
-        res.json({
-          contractId,
-          contractTitle: contract.title,
-          contractStatus: contract.status,
-          allConfirmed,
-          summary: { total, confirmed, pending, notSent, changeRequested: changed },
-          confirmations: confirmations2
-        });
-      } catch (err) {
-        console.error("[GET-CONFIRMATIONS]", err.message);
-        res.status(500).json({ error: err.message });
+  }
+  if (needsLicense) {
+    if (!assetId) {
+      const existingAssets = await storage.getSongAssetsByContract(contractId);
+      assetId = existingAssets[0]?.id;
+    }
+    const [latest] = await db.select({ maxVersion: sql9`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq5(licenseRecords.contractId, contractId));
+    const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
+    const [row] = await db.insert(licenseRecords).values({
+      contractId,
+      assetId: assetId ?? null,
+      licenseType: contract.type,
+      licensorName: String(data.licensor || data.partyA || "") || null,
+      licenseeName: String(data.licensee || data.partyB || "") || null,
+      territory: String(data.territory || "") || null,
+      term: String(data.term || "") || null,
+      exclusivity: String(data.exclusivity || "") || null,
+      rightsGranted: Array.isArray(data.rightsGranted) ? data.rightsGranted : rights,
+      fee: data.licenseFee != null || data.fee != null ? String(data.licenseFee ?? data.fee) : null,
+      metadata: {
+        source: "agreement_sync",
+        templateVersion: contract.templateVersion ?? template?.version ?? null
+      },
+      version: nextVersion,
+      createdBy
+    }).returning();
+    licenseId = row.id;
+  }
+  const meta = asRecord(contract.metadata);
+  await storage.updateContract(contractId, {
+    metadata: {
+      ...meta,
+      rightsLedgerSync: {
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        assetId,
+        ownershipVersion,
+        licenseId
       }
     }
-  );
-  app.post(
-    "/api/contracts/:id/confirmations/:confirmId/mark-sent",
-    ...requireActivePermission("agreement.send"),
-    async (req, res) => {
-      const { id: contractId, confirmId } = req.params;
-      try {
-        const owned = await requireOwnedContract(req, res, contractId);
-        if (!owned) return;
-        const result = await db.execute(sql7`
-          UPDATE split_confirmations
-          SET status = 'sent', sent_at = NOW(), updated_at = NOW()
-          WHERE id = ${confirmId}
-            AND contract_id = ${contractId}
-            AND status IN ('not_sent', 'sent')
-          RETURNING id
-        `);
-        if (!result.rows.length) {
-          res.status(404).json({ error: "Confirmation not found for this contract" });
-          return;
-        }
-        res.json({ success: true });
-      } catch (err) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  );
-  app.post(
-    "/api/contracts/:id/confirmations/:confirmId/revoke",
-    ...requireActivePermission("agreement.send"),
-    async (req, res) => {
-      const { id: contractId, confirmId } = req.params;
-      const userId = req.user?.claims?.sub;
-      try {
-        const owned = await requireOwnedContract(req, res, contractId);
-        if (!owned) return;
-        const result = await db.execute(sql7`
-          UPDATE split_confirmations
-          SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
-          WHERE id = ${confirmId}
-            AND contract_id = ${contractId}
-            AND status != 'confirmed'
-          RETURNING id
-        `);
-        if (!result.rows.length) {
-          res.status(404).json({
-            error: "Confirmation not found or already confirmed (cannot revoke confirmed)"
-          });
-          return;
-        }
-        await logAuthEvent({
-          action: AUTH_EVENTS.CONFIRM_REVOKE,
-          userId,
-          resourceType: "split_confirmation",
-          resourceId: confirmId,
-          afterState: { contractId },
-          req
-        });
-        res.json({ revoked: true });
-      } catch (err) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  );
-  app.get(
-    "/api/confirm/:contractId/:token",
-    async (req, res) => {
-      const { contractId, token } = req.params;
-      try {
-        const rows = await db.execute(sql7`
-          SELECT
-            sc.id,
-            sc.status,
-            sc.expires_at,
-            sc.revoked_at,
-            sc.consumed_at,
-            sc.confirmed_at,
-            sc.collaborator_id,
-            cc.name   AS collaborator_name,
-            cc.email  AS collaborator_email,
-            cc.role,
-            cc.ownership_percentage,
-            c.id      AS contract_id,
-            c.title   AS contract_title,
-            c.data    AS contract_data
-          FROM split_confirmations sc
-          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
-          JOIN contracts c ON c.id = sc.contract_id
-          WHERE sc.token     = ${token}
-            AND sc.contract_id = ${contractId}
-          LIMIT 1
-        `);
-        if (!rows.rows.length) {
-          res.status(404).json({ error: "Confirmation link not found or invalid." });
-          return;
-        }
-        const row = rows.rows[0];
-        const gate = evaluateConfirmationToken(row);
-        if (!gate.ok) {
-          res.status(gate.status).json({ error: gate.error });
-          return;
-        }
-        if (row.status === "confirmed") {
-          res.json({
-            alreadyConfirmed: true,
-            confirmedAt: row.confirmed_at,
-            collaboratorName: row.collaborator_name,
-            contractTitle: row.contract_title
-          });
-          return;
-        }
-        const allCollabs = await db.execute(sql7`
-          SELECT name, role, ownership_percentage
-          FROM contract_collaborators
-          WHERE contract_id = ${contractId}
-          ORDER BY created_at ASC
-        `);
-        let contributorConsentVersion = null;
-        try {
-          const consent = await storage.getLatestLegalDocument("contributor_consent");
-          contributorConsentVersion = consent?.version ?? null;
-        } catch {
-        }
-        await logAuthEvent({
-          action: AUTH_EVENTS.CONFIRM_VIEW,
-          resourceType: "split_confirmation",
-          resourceId: row.id,
-          afterState: { contractId },
-          req
-        });
-        res.json({
-          alreadyConfirmed: false,
-          confirmationId: row.id,
-          contractTitle: row.contract_title,
-          collaboratorName: row.collaborator_name,
-          collaboratorEmail: row.collaborator_email,
-          collaboratorRole: row.role,
-          ownershipPercentage: Number(row.ownership_percentage),
-          expiresAt: row.expires_at,
-          contributorConsentVersion,
-          allCollaborators: allCollabs.rows.map((c) => ({
-            name: c.name,
-            role: c.role,
-            ownershipPercentage: Number(c.ownership_percentage)
-          }))
-        });
-      } catch (err) {
-        console.error("[PUBLIC-CONFIRM-GET]", err.message);
-        res.status(500).json({ error: "Could not load confirmation. Please try again." });
-      }
-    }
-  );
-  app.post(
-    "/api/confirm/:contractId/:token",
-    async (req, res) => {
-      const { contractId, token } = req.params;
-      const { action, name, email, note } = req.body ?? {};
-      if (!["confirm", "request_change"].includes(action)) {
-        res.status(400).json({ error: "action must be 'confirm' or 'request_change'" });
-        return;
-      }
-      try {
-        const rows = await db.execute(sql7`
-          SELECT sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at,
-                 cc.name AS collab_name, c.title AS contract_title
-          FROM split_confirmations sc
-          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
-          JOIN contracts c ON c.id = sc.contract_id
-          WHERE sc.token = ${token}
-            AND sc.contract_id = ${contractId}
-          LIMIT 1
-        `);
-        if (!rows.rows.length) {
-          res.status(404).json({ error: "Confirmation link not found." });
-          return;
-        }
-        const row = rows.rows[0];
-        const gate = evaluateConfirmationToken(row, { forSubmit: true });
-        if (!gate.ok) {
-          res.status(gate.status).json({ error: gate.error });
-          return;
-        }
-        if (row.status === "confirmed" && action === "confirm") {
-          res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
-          return;
-        }
-        if (row.consumed_at && action === "request_change") {
-          res.status(410).json({
-            error: "This confirmation was already completed and cannot be changed via this link."
-          });
-          return;
-        }
-        const newStatus = action === "confirm" ? "confirmed" : "change_requested";
-        const ip = getIp(req);
-        const ua = req.headers["user-agent"] ?? null;
-        let consentVersions = null;
-        try {
-          const consent = await storage.getLatestLegalDocument("contributor_consent");
-          if (consent?.version) {
-            consentVersions = { contributor_consent: consent.version };
-          }
-        } catch {
-        }
-        const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
-        const consumedAt = action === "confirm" ? /* @__PURE__ */ new Date() : null;
-        await db.execute(sql7`
-          UPDATE split_confirmations SET
-            status           = ${newStatus},
-            confirmed_name   = ${name ?? null},
-            confirmed_email  = ${email ?? null},
-            confirmation_note = ${note ?? null},
-            ip_address       = ${ip},
-            user_agent       = ${ua},
-            confirmed_at     = NOW(),
-            consumed_at      = COALESCE(${consumedAt}, consumed_at),
-            consent_versions = COALESCE(${consentJson}::jsonb, consent_versions),
-            updated_at       = NOW()
-          WHERE id = ${row.id}
-            AND revoked_at IS NULL
-        `);
-        if (action === "confirm") {
-          const pendingRows = await db.execute(sql7`
-            SELECT COUNT(*) AS cnt
-            FROM split_confirmations
-            WHERE contract_id = ${contractId}
-              AND status != 'confirmed'
-              AND (revoked_at IS NULL)
-          `);
-          const remaining = Number(pendingRows.rows[0]?.cnt ?? 1);
-          if (remaining === 0) {
-            await db.execute(sql7`
-              UPDATE contracts SET status = 'signed', updated_at = NOW()
-              WHERE id = ${contractId}
-            `);
-          }
-        }
-        await logAuthEvent({
-          action: AUTH_EVENTS.CONFIRM_SUBMIT,
-          resourceType: "split_confirmation",
-          resourceId: row.id,
-          afterState: { contractId, action: newStatus, hasConsentVersions: !!consentVersions },
-          req
-        });
-        res.json({
-          success: true,
-          action: newStatus,
-          message: action === "confirm" ? `Thank you${name ? ` ${name}` : ""}! Your confirmation for "${row.contract_title}" has been recorded.` : "Your change request has been recorded. The operator will follow up."
-        });
-      } catch (err) {
-        console.error("[PUBLIC-CONFIRM-POST]", err.message);
-        res.status(500).json({ error: "Could not submit confirmation. Please try again." });
-      }
-    }
-  );
+  });
+  return { synced: true, assetId, ownershipVersion, licenseId };
 }
-var init_confirmation_routes = __esm({
-  "server/confirmation-routes.ts"() {
+function extractOwnershipSplits(_contract, data, tableCollabs = []) {
+  const fromTable = tableCollabs.map((r) => ({
+    name: r.name,
+    email: r.email,
+    userId: r.userId,
+    ownershipPercentage: String(r.ownershipPercentage ?? ""),
+    role: r.role
+  }));
+  const fromCollabs = Array.isArray(data.collaborators) ? data.collaborators : [];
+  const fromSplit = Array.isArray(data.ownershipSplit) ? data.ownershipSplit : [];
+  const rows = fromTable.length ? fromTable : [...fromCollabs, ...fromSplit];
+  return rows.map((r) => ({
+    name: r.name,
+    email: r.email,
+    userId: r.userId,
+    ownershipPercentage: String(r.ownershipPercentage ?? r.percentage ?? r.share ?? ""),
+    role: String(r.role || "writer")
+  })).filter((r) => r.ownershipPercentage && !Number.isNaN(parseFloat(r.ownershipPercentage)));
+}
+async function ensureUserIdsForSplits(splits, fallbackUserId) {
+  return splits.map((s) => ({
+    userId: s.userId || fallbackUserId,
+    ownershipPercentage: s.ownershipPercentage,
+    role: s.role
+  }));
+}
+var init_agreement_ledger = __esm({
+  "server/agreement-ledger.ts"() {
     "use strict";
     init_db();
-    init_email_service();
+    init_schema();
     init_storage();
-    init_security();
-    init_authz_helpers();
-    init_rbac_middleware();
-    init_confirmation_token_policy();
-    init_auth_events();
   }
 });
 
@@ -6501,6 +6365,1363 @@ var init_agreement_catalog = __esm({
         })
       )
     ];
+  }
+});
+
+// shared/split-validation.ts
+function toHundredths(value) {
+  if (value === null || value === void 0 || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+function hundredthsToPercent(hundredths) {
+  return (hundredths / 100).toFixed(2);
+}
+function issue(code, field, message) {
+  return { code, field, message };
+}
+function validateSplits(contributors) {
+  const errors = [];
+  const warnings = [];
+  if (!contributors.length) {
+    errors.push(
+      issue(
+        "REQUIRED_CONTRIBUTOR_MISSING",
+        "contributors",
+        "Add at least one contributor before validating this split."
+      )
+    );
+    return { valid: false, errors, warnings };
+  }
+  const emails = /* @__PURE__ */ new Map();
+  let totalHundredths = 0;
+  let anyPercent = false;
+  contributors.forEach((c, index2) => {
+    const field = `contributors[${index2}]`;
+    const name = (c.name ?? "").trim();
+    if (!name) {
+      errors.push(issue("REQUIRED_CONTRIBUTOR_MISSING", `${field}.name`, "Contributor name is required."));
+    }
+    const role = (c.role ?? "").trim();
+    if (!role) {
+      errors.push(issue("REQUIRED_ROLE_MISSING", `${field}.role`, "Contributor role is required."));
+    }
+    const email = (c.email ?? "").trim().toLowerCase();
+    if (email) {
+      const prev = emails.get(email);
+      if (prev !== void 0) {
+        errors.push(
+          issue(
+            "DUPLICATE_CONTRIBUTOR",
+            `${field}.email`,
+            `The same email is listed more than once (${email}).`
+          )
+        );
+      } else {
+        emails.set(email, index2);
+      }
+    }
+    const hundredths = toHundredths(c.ownershipPercentage);
+    if (hundredths === null) {
+      errors.push(
+        issue("INVALID_PERCENTAGE", `${field}.ownershipPercentage`, "Ownership percentage is missing or not a number.")
+      );
+      return;
+    }
+    anyPercent = true;
+    if (hundredths < 0) {
+      errors.push(
+        issue("INVALID_PERCENTAGE", `${field}.ownershipPercentage`, "Ownership percentage cannot be negative.")
+      );
+      return;
+    }
+    if (hundredths > SPLIT_TOTAL_HUNDREDTHS) {
+      errors.push(
+        issue(
+          "INVALID_PERCENTAGE",
+          `${field}.ownershipPercentage`,
+          "A single ownership percentage cannot be greater than 100%."
+        )
+      );
+      return;
+    }
+    totalHundredths += hundredths;
+  });
+  if (anyPercent && totalHundredths !== SPLIT_TOTAL_HUNDREDTHS) {
+    errors.push(
+      issue(
+        "SPLIT_TOTAL_INVALID",
+        "ownershipPercentage",
+        `The entered composition percentages do not total 100% (currently ${hundredthsToPercent(totalHundredths)}%).`
+      )
+    );
+  }
+  return { valid: errors.length === 0, errors, warnings };
+}
+var SPLIT_TOTAL_HUNDREDTHS;
+var init_split_validation = __esm({
+  "shared/split-validation.ts"() {
+    "use strict";
+    SPLIT_TOTAL_HUNDREDTHS = 1e4;
+  }
+});
+
+// shared/rights-state.ts
+function canTransition2(from, event) {
+  if (TERMINAL_STATES.includes(from) && event !== "FINALIZE") {
+    return event === "FINALIZE" && from === "FINALIZED";
+  }
+  return EVENT_ALLOWED_FROM[event]?.includes(from) ?? false;
+}
+function isRevokedConfirmation(c) {
+  return c.status === "revoked" || Boolean(c.revokedAt);
+}
+function isExpiredConfirmation(c, now) {
+  if (!c.expiresAt) return false;
+  return new Date(c.expiresAt).getTime() < now.getTime();
+}
+function deriveRightsState(snap) {
+  const now = snap.now ?? /* @__PURE__ */ new Date();
+  const st = (snap.contractStatus || "draft").toLowerCase();
+  if (st === "cancelled" || st === "archived") return "CANCELLED";
+  const confs = snap.confirmations;
+  const active = confs.filter((c) => !isRevokedConfirmation(c));
+  const confirmed = active.filter((c) => c.status === "confirmed");
+  const changeReq = active.filter((c) => c.status === "change_requested");
+  const outstanding = active.filter((c) => c.status !== "confirmed");
+  const expiredOutstanding = outstanding.filter((c) => isExpiredConfirmation(c, now));
+  const accessed = confs.some((c) => Boolean(c.firstAccessedAt));
+  const hasEvidence = confirmed.some((c) => Boolean(c.ipAddress) || Boolean(c.confirmedAt));
+  if (confs.length === 0) {
+    if (!snap.hasCollaborators) return "DRAFT";
+    if (!snap.splitsValid) return "INVALID";
+    return "AGREEMENT_READY";
+  }
+  if (active.length > 0 && confirmed.length === active.length) {
+    if (snap.rightsLedgerSynced) return "FINALIZED";
+    if (hasEvidence) return "EVIDENCE_RECORDED";
+    return "CONFIRMED";
+  }
+  if (changeReq.length > 0) return "CHANGE_REQUESTED";
+  if (confs.length > 0 && active.length === 0) return "REVOKED";
+  if (outstanding.length > 0 && expiredOutstanding.length === outstanding.length) return "EXPIRED";
+  if (accessed) return "ACCESSED";
+  return "CONFIRMATION_REQUESTED";
+}
+function workflowSteps(snap, state) {
+  const confs = snap.confirmations;
+  const active = confs.filter((c) => !isRevokedConfirmation(c));
+  const allConfirmed = active.length > 0 && active.every((c) => c.status === "confirmed");
+  const hasAccess = confs.some((c) => Boolean(c.firstAccessedAt));
+  const hasEvidence = active.some(
+    (c) => c.status === "confirmed" && (Boolean(c.ipAddress) || Boolean(c.confirmedAt))
+  );
+  const steps = [
+    { id: "created", label: "Project created", done: true },
+    { id: "splits", label: "Splits validated", done: snap.splitsValid },
+    { id: "agreement", label: "Agreement prepared", done: snap.hasCollaborators && snap.splitsValid },
+    { id: "requested", label: "Confirmation requested", done: confs.length > 0 },
+    { id: "review", label: "Contributors reviewing", done: hasAccess || allConfirmed },
+    { id: "confirmed", label: "Confirmations complete", done: allConfirmed },
+    { id: "evidence", label: "Evidence recorded", done: hasEvidence || snap.rightsLedgerSynced },
+    { id: "ledger", label: "Rights record saved", done: snap.rightsLedgerSynced }
+  ];
+  const firstOpen = steps.findIndex((s) => !s.done);
+  return steps.map((s, i) => ({
+    ...s,
+    current: !TERMINAL_STATES.includes(state) && (i === firstOpen || firstOpen === -1 && i === steps.length - 1)
+  }));
+}
+function timelineLabelForAction(action) {
+  return RSEE_EVENT_LABELS[action] ?? action.replace(/^RSEE_|^AUTH_/, "").replace(/_/g, " ").toLowerCase();
+}
+var EVENT_ALLOWED_FROM, TERMINAL_STATES, RIGHTS_STATE_LABELS, RSEE_EVENT_LABELS;
+var init_rights_state = __esm({
+  "shared/rights-state.ts"() {
+    "use strict";
+    EVENT_ALLOWED_FROM = {
+      VALIDATE_SPLITS: [
+        "DRAFT",
+        "INVALID",
+        "VALIDATED",
+        "AGREEMENT_READY",
+        "CHANGE_REQUESTED"
+      ],
+      REQUEST_CONFIRMATIONS: [
+        "VALIDATED",
+        "AGREEMENT_READY",
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED",
+        "EXPIRED",
+        "REVOKED"
+      ],
+      ACCESS_CONFIRMATION: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED"
+      ],
+      REVIEW_CONFIRMATION: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED"
+      ],
+      SUBMIT_CONFIRMATION: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED"
+      ],
+      REQUEST_CHANGE: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED"
+      ],
+      REVOKE_TOKEN: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED",
+        "EXPIRED"
+      ],
+      GENERATE_QR: [
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED",
+        "EXPIRED",
+        "REVOKED"
+      ],
+      RECORD_EVIDENCE: ["CONFIRMED", "EVIDENCE_RECORDED"],
+      RECORD_RIGHTS: ["CONFIRMED", "EVIDENCE_RECORDED", "RIGHTS_RECORDED"],
+      FINALIZE: ["EVIDENCE_RECORDED", "RIGHTS_RECORDED", "FINALIZED"],
+      CANCEL: [
+        "DRAFT",
+        "INVALID",
+        "VALIDATED",
+        "AGREEMENT_READY",
+        "CONFIRMATION_REQUESTED",
+        "ACCESSED",
+        "REVIEWED",
+        "CHANGE_REQUESTED",
+        "EXPIRED",
+        "REVOKED"
+      ]
+    };
+    TERMINAL_STATES = ["FINALIZED", "CANCELLED"];
+    RIGHTS_STATE_LABELS = {
+      DRAFT: "Draft",
+      INVALID: "Splits need attention",
+      VALIDATED: "Splits validated",
+      AGREEMENT_READY: "Ready for confirmation",
+      CONFIRMATION_REQUESTED: "Waiting for confirmations",
+      ACCESSED: "Contributors reviewing",
+      REVIEWED: "Contributors reviewing",
+      CONFIRMED: "All contributors confirmed",
+      EVIDENCE_RECORDED: "Confirmation evidence recorded",
+      RIGHTS_RECORDED: "Rights record saved",
+      FINALIZED: "Complete",
+      CHANGE_REQUESTED: "Change requested",
+      EXPIRED: "Confirmation links expired",
+      REVOKED: "Confirmation links revoked",
+      CANCELLED: "Cancelled"
+    };
+    RSEE_EVENT_LABELS = {
+      RSEE_PROJECT_CREATED: "Project created",
+      RSEE_SPLIT_VALIDATED: "Ownership validated",
+      RSEE_CONFIRMATION_REQUESTED: "Confirmation request created",
+      RSEE_QR_GENERATED: "QR generated",
+      RSEE_CONFIRMATION_ACCESSED: "Contributor accessed confirmation",
+      RSEE_CONFIRMATION_REVIEWED: "Contributor reviewed split",
+      RSEE_CONFIRMATION_COMPLETED: "Contributor confirmed",
+      RSEE_EVIDENCE_RECORDED: "Evidence recorded",
+      RSEE_RIGHTS_RECORDED: "Rights recorded",
+      RSEE_RIGHTS_FINALIZED: "Rights record completed",
+      RSEE_CHANGE_REQUESTED: "Change requested",
+      RSEE_TOKEN_REVOKED: "Confirmation link revoked",
+      RSEE_TOKEN_EXPIRED: "Confirmation link expired",
+      AUTH_CONFIRM_VIEW: "Contributor accessed confirmation",
+      AUTH_CONFIRM_SUBMIT: "Contributor submitted confirmation",
+      AUTH_QR_GENERATED: "QR generated",
+      AUTH_QR_ACCESSED: "Contributor accessed confirmation via QR",
+      AUTH_QR_REVOKED: "Confirmation link revoked",
+      AUTH_QR_REGENERATED: "QR regenerated",
+      AUTH_CONFIRM_REVOKE: "Confirmation link revoked"
+    };
+  }
+});
+
+// server/rights-state-engine.ts
+import { sql as sql10 } from "drizzle-orm";
+function asRecord2(data) {
+  return data && typeof data === "object" ? data : {};
+}
+function rightsLedgerAlreadySynced(metadata) {
+  const sync = asRecord2(asRecord2(metadata).rightsLedgerSync);
+  return sync.ownershipVersion != null || sync.licenseId != null;
+}
+function evaluateEvent(snapshot, event, opts = {}) {
+  const from = deriveRightsState(snapshot);
+  if (opts.requireValidSplits ?? event === "REQUEST_CONFIRMATIONS") {
+    if (!snapshot.splitsValid) {
+      return {
+        ok: false,
+        from,
+        event,
+        error: snapshot.validation.errors[0]?.message ?? "Splits must total 100% before this step.",
+        code: snapshot.validation.errors[0]?.code ?? "SPLIT_TOTAL_INVALID",
+        validation: snapshot.validation
+      };
+    }
+  }
+  if (!canTransition2(from, event)) {
+    return {
+      ok: false,
+      from,
+      event,
+      error: `This project cannot perform that action in its current status (${RIGHTS_STATE_LABELS[from]}).`,
+      code: "INVALID_TRANSITION"
+    };
+  }
+  return { ok: true, from, event, validation: snapshot.validation };
+}
+async function recordWorkflowEvent(input) {
+  const ip = input.req ? input.req.ip || input.req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() || input.req.socket?.remoteAddress : void 0;
+  await auditLog({
+    userId: input.actorType === "operator" ? input.actorId ?? void 0 : void 0,
+    action: input.action,
+    resourceType: "project",
+    resourceId: input.projectId,
+    beforeState: input.previousState ? { state: input.previousState } : void 0,
+    afterState: {
+      newState: input.newState ?? null,
+      actorType: input.actorType ?? "system",
+      actorId: input.actorType === "contributor" ? void 0 : input.actorId ?? null,
+      entityType: input.entityType ?? "project",
+      entityId: input.entityId ?? null,
+      accessMethod: input.accessMethod,
+      ...input.metadata ?? {}
+    },
+    ipAddress: typeof ip === "string" ? ip : void 0,
+    userAgent: input.req?.headers["user-agent"]?.toString(),
+    requestId: input.req?.requestId
+  });
+}
+function mapConfirmationRow(row) {
+  return {
+    status: String(row.status ?? "not_sent"),
+    revokedAt: row.revoked_at ?? null,
+    expiresAt: row.expires_at ?? null,
+    firstAccessedAt: row.first_accessed_at ?? null,
+    confirmedAt: row.confirmed_at ?? null,
+    ipAddress: row.ip_address ?? null
+  };
+}
+async function loadWorkflowSnapshot(contractId) {
+  const contract = await storage.getContract(contractId);
+  if (!contract) return null;
+  const collabs = await storage.getContractCollaborators(contractId);
+  const validation = validateSplits(
+    collabs.map((c) => ({
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      role: c.role,
+      ownershipPercentage: c.ownershipPercentage
+    }))
+  );
+  const confRows = await db.execute(sql10`
+    SELECT id, collaborator_id, status, revoked_at, expires_at, first_accessed_at,
+           confirmed_at, ip_address, access_method
+    FROM split_confirmations
+    WHERE contract_id = ${contractId}
+  `);
+  const confirmationRows = confRows.rows;
+  return {
+    contractStatus: contract.status ?? "draft",
+    organizationId: contract.organizationId ?? null,
+    createdBy: contract.createdBy,
+    hasCollaborators: collabs.length > 0,
+    splitsValid: validation.valid,
+    validation,
+    confirmations: confirmationRows.map(mapConfirmationRow),
+    rightsLedgerSynced: rightsLedgerAlreadySynced(contract.metadata),
+    title: contract.title,
+    collaborators: collabs.map((c) => ({
+      id: c.id,
+      name: c.name,
+      email: c.email ?? null,
+      role: c.role,
+      ownershipPercentage: c.ownershipPercentage
+    })),
+    confirmationRows,
+    metadata: asRecord2(contract.metadata)
+  };
+}
+async function getProjectWorkflow(contractId) {
+  const snap = await loadWorkflowSnapshot(contractId);
+  if (!snap) return null;
+  const state = deriveRightsState(snap);
+  const active = snap.confirmationRows.filter((r) => r.status !== "revoked" && !r.revoked_at);
+  const confirmed = active.filter((r) => r.status === "confirmed");
+  const confirmedPercent = active.length > 0 ? Math.round(confirmed.length / active.length * 100) : 0;
+  const contributorStatus = snap.collaborators.map((c) => {
+    const conf = snap.confirmationRows.find((r) => r.collaborator_id === c.id);
+    const status = String(conf?.status ?? "not_requested");
+    return {
+      name: c.name,
+      role: c.role,
+      ownershipPercentage: String(c.ownershipPercentage ?? "0"),
+      status,
+      confirmed: status === "confirmed",
+      awaiting: status !== "confirmed" && status !== "revoked"
+    };
+  });
+  const timelineRows = await db.execute(sql10`
+    SELECT action, before_state, after_state, created_at
+    FROM audit_log
+    WHERE resource_id = ${contractId}
+      AND (
+        action LIKE 'RSEE_%'
+        OR action LIKE 'AUTH_CONFIRM%'
+        OR action LIKE 'AUTH_QR_%'
+      )
+    ORDER BY created_at ASC
+    LIMIT 80
+  `);
+  const timeline = timelineRows.rows.map((row) => {
+    const at = row.created_at ? new Date(String(row.created_at)) : null;
+    return {
+      at: at?.toISOString() ?? null,
+      label: timelineLabelForAction(String(row.action ?? "")),
+      eventType: row.action
+    };
+  });
+  const sync = asRecord2(snap.metadata.rightsLedgerSync);
+  return {
+    state,
+    label: RIGHTS_STATE_LABELS[state],
+    steps: workflowSteps(snap, state),
+    validation: snap.validation,
+    contributors: contributorStatus,
+    confirmedPercent,
+    rightsLedger: {
+      synced: snap.rightsLedgerSynced,
+      assetId: sync.assetId ?? null,
+      ownershipVersion: sync.ownershipVersion ?? null
+    },
+    timeline,
+    disclaimer: LEGAL_DISCLAIMER
+  };
+}
+async function completeConfirmedProject(params) {
+  const snap = await loadWorkflowSnapshot(params.contractId);
+  if (!snap) return { finalized: false };
+  const from = deriveRightsState(snap);
+  if (from !== "CONFIRMED" && from !== "EVIDENCE_RECORDED" && from !== "RIGHTS_RECORDED" && from !== "FINALIZED") {
+    return { finalized: false };
+  }
+  await db.execute(sql10`
+    UPDATE contracts SET status = 'signed', updated_at = NOW()
+    WHERE id = ${params.contractId}
+      AND status IS DISTINCT FROM 'cancelled'
+  `);
+  if (from === "CONFIRMED" || from === "EVIDENCE_RECORDED") {
+    await recordWorkflowEvent({
+      action: RSEE_ACTIONS.EVIDENCE_RECORDED,
+      projectId: params.contractId,
+      previousState: from,
+      newState: "EVIDENCE_RECORDED",
+      actorType: params.actorType ?? "system",
+      actorId: params.actorId,
+      accessMethod: params.accessMethod,
+      req: params.req
+    });
+  }
+  if (snap.rightsLedgerSynced) {
+    if (from !== "FINALIZED") {
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.RIGHTS_FINALIZED,
+        projectId: params.contractId,
+        previousState: "RIGHTS_RECORDED",
+        newState: "FINALIZED",
+        actorType: "system",
+        req: params.req
+      });
+    }
+    return { finalized: true };
+  }
+  const evidenceCheck = evaluateEvent({ ...snap, contractStatus: "signed" }, "RECORD_RIGHTS");
+  if (!evidenceCheck.ok && from !== "EVIDENCE_RECORDED" && from !== "CONFIRMED") {
+    return { finalized: false };
+  }
+  const ledger = await syncAgreementToRightsLedger(params.contractId, params.actorId ?? void 0);
+  if (ledger.synced) {
+    await recordWorkflowEvent({
+      action: RSEE_ACTIONS.RIGHTS_RECORDED,
+      projectId: params.contractId,
+      previousState: "EVIDENCE_RECORDED",
+      newState: "RIGHTS_RECORDED",
+      actorType: "system",
+      actorId: params.actorId,
+      metadata: {
+        ownershipVersion: ledger.ownershipVersion ?? null,
+        assetId: ledger.assetId ?? null
+      },
+      req: params.req
+    });
+    await recordWorkflowEvent({
+      action: RSEE_ACTIONS.RIGHTS_FINALIZED,
+      projectId: params.contractId,
+      previousState: "RIGHTS_RECORDED",
+      newState: "FINALIZED",
+      actorType: "system",
+      req: params.req
+    });
+  }
+  return { finalized: ledger.synced, ledger };
+}
+var RSEE_ACTIONS;
+var init_rights_state_engine = __esm({
+  "server/rights-state-engine.ts"() {
+    "use strict";
+    init_db();
+    init_storage();
+    init_security();
+    init_authz_helpers();
+    init_agreement_ledger();
+    init_agreement_catalog();
+    init_split_validation();
+    init_rights_state();
+    RSEE_ACTIONS = {
+      PROJECT_CREATED: "RSEE_PROJECT_CREATED",
+      SPLIT_VALIDATED: "RSEE_SPLIT_VALIDATED",
+      CONFIRMATION_REQUESTED: "RSEE_CONFIRMATION_REQUESTED",
+      QR_GENERATED: "RSEE_QR_GENERATED",
+      CONFIRMATION_ACCESSED: "RSEE_CONFIRMATION_ACCESSED",
+      CONFIRMATION_REVIEWED: "RSEE_CONFIRMATION_REVIEWED",
+      CONFIRMATION_COMPLETED: "RSEE_CONFIRMATION_COMPLETED",
+      EVIDENCE_RECORDED: "RSEE_EVIDENCE_RECORDED",
+      RIGHTS_RECORDED: "RSEE_RIGHTS_RECORDED",
+      RIGHTS_FINALIZED: "RSEE_RIGHTS_FINALIZED",
+      CHANGE_REQUESTED: "RSEE_CHANGE_REQUESTED",
+      TOKEN_REVOKED: "RSEE_TOKEN_REVOKED",
+      TOKEN_EXPIRED: "RSEE_TOKEN_EXPIRED"
+    };
+  }
+});
+
+// server/confirmation-public.ts
+import { sql as sql11 } from "drizzle-orm";
+function getIp(req) {
+  return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
+}
+async function lookupConfirmation(token, contractId) {
+  if (contractId) {
+    return db.execute(sql11`
+      SELECT
+        sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at, sc.confirmed_at,
+        sc.collaborator_id, sc.contract_id,
+        cc.name AS collaborator_name, cc.email AS collaborator_email, cc.role, cc.ownership_percentage,
+        c.title AS contract_title
+      FROM split_confirmations sc
+      JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
+      JOIN contracts c ON c.id = sc.contract_id
+      WHERE sc.token = ${token}
+        AND sc.contract_id = ${contractId}
+      LIMIT 1
+    `);
+  }
+  return db.execute(sql11`
+    SELECT
+      sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at, sc.confirmed_at,
+      sc.collaborator_id, sc.contract_id,
+      cc.name AS collaborator_name, cc.email AS collaborator_email, cc.role, cc.ownership_percentage,
+      c.title AS contract_title
+    FROM split_confirmations sc
+    JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
+    JOIN contracts c ON c.id = sc.contract_id
+    WHERE sc.token = ${token}
+    LIMIT 1
+  `);
+}
+async function recordConfirmationAccess(req, row, method) {
+  await db.execute(sql11`
+    UPDATE split_confirmations SET
+      first_accessed_at = COALESCE(first_accessed_at, NOW()),
+      last_accessed_at = NOW(),
+      access_count = COALESCE(access_count, 0) + 1,
+      access_method = CASE
+        WHEN ${method} = 'qr' THEN 'qr'
+        ELSE COALESCE(access_method, 'link')
+      END,
+      updated_at = NOW()
+    WHERE id = ${row.id}
+  `);
+  if (method === "qr") {
+    await logAuthEvent({
+      action: AUTH_EVENTS.QR_ACCESSED,
+      resourceType: "split_confirmation",
+      resourceId: row.id,
+      afterState: { contractId: row.contract_id, accessMethod: "qr" },
+      req
+    });
+  } else {
+    await logAuthEvent({
+      action: AUTH_EVENTS.CONFIRM_VIEW,
+      resourceType: "split_confirmation",
+      resourceId: row.id,
+      afterState: { contractId: row.contract_id, accessMethod: "link" },
+      req
+    });
+  }
+  const snap = await loadWorkflowSnapshot(row.contract_id);
+  const previous = snap ? deriveRightsState(snap) : "CONFIRMATION_REQUESTED";
+  await recordWorkflowEvent({
+    action: RSEE_ACTIONS.CONFIRMATION_ACCESSED,
+    projectId: row.contract_id,
+    previousState: previous,
+    newState: "ACCESSED",
+    actorType: "contributor",
+    entityType: "split_confirmation",
+    entityId: row.id,
+    accessMethod: method,
+    req
+  });
+  await recordWorkflowEvent({
+    action: RSEE_ACTIONS.CONFIRMATION_REVIEWED,
+    projectId: row.contract_id,
+    previousState: "ACCESSED",
+    newState: "REVIEWED",
+    actorType: "contributor",
+    entityType: "split_confirmation",
+    entityId: row.id,
+    accessMethod: method,
+    req
+  });
+}
+async function handlePublicConfirmGet(req, res, token, contractId) {
+  try {
+    const rows = await lookupConfirmation(token, contractId);
+    if (!rows.rows.length) {
+      res.status(404).json({ error: "Confirmation link not found or invalid." });
+      return;
+    }
+    const row = rows.rows[0];
+    const resolvedContractId = row.contract_id;
+    const gate = evaluateConfirmationToken(row);
+    if (!gate.ok) {
+      res.status(gate.status).json({ error: gate.error, code: gate.code });
+      return;
+    }
+    const method = accessMethodFromRequest(req.query.via);
+    const snapshot = await loadWorkflowSnapshot(resolvedContractId);
+    if (snapshot && deriveRightsState(snapshot) === "CANCELLED") {
+      res.status(410).json({
+        error: "This project is no longer accepting confirmations.",
+        code: "cancelled"
+      });
+      return;
+    }
+    if (row.status === "confirmed") {
+      res.json({
+        alreadyConfirmed: true,
+        confirmedAt: row.confirmed_at,
+        collaboratorName: row.collaborator_name,
+        contractTitle: row.contract_title
+      });
+      return;
+    }
+    const allCollabs = await db.execute(sql11`
+      SELECT name, role, ownership_percentage
+      FROM contract_collaborators
+      WHERE contract_id = ${resolvedContractId}
+      ORDER BY created_at ASC
+    `);
+    let contributorConsentVersion = null;
+    try {
+      const consent = await storage.getLatestLegalDocument("contributor_consent");
+      contributorConsentVersion = consent?.version ?? null;
+    } catch {
+    }
+    await recordConfirmationAccess(req, { id: row.id, contract_id: resolvedContractId }, method);
+    res.json({
+      alreadyConfirmed: false,
+      contractTitle: row.contract_title,
+      collaboratorName: row.collaborator_name,
+      collaboratorEmail: row.collaborator_email,
+      collaboratorRole: row.role,
+      ownershipPercentage: Number(row.ownership_percentage),
+      expiresAt: row.expires_at,
+      contributorConsentVersion,
+      accessMethod: method,
+      allCollaborators: allCollabs.rows.map((c) => ({
+        name: c.name,
+        role: c.role,
+        ownershipPercentage: Number(c.ownership_percentage)
+      }))
+    });
+  } catch (err) {
+    console.error("[PUBLIC-CONFIRM-GET]", err.message);
+    res.status(500).json({ error: "Could not load confirmation. Please try again." });
+  }
+}
+async function handlePublicConfirmPost(req, res, token, contractId) {
+  const { action, name, email, note, accessMethod: bodyMethod } = req.body ?? {};
+  if (!["confirm", "request_change"].includes(action)) {
+    res.status(400).json({ error: "action must be 'confirm' or 'request_change'" });
+    return;
+  }
+  try {
+    const rows = await lookupConfirmation(token, contractId);
+    if (!rows.rows.length) {
+      res.status(404).json({ error: "Confirmation link not found." });
+      return;
+    }
+    const row = rows.rows[0];
+    const resolvedContractId = row.contract_id;
+    const gate = evaluateConfirmationToken(row, { forSubmit: true });
+    if (!gate.ok) {
+      res.status(gate.status).json({ error: gate.error, code: gate.code });
+      return;
+    }
+    if (action === "confirm" && !String(name ?? "").trim()) {
+      res.status(400).json({ error: "Name is required to confirm." });
+      return;
+    }
+    if (row.status === "confirmed" && action === "confirm") {
+      res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
+      return;
+    }
+    const snapshot = await loadWorkflowSnapshot(resolvedContractId);
+    if (snapshot) {
+      const projectState = deriveRightsState(snapshot);
+      if (projectState === "CANCELLED") {
+        res.status(410).json({
+          error: "This project is no longer accepting confirmations.",
+          code: "cancelled"
+        });
+        return;
+      }
+      const event = action === "confirm" ? "SUBMIT_CONFIRMATION" : "REQUEST_CHANGE";
+      const allowed = evaluateEvent(snapshot, event);
+      if (!allowed.ok) {
+        res.status(409).json({ error: allowed.error, code: allowed.code });
+        return;
+      }
+    }
+    if (row.consumed_at && action === "request_change") {
+      res.status(410).json({
+        error: "This confirmation was already completed and cannot be changed via this link.",
+        code: "consumed"
+      });
+      return;
+    }
+    const newStatus = action === "confirm" ? "confirmed" : "change_requested";
+    const ip = getIp(req);
+    const ua = req.headers["user-agent"] ?? null;
+    const method = accessMethodFromRequest(req.query.via, bodyMethod);
+    let consentVersions = null;
+    try {
+      const consent = await storage.getLatestLegalDocument("contributor_consent");
+      if (consent?.version) {
+        consentVersions = { contributor_consent: consent.version };
+      }
+    } catch {
+    }
+    const consentJson = consentVersions ? JSON.stringify(consentVersions) : null;
+    const consumedAt = action === "confirm" ? /* @__PURE__ */ new Date() : null;
+    const updated = await db.execute(sql11`
+      UPDATE split_confirmations SET
+        status            = ${newStatus},
+        confirmed_name    = ${name ?? null},
+        confirmed_email   = ${email ?? null},
+        confirmation_note = ${note ?? null},
+        ip_address        = ${ip},
+        user_agent        = ${ua},
+        access_method     = CASE
+          WHEN ${method} = 'qr' THEN 'qr'
+          ELSE COALESCE(access_method, 'link')
+        END,
+        confirmed_at      = NOW(),
+        consumed_at       = COALESCE(${consumedAt}, consumed_at),
+        consent_versions  = COALESCE(${consentJson}::jsonb, consent_versions),
+        updated_at        = NOW()
+      WHERE id = ${row.id}
+        AND revoked_at IS NULL
+        AND status IS DISTINCT FROM 'confirmed'
+      RETURNING id
+    `);
+    if (!updated.rows.length) {
+      const again = await lookupConfirmation(token, contractId);
+      const latest = again.rows[0];
+      if (latest?.status === "confirmed" && action === "confirm") {
+        res.json({ success: true, alreadyConfirmed: true, message: "Already confirmed." });
+        return;
+      }
+      res.status(409).json({ error: "This confirmation can no longer be updated.", code: "conflict" });
+      return;
+    }
+    if (action === "confirm") {
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CONFIRMATION_COMPLETED,
+        projectId: resolvedContractId,
+        previousState: snapshot ? deriveRightsState(snapshot) : "REVIEWED",
+        newState: "CONFIRMED",
+        actorType: "contributor",
+        entityType: "split_confirmation",
+        entityId: row.id,
+        accessMethod: method,
+        req
+      });
+      const pendingRows = await db.execute(sql11`
+        SELECT COUNT(*) AS cnt
+        FROM split_confirmations
+        WHERE contract_id = ${resolvedContractId}
+          AND status != 'confirmed'
+          AND (revoked_at IS NULL)
+      `);
+      const remaining = Number(pendingRows.rows[0]?.cnt ?? 1);
+      if (remaining === 0) {
+        await completeConfirmedProject({
+          contractId: resolvedContractId,
+          actorType: "contributor",
+          accessMethod: method,
+          req
+        });
+      }
+    } else {
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CHANGE_REQUESTED,
+        projectId: resolvedContractId,
+        previousState: snapshot ? deriveRightsState(snapshot) : "REVIEWED",
+        newState: "CHANGE_REQUESTED",
+        actorType: "contributor",
+        entityType: "split_confirmation",
+        entityId: row.id,
+        accessMethod: method,
+        req
+      });
+    }
+    await logAuthEvent({
+      action: AUTH_EVENTS.CONFIRM_SUBMIT,
+      resourceType: "split_confirmation",
+      resourceId: row.id,
+      afterState: {
+        contractId: resolvedContractId,
+        action: newStatus,
+        accessMethod: method,
+        hasConsentVersions: !!consentVersions
+      },
+      req
+    });
+    res.json({
+      success: true,
+      action: newStatus,
+      message: action === "confirm" ? `Thank you${name ? ` ${name}` : ""}! Your confirmation for "${row.contract_title}" has been recorded.` : "Your change request has been recorded. The operator will follow up."
+    });
+  } catch (err) {
+    console.error("[PUBLIC-CONFIRM-POST]", err.message);
+    res.status(500).json({ error: "Could not submit confirmation. Please try again." });
+  }
+}
+var init_confirmation_public = __esm({
+  "server/confirmation-public.ts"() {
+    "use strict";
+    init_db();
+    init_storage();
+    init_confirmation_token_policy();
+    init_auth_events();
+    init_confirmation_url();
+    init_rights_state_engine();
+  }
+});
+
+// server/confirmation-routes.ts
+import { sql as sql12 } from "drizzle-orm";
+function generateToken() {
+  return generateConfirmationToken();
+}
+function expiresAt72h() {
+  return confirmationExpiresAt();
+}
+function requestBaseUrl(req) {
+  return process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
+}
+function registerConfirmationRoutes(app) {
+  const confirmPublicLimiter = createPgRateLimiter(40, 6e4, "confirm-public");
+  app.use("/api/confirm", confirmPublicLimiter);
+  void ensureContributorTokenSchema().catch(
+    (err) => console.warn("[confirm] schema ensure skipped:", err)
+  );
+  app.post(
+    "/api/contracts/:id/generate-confirmations",
+    ...requireActivePermission("agreement.send"),
+    async (req, res) => {
+      const contractId = req.params.id;
+      const userId = req.user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "REQUEST_CONFIRMATIONS");
+          if (!allowed.ok) {
+            res.status(400).json({
+              error: allowed.error,
+              code: allowed.code,
+              validation: allowed.validation
+            });
+            return;
+          }
+        }
+        const collabRows = await db.execute(sql12`
+          SELECT id, name, email, role, ownership_percentage
+          FROM contract_collaborators
+          WHERE contract_id = ${contractId}
+          ORDER BY created_at ASC
+        `);
+        const collaborators = collabRows.rows;
+        if (!collaborators.length) {
+          res.status(400).json({ error: "No collaborators on this contract" });
+          return;
+        }
+        const results = [];
+        const expires = expiresAt72h();
+        for (const collab of collaborators) {
+          const existing = await db.execute(sql12`
+            SELECT id, token, status FROM split_confirmations
+            WHERE contract_id = ${contractId}
+              AND collaborator_id = ${collab.id}
+            LIMIT 1
+          `);
+          if (existing.rows.length > 0) {
+            const row = existing.rows[0];
+            await db.execute(sql12`
+              UPDATE split_confirmations
+              SET expires_at = ${expires},
+                  revoked_at = NULL,
+                  consumed_at = NULL,
+                  status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
+                  updated_at = NOW()
+              WHERE id = ${row.id}
+            `);
+            results.push({ collaboratorId: collab.id, name: collab.name, token: row.token, status: row.status, isNew: false });
+          } else {
+            const token = generateToken();
+            await db.execute(sql12`
+              INSERT INTO split_confirmations
+                (contract_id, collaborator_id, token, status, expires_at)
+              VALUES
+                (${contractId}, ${collab.id}, ${token}, 'not_sent', ${expires})
+            `);
+            results.push({ collaboratorId: collab.id, name: collab.name, token, status: "not_sent", isNew: true });
+          }
+        }
+        const baseUrl = requestBaseUrl(req);
+        const operator = await storage.getUser(userId).catch(() => void 0);
+        const operatorName = operator ? `${operator.firstName ?? ""} ${operator.lastName ?? ""}`.trim() : void 0;
+        const confirmations2 = await Promise.all(
+          results.map(async (r) => {
+            const link = opaqueConfirmUrl(baseUrl, r.token);
+            const collab = collaborators.find((c) => c.id === r.collaboratorId);
+            let emailSent = false;
+            if (collab?.email) {
+              const template = confirmationLinkEmail({
+                contributorName: r.name,
+                songTitle: contract.title,
+                operatorName,
+                confirmUrl: link
+              });
+              const delivery = await sendEmail({ to: collab.email, ...template });
+              emailSent = delivery.delivered;
+              if (delivery.delivered) {
+                await db.execute(sql12`
+                  UPDATE split_confirmations
+                  SET status = 'sent', sent_at = NOW(), updated_at = NOW()
+                  WHERE contract_id = ${contractId} AND collaborator_id = ${r.collaboratorId}
+                    AND status IN ('not_sent', 'sent')
+                `).catch(() => {
+                });
+              }
+            }
+            return {
+              ...r,
+              status: emailSent ? "sent" : r.status,
+              emailSent,
+              link,
+              whatsapp: `https://wa.me/?text=${encodeURIComponent(
+                `Hey ${r.name} \u2014 please review and confirm your split for "${contract.title}" here: ${link}`
+              )}`,
+              sms: `sms:?body=${encodeURIComponent(
+                `Hey ${r.name} \u2014 confirm your split for "${contract.title}": ${link}`
+              )}`
+            };
+          })
+        );
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.CONFIRMATION_REQUESTED,
+          projectId: contractId,
+          previousState: snapshot ? snapshot.contractStatus : "AGREEMENT_READY",
+          newState: "CONFIRMATION_REQUESTED",
+          actorType: "operator",
+          actorId: userId,
+          req
+        });
+        res.json({ contractId, contractTitle: contract.title, confirmations: confirmations2 });
+      } catch (err) {
+        console.error("[GENERATE-CONFIRMATIONS]", err.message);
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+  app.get(
+    "/api/contracts/:id/confirmations",
+    ...requireActivePermission("agreement.read"),
+    async (req, res) => {
+      const contractId = req.params.id;
+      const userId = req.user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const contract = { title: owned.title, status: owned.status };
+        const rows = await db.execute(sql12`
+          SELECT
+            sc.id,
+            sc.token,
+            sc.status,
+            sc.sent_at,
+            sc.confirmed_at,
+            sc.expires_at,
+            sc.confirmed_name,
+            sc.confirmed_email,
+            sc.confirmation_note,
+            sc.ip_address,
+            sc.revoked_at,
+            sc.qr_generated_at,
+            sc.access_method,
+            sc.access_count,
+            sc.first_accessed_at,
+            sc.last_accessed_at,
+            cc.id   AS collaborator_id,
+            cc.name AS collaborator_name,
+            cc.email AS collaborator_email,
+            cc.role,
+            cc.ownership_percentage
+          FROM split_confirmations sc
+          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
+          WHERE sc.contract_id = ${contractId}
+          ORDER BY cc.created_at ASC
+        `);
+        const baseUrl = requestBaseUrl(req);
+        const confirmations2 = rows.rows.map((r) => {
+          const link = opaqueConfirmUrl(baseUrl, r.token);
+          return {
+            id: r.id,
+            token: r.token,
+            status: r.status,
+            sentAt: r.sent_at,
+            confirmedAt: r.confirmed_at,
+            expiresAt: r.expires_at,
+            revokedAt: r.revoked_at,
+            qrGeneratedAt: r.qr_generated_at,
+            accessMethod: r.access_method,
+            accessCount: Number(r.access_count ?? 0),
+            firstAccessedAt: r.first_accessed_at,
+            lastAccessedAt: r.last_accessed_at,
+            confirmedName: r.confirmed_name,
+            confirmedEmail: r.confirmed_email,
+            confirmationNote: r.confirmation_note,
+            collaborator: {
+              id: r.collaborator_id,
+              name: r.collaborator_name,
+              email: r.collaborator_email,
+              role: r.role,
+              ownershipPercentage: Number(r.ownership_percentage)
+            },
+            link,
+            whatsapp: `https://wa.me/?text=${encodeURIComponent(
+              `Hey ${r.collaborator_name} \u2014 confirm your split for "${contract.title}": ${link}`
+            )}`,
+            sms: `sms:?body=${encodeURIComponent(
+              `Hey ${r.collaborator_name} \u2014 confirm your split for "${contract.title}": ${link}`
+            )}`
+          };
+        });
+        const total = confirmations2.length;
+        const confirmed = confirmations2.filter((c) => c.status === "confirmed").length;
+        const pending = confirmations2.filter((c) => c.status === "sent").length;
+        const notSent = confirmations2.filter((c) => c.status === "not_sent").length;
+        const changed = confirmations2.filter((c) => c.status === "change_requested").length;
+        const allConfirmed = confirmed === total && total > 0;
+        res.json({
+          contractId,
+          contractTitle: contract.title,
+          contractStatus: contract.status,
+          allConfirmed,
+          summary: { total, confirmed, pending, notSent, changeRequested: changed },
+          confirmations: confirmations2
+        });
+      } catch (err) {
+        console.error("[GET-CONFIRMATIONS]", err.message);
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+  app.get(
+    "/api/contracts/:id/workflow",
+    ...requireActivePermission("project.read"),
+    async (req, res) => {
+      try {
+        const owned = await requireOwnedContract(req, res, req.params.id);
+        if (!owned) return;
+        const workflow = await getProjectWorkflow(req.params.id);
+        if (!workflow) {
+          res.status(404).json({ error: "Project not found" });
+          return;
+        }
+        res.json(workflow);
+      } catch (err) {
+        console.error("[GET-WORKFLOW]", err.message);
+        res.status(500).json({ error: "Could not load workflow status." });
+      }
+    }
+  );
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/mark-sent",
+    ...requireActivePermission("agreement.send"),
+    async (req, res) => {
+      const { id: contractId, confirmId } = req.params;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const result = await db.execute(sql12`
+          UPDATE split_confirmations
+          SET status = 'sent', sent_at = NOW(), updated_at = NOW()
+          WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
+            AND status IN ('not_sent', 'sent')
+          RETURNING id
+        `);
+        if (!result.rows.length) {
+          res.status(404).json({ error: "Confirmation not found for this contract" });
+          return;
+        }
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/revoke",
+    ...requireActivePermission("agreement.send"),
+    async (req, res) => {
+      const { id: contractId, confirmId } = req.params;
+      const userId = req.user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "REVOKE_TOKEN", { requireValidSplits: false });
+          if (!allowed.ok) {
+            res.status(409).json({ error: allowed.error, code: allowed.code });
+            return;
+          }
+        }
+        const result = await db.execute(sql12`
+          UPDATE split_confirmations
+          SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+          WHERE id = ${confirmId}
+            AND contract_id = ${contractId}
+            AND status != 'confirmed'
+          RETURNING id
+        `);
+        if (!result.rows.length) {
+          res.status(404).json({
+            error: "Confirmation not found or already confirmed (cannot revoke confirmed)"
+          });
+          return;
+        }
+        await logAuthEvent({
+          action: AUTH_EVENTS.CONFIRM_REVOKE,
+          userId,
+          resourceType: "split_confirmation",
+          resourceId: confirmId,
+          afterState: { contractId },
+          req
+        });
+        await logAuthEvent({
+          action: AUTH_EVENTS.QR_REVOKED,
+          userId,
+          resourceType: "split_confirmation",
+          resourceId: confirmId,
+          afterState: { contractId },
+          req
+        });
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.TOKEN_REVOKED,
+          projectId: contractId,
+          previousState: snapshot ? "CONFIRMATION_REQUESTED" : null,
+          newState: "REVOKED",
+          actorType: "operator",
+          actorId: userId,
+          entityType: "split_confirmation",
+          entityId: confirmId,
+          req
+        });
+        res.json({ revoked: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+  app.post(
+    "/api/contracts/:id/confirmations/:confirmId/qr",
+    ...requireActivePermission("agreement.send"),
+    async (req, res) => {
+      const { id: contractId, confirmId } = req.params;
+      const userId = req.user?.claims?.sub;
+      const regenerate = Boolean((req.body ?? {}).regenerate);
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "GENERATE_QR", { requireValidSplits: false });
+          if (!allowed.ok) {
+            res.status(409).json({ error: allowed.error, code: allowed.code });
+            return;
+          }
+        }
+        const rows = await db.execute(sql12`
+          SELECT sc.id, sc.token, sc.status, sc.expires_at, sc.revoked_at,
+                 cc.name AS collaborator_name
+          FROM split_confirmations sc
+          JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
+          WHERE sc.id = ${confirmId} AND sc.contract_id = ${contractId}
+          LIMIT 1
+        `);
+        if (!rows.rows.length) {
+          res.status(404).json({ error: "Confirmation request not found for this project." });
+          return;
+        }
+        const row = rows.rows[0];
+        if (row.status === "confirmed") {
+          res.status(409).json({ error: "This confirmation is already complete. QR cannot be regenerated." });
+          return;
+        }
+        const expired = row.expires_at && new Date(row.expires_at) < /* @__PURE__ */ new Date();
+        const rotate = regenerate || Boolean(row.revoked_at) || row.status === "revoked" || expired;
+        const expires = expiresAt72h();
+        let token = row.token;
+        if (rotate) {
+          token = generateToken();
+          await db.execute(sql12`
+            UPDATE split_confirmations SET
+              token = ${token},
+              status = CASE WHEN status = 'revoked' THEN 'not_sent' ELSE status END,
+              revoked_at = NULL,
+              consumed_at = NULL,
+              expires_at = ${expires},
+              qr_generated_at = NOW(),
+              updated_at = NOW()
+            WHERE id = ${row.id} AND contract_id = ${contractId}
+          `);
+          await logAuthEvent({
+            action: AUTH_EVENTS.QR_REGENERATED,
+            userId,
+            resourceType: "split_confirmation",
+            resourceId: confirmId,
+            afterState: { contractId },
+            req
+          });
+        } else {
+          await db.execute(sql12`
+            UPDATE split_confirmations SET
+              qr_generated_at = NOW(),
+              expires_at = COALESCE(expires_at, ${expires}),
+              updated_at = NOW()
+            WHERE id = ${row.id} AND contract_id = ${contractId}
+          `);
+          await logAuthEvent({
+            action: AUTH_EVENTS.QR_GENERATED,
+            userId,
+            resourceType: "split_confirmation",
+            resourceId: confirmId,
+            afterState: { contractId },
+            req
+          });
+        }
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.QR_GENERATED,
+          projectId: contractId,
+          previousState: snapshot ? "CONFIRMATION_REQUESTED" : null,
+          newState: "CONFIRMATION_REQUESTED",
+          actorType: "operator",
+          actorId: userId,
+          entityType: "split_confirmation",
+          entityId: confirmId,
+          accessMethod: "qr",
+          metadata: { rotated: rotate },
+          req
+        });
+        res.json({
+          id: confirmId,
+          status: rotate && row.status === "revoked" ? "not_sent" : row.status,
+          expiresAt: expires,
+          qrGeneratedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          rotated: rotate,
+          link: opaqueConfirmUrl(requestBaseUrl(req), token, true),
+          contributorName: row.collaborator_name,
+          projectName: owned.title
+        });
+      } catch (err) {
+        console.error("[QR-GENERATE]", err.message);
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+  app.get("/api/confirm/:token", async (req, res) => {
+    await handlePublicConfirmGet(req, res, req.params.token);
+  });
+  app.post("/api/confirm/:token", async (req, res) => {
+    await handlePublicConfirmPost(req, res, req.params.token);
+  });
+  app.get(
+    "/api/confirm/:contractId/:token",
+    async (req, res) => {
+      await handlePublicConfirmGet(req, res, req.params.token, req.params.contractId);
+    }
+  );
+  app.post(
+    "/api/confirm/:contractId/:token",
+    async (req, res) => {
+      await handlePublicConfirmPost(req, res, req.params.token, req.params.contractId);
+    }
+  );
+}
+var init_confirmation_routes = __esm({
+  "server/confirmation-routes.ts"() {
+    "use strict";
+    init_db();
+    init_email_service();
+    init_storage();
+    init_security();
+    init_authz_helpers();
+    init_rbac_middleware();
+    init_confirmation_token_policy();
+    init_auth_events();
+    init_confirmation_public();
+    init_confirmation_url();
+    init_rights_state_engine();
   }
 });
 
@@ -8797,14 +10018,13 @@ var init_voice_routes = __esm({
 });
 
 // server/service-routes.ts
-import crypto5 from "crypto";
 import { z as z5 } from "zod";
-import { sql as sql8 } from "drizzle-orm";
+import { sql as sql13 } from "drizzle-orm";
 function generateToken2() {
-  return crypto5.randomBytes(32).toString("hex");
+  return generateConfirmationToken();
 }
 function expiresAt72h2() {
-  return new Date(Date.now() + 72 * 60 * 60 * 1e3);
+  return confirmationExpiresAt();
 }
 function projectStatusFromContract(status) {
   switch (status) {
@@ -9063,7 +10283,7 @@ function registerServiceRoutes(app) {
       const collabs = await storage.getContractCollaborators(req.params.id);
       const enriched = await Promise.all(
         collabs.map(async (c) => {
-          const confRows = await db.execute(sql8`
+          const confRows = await db.execute(sql13`
             SELECT token, status, confirmed_at, expires_at
             FROM split_confirmations
             WHERE contract_id = ${req.params.id} AND collaborator_id = ${c.id}
@@ -9194,18 +10414,40 @@ function registerServiceRoutes(app) {
         res.status(400).json({ error: "Add at least one contributor before sending confirmation links." });
         return;
       }
-      const totalPct = collabs.reduce((sum, c) => sum + Number(c.ownershipPercentage ?? 0), 0);
-      if (Math.abs(totalPct - 100) > 0.01) {
+      const validation = validateSplits(
+        collabs.map((c) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          role: c.role,
+          ownershipPercentage: c.ownershipPercentage
+        }))
+      );
+      if (!validation.valid) {
         res.status(400).json({
-          error: `Ownership must total 100% before sending links (currently ${totalPct.toFixed(1)}%).`
+          error: validation.errors[0]?.message ?? "Splits must total 100% before sending links.",
+          code: validation.errors[0]?.code ?? "SPLIT_TOTAL_INVALID",
+          validation
         });
         return;
+      }
+      const snapshot = await loadWorkflowSnapshot(contractId);
+      if (snapshot) {
+        const allowed = evaluateEvent(snapshot, "REQUEST_CONFIRMATIONS");
+        if (!allowed.ok) {
+          res.status(400).json({
+            error: allowed.error,
+            code: allowed.code,
+            validation: allowed.validation
+          });
+          return;
+        }
       }
       const expires = expiresAt72h2();
       const baseUrl = process.env.APP_URL ?? `${req.protocol}://${req.get("host")}`;
       const links = [];
       for (const collab of collabs) {
-        const existing = await db.execute(sql8`
+        const existing = await db.execute(sql13`
           SELECT id, token, status FROM split_confirmations
           WHERE contract_id = ${contractId} AND collaborator_id = ${collab.id}
           LIMIT 1
@@ -9214,12 +10456,12 @@ function registerServiceRoutes(app) {
         if (existing.rows.length > 0) {
           const row = existing.rows[0];
           token = row.token;
-          await db.execute(sql8`
+          await db.execute(sql13`
             UPDATE split_confirmations SET expires_at = ${expires}, updated_at = NOW() WHERE id = ${row.id}
           `);
         } else {
           token = generateToken2();
-          await db.execute(sql8`
+          await db.execute(sql13`
             INSERT INTO split_confirmations (contract_id, collaborator_id, token, status, expires_at)
             VALUES (${contractId}, ${collab.id}, ${token}, 'not_sent', ${expires})
           `);
@@ -9228,14 +10470,52 @@ function registerServiceRoutes(app) {
           collaboratorId: collab.id,
           name: collab.name,
           email: collab.email,
-          link: `${baseUrl}/confirm/${contractId}/${token}`
+          link: opaqueConfirmUrl(baseUrl, token),
+          confirmUrl: opaqueConfirmUrl(baseUrl, token),
+          id: collab.id
         });
       }
       await storage.updateContract(contractId, { status: "pending" });
-      res.json({ success: true, confirmations: links });
+      await recordWorkflowEvent({
+        action: RSEE_ACTIONS.CONFIRMATION_REQUESTED,
+        projectId: contractId,
+        previousState: snapshot ? "AGREEMENT_READY" : "AGREEMENT_READY",
+        newState: "CONFIRMATION_REQUESTED",
+        actorType: "operator",
+        actorId: userId,
+        req
+      });
+      res.json({
+        success: true,
+        confirmations: links,
+        contributors: links.map((l) => ({
+          id: l.id,
+          name: l.name,
+          email: l.email,
+          confirmUrl: l.confirmUrl
+        }))
+      });
     } catch (error) {
       console.error("[SEND CONFIRMATIONS]", error);
       res.status(500).json({ error: "Failed to generate confirmation links" });
+    }
+  });
+  app.get("/api/projects/:id/workflow", ...requireActivePermission("project.read"), async (req, res) => {
+    try {
+      const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
+      if ("error" in result) {
+        res.status(result.status).json({ message: result.error });
+        return;
+      }
+      const workflow = await getProjectWorkflow(req.params.id);
+      if (!workflow) {
+        res.status(404).json({ message: "Project not found" });
+        return;
+      }
+      res.json(workflow);
+    } catch (error) {
+      console.error("[GET-PROJECT-WORKFLOW]", error);
+      res.status(500).json({ message: "Failed to load workflow status" });
     }
   });
   app.get("/api/health", (_req, res) => {
@@ -9255,6 +10535,9 @@ var init_service_routes = __esm({
     init_rbac_middleware();
     init_storage();
     init_db();
+    init_confirmation_url();
+    init_rights_state_engine();
+    init_split_validation();
     contributorSchema = z5.object({
       name: z5.string().min(1).max(200),
       email: z5.string().email().optional().or(z5.literal("")),
@@ -9322,10 +10605,10 @@ var init_mfa_policy = __esm({
 
 // server/organization-routes.ts
 import { z as z6 } from "zod";
-import crypto6 from "crypto";
+import crypto5 from "crypto";
 async function generateUniqueSlOrgId2() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto6.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto5.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slOrgId = `SL-ORG-${shortId}`;
     const existing = await storage.getOrganizationBySlOrgId(slOrgId);
     if (!existing) return slOrgId;
@@ -9828,10 +11111,10 @@ var init_message_routes = __esm({
 
 // server/stripe-connect.ts
 import Stripe from "stripe";
-import { sql as sql9 } from "drizzle-orm";
+import { sql as sql14 } from "drizzle-orm";
 async function createConnectAccount(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql9`
+  const rows = await db.execute(sql14`
     SELECT id, email, first_name, last_name,
            stripe_connect_account_id,
            stripe_connect_onboarded
@@ -9870,7 +11153,7 @@ async function createConnectAccount(req, res) {
       metadata: { splitsheet_user_id: userId }
     });
     accountId = account.id;
-    await db.execute(sql9`
+    await db.execute(sql14`
       UPDATE users
       SET stripe_connect_account_id = ${accountId},
           stripe_connect_onboarded  = FALSE
@@ -9892,7 +11175,7 @@ async function createConnectAccount(req, res) {
 }
 async function getConnectStatus(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql9`
+  const rows = await db.execute(sql14`
     SELECT stripe_connect_account_id, stripe_connect_onboarded,
            stripe_connect_charges_enabled, stripe_connect_payouts_enabled
     FROM users WHERE id = ${userId} LIMIT 1
@@ -9906,7 +11189,7 @@ async function getConnectStatus(req, res) {
   const onboarded = account.details_submitted;
   const chargesEnabled = account.charges_enabled;
   const payoutsEnabled = account.payouts_enabled;
-  await db.execute(sql9`
+  await db.execute(sql14`
     UPDATE users SET
       stripe_connect_onboarded        = ${onboarded},
       stripe_connect_charges_enabled  = ${chargesEnabled},
@@ -9925,7 +11208,7 @@ async function getConnectStatus(req, res) {
 }
 async function getConnectDashboardLink(req, res) {
   const userId = req.user?.claims?.sub;
-  const rows = await db.execute(sql9`
+  const rows = await db.execute(sql14`
     SELECT stripe_connect_account_id, stripe_connect_onboarded
     FROM users WHERE id = ${userId} LIMIT 1
   `);
@@ -9951,7 +11234,7 @@ var init_stripe_connect = __esm({
 
 // server/payment-service.ts
 import Stripe2 from "stripe";
-import { sql as sql10 } from "drizzle-orm";
+import { sql as sql15 } from "drizzle-orm";
 function calculateSplits(totalCents, collaborators) {
   const total = collaborators.reduce((s, c) => s + c.ownershipPct, 0);
   if (Math.abs(total - 100) > 0.01) {
@@ -9977,7 +11260,7 @@ function deductPlatformFee(grossCents, feeBps = PLATFORM_FEE_BPS) {
   return { netCents: grossCents - feeCents, feeCents };
 }
 async function enforceAgreement(contractId) {
-  const rows = await db.execute(sql10`
+  const rows = await db.execute(sql15`
     SELECT status, data
     FROM contracts WHERE id = ${contractId} LIMIT 1
   `);
@@ -9989,7 +11272,7 @@ async function enforceAgreement(contractId) {
       reason: `Contract must be signed before payment. Current status: ${contract.status}`
     };
   }
-  const sigRows = await db.execute(sql10`
+  const sigRows = await db.execute(sql15`
     SELECT cc.id, cc.email, cc.name,
            COUNT(cs.id) AS sig_count
     FROM contract_collaborators cc
@@ -10007,7 +11290,7 @@ async function enforceAgreement(contractId) {
   return { allowed: true };
 }
 async function resolvePayees(contractId) {
-  const rows = await db.execute(sql10`
+  const rows = await db.execute(sql15`
     SELECT
       cc.id, cc.name, cc.email,
       cc.ownership_percentage::float AS ownership_pct,
@@ -10048,7 +11331,7 @@ async function createSplitPaymentIntent(params) {
     throw new Error(`Payment blocked: ${enforcement.reason}`);
   }
   const { netCents, feeCents } = deductPlatformFee(grossCents);
-  const revenueResult = await db.execute(sql10`
+  const revenueResult = await db.execute(sql15`
     INSERT INTO revenue_events
       (asset_id, source, amount, currency, description, metadata)
     VALUES
@@ -10074,7 +11357,7 @@ async function createSplitPaymentIntent(params) {
     },
     { idempotencyKey }
   );
-  await db.execute(sql10`
+  await db.execute(sql15`
     UPDATE revenue_events
     SET metadata = metadata || ${{ stripePaymentIntentId: intent.id }}::jsonb
     WHERE id = ${revenueEventId}
@@ -10115,7 +11398,7 @@ async function executeSplits(params) {
         },
         { idempotencyKey }
       );
-      await db.execute(sql10`
+      await db.execute(sql15`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status, stripe_transfer_id, processed_at)
@@ -10127,7 +11410,7 @@ async function executeSplits(params) {
         FROM revenue_events re WHERE re.id = ${revenueEventId}
         ON CONFLICT DO NOTHING
       `);
-      await db.execute(sql10`
+      await db.execute(sql15`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${split.userId}, ${fromCents(split.cents)}, ${fromCents(split.cents)}, '0', ${currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -10139,7 +11422,7 @@ async function executeSplits(params) {
       log("TRANSFER_SUCCESS", { userId: split.userId, cents: split.cents, transferId: transfer.id });
     } catch (err) {
       log("TRANSFER_FAILED", { userId: split.userId, cents: split.cents, error: err.message });
-      await db.execute(sql10`
+      await db.execute(sql15`
         INSERT INTO payout_records
           (revenue_event_id, user_id, asset_id, ownership_percentage,
            amount, currency, status)
@@ -10186,12 +11469,12 @@ function scheduleRetry(job) {
         },
         { idempotencyKey: `${job.idempotencyKey}-retry-${job.attempt}` }
       );
-      await db.execute(sql10`
+      await db.execute(sql15`
         UPDATE payout_records
         SET status = 'completed', stripe_transfer_id = ${transfer.id}, processed_at = NOW()
         WHERE revenue_event_id = ${job.revenueEventId} AND user_id = ${job.userId}
       `);
-      await db.execute(sql10`
+      await db.execute(sql15`
         INSERT INTO user_balances (user_id, total_earned, total_paid, pending_balance, currency)
         VALUES (${job.userId}, ${fromCents(job.cents)}, ${fromCents(job.cents)}, '0', ${job.currency})
         ON CONFLICT (user_id) DO UPDATE SET
@@ -10235,7 +11518,7 @@ var init_payment_service = __esm({
 import express from "express";
 import Stripe3 from "stripe";
 import { z as z8 } from "zod";
-import { sql as sql11 } from "drizzle-orm";
+import { sql as sql16 } from "drizzle-orm";
 function uid(req) {
   return req.user?.claims?.sub ?? "";
 }
@@ -10322,7 +11605,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql16`
       SELECT
         pr.id                  AS payout_id,
         pr.amount,
@@ -10345,7 +11628,7 @@ function registerPaymentRoutes(app) {
       ORDER BY pr.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `);
-    const initiated = await db.execute(sql11`
+    const initiated = await db.execute(sql16`
       SELECT
         re.id,
         re.source,
@@ -10371,7 +11654,7 @@ function registerPaymentRoutes(app) {
   });
   app.get("/api/payments/balance", ...requireActiveOrg(), async (req, res) => {
     const userId = uid(req);
-    const rows = await db.execute(sql11`
+    const rows = await db.execute(sql16`
       SELECT
         ub.total_earned,
         ub.total_paid,
@@ -10411,7 +11694,7 @@ function registerPaymentRoutes(app) {
     const userId = uid(req);
     try {
       const { revenueEventId, reason } = refundSchema.parse(req.body);
-      const reRows = await db.execute(sql11`
+      const reRows = await db.execute(sql16`
         SELECT re.*, re.metadata->>'stripePaymentIntentId' AS payment_intent_id
         FROM revenue_events re
         WHERE re.id = ${revenueEventId}
@@ -10425,7 +11708,7 @@ function registerPaymentRoutes(app) {
       if (!event.payment_intent_id) {
         return res.status(400).json({ error: "No Stripe PaymentIntent found for this event" });
       }
-      const payoutRows = await db.execute(sql11`
+      const payoutRows = await db.execute(sql16`
         SELECT stripe_transfer_id, user_id, amount
         FROM payout_records
         WHERE revenue_event_id = ${revenueEventId}
@@ -10442,11 +11725,11 @@ function registerPaymentRoutes(app) {
             }
           );
           reversals.push(reversal.id);
-          await db.execute(sql11`
+          await db.execute(sql16`
             UPDATE payout_records SET status = 'refunded'
             WHERE stripe_transfer_id = ${payout.stripe_transfer_id}
           `);
-          await db.execute(sql11`
+          await db.execute(sql16`
             UPDATE user_balances SET
               total_earned = total_earned - ${payout.amount}::decimal,
               total_paid   = total_paid   - ${payout.amount}::decimal,
@@ -10500,12 +11783,12 @@ function registerPaymentRoutes(app) {
         console.error("[WEBHOOK] Signature verification failed:", err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
       }
-      const idempotencyRows = await db.execute(sql11`
+      const idempotencyRows = await db.execute(sql16`
         SELECT 1 FROM payment_events
         WHERE stripe_event_id = ${event.id} LIMIT 1
       `).catch(() => ({ rows: [] }));
       const alreadyProcessed2 = (idempotencyRows.rows?.length ?? 0) > 0;
-      await db.execute(sql11`
+      await db.execute(sql16`
         INSERT INTO payment_events
           (stripe_event_id, event_type, payload, processed)
         VALUES
@@ -10540,7 +11823,7 @@ function registerPaymentRoutes(app) {
           case "transfer.created": {
             const transfer = event.data.object;
             console.log(`[WEBHOOK] Transfer created: ${transfer.id} \u2192 ${transfer.destination}`);
-            await db.execute(sql11`
+            await db.execute(sql16`
               UPDATE payout_records SET status = 'processing'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -10551,7 +11834,7 @@ function registerPaymentRoutes(app) {
           case "transfer.failed": {
             const transfer = event.data.object;
             console.error(`[WEBHOOK] Transfer failed: ${transfer.id}`);
-            await db.execute(sql11`
+            await db.execute(sql16`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${transfer.id}
             `).catch(() => {
@@ -10562,7 +11845,7 @@ function registerPaymentRoutes(app) {
           case "payout.paid": {
             const payout = event.data.object;
             console.log(`[WEBHOOK] Payout paid: ${payout.id}`);
-            await db.execute(sql11`
+            await db.execute(sql16`
               UPDATE payout_records SET status = 'completed', processed_at = NOW()
               WHERE stripe_transfer_id = ${payout.id}
                  OR stripe_transfer_id IN (
@@ -10578,7 +11861,7 @@ function registerPaymentRoutes(app) {
           case "payout.failed": {
             const payout = event.data.object;
             console.error(`[WEBHOOK] Payout failed: ${payout.id} \u2014 ${payout.failure_message}`);
-            await db.execute(sql11`
+            await db.execute(sql16`
               UPDATE payout_records SET status = 'failed'
               WHERE stripe_transfer_id = ${payout.id}
             `).catch(() => {
@@ -10588,7 +11871,7 @@ function registerPaymentRoutes(app) {
           // ── Account updated → sync onboarding status ─────────────────────
           case "account.updated": {
             const account = event.data.object;
-            await db.execute(sql11`
+            await db.execute(sql16`
               UPDATE users SET
                 stripe_connect_onboarded        = ${account.details_submitted},
                 stripe_connect_charges_enabled  = ${account.charges_enabled},
@@ -10602,7 +11885,7 @@ function registerPaymentRoutes(app) {
           default:
             console.log(`[WEBHOOK] Unhandled event: ${event.type}`);
         }
-        await db.execute(sql11`
+        await db.execute(sql16`
           UPDATE payment_events SET processed = TRUE
           WHERE stripe_event_id = ${event.id}
         `).catch(() => {
@@ -10681,7 +11964,7 @@ var init_adminAuth = __esm({
 
 // server/security-routes.ts
 import { z as z9 } from "zod";
-import { sql as sql12 } from "drizzle-orm";
+import { sql as sql17 } from "drizzle-orm";
 async function registerSecurityRoutes(app) {
   app.post(
     "/api/splits",
@@ -10693,7 +11976,7 @@ async function registerSecurityRoutes(app) {
         const body = splitSheetSchema.parse(req.body);
         const owned = await requireOwnedContract(req, res, body.contractId);
         if (!owned) return;
-        const prevRows = await db.execute(sql12`
+        const prevRows = await db.execute(sql17`
           SELECT version_number, collaborators, content_hash, created_at
           FROM split_versions
           WHERE contract_id = ${body.contractId}
@@ -10744,7 +12027,7 @@ async function registerSecurityRoutes(app) {
           (s, c) => s + c.ownershipPercentage,
           0
         );
-        const result = await db.execute(sql12`
+        const result = await db.execute(sql17`
           INSERT INTO split_versions
             (contract_id, version_number, content_hash, prev_hash,
              status, collaborators, total_pct, created_by)
@@ -10813,7 +12096,7 @@ async function registerSecurityRoutes(app) {
           `${body.signatureData}${body.signerEmail}${(/* @__PURE__ */ new Date()).toISOString()}`
         );
         const phoneHash = body.kycPhone ? sha256(body.kycPhone) : null;
-        await db.execute(sql12`
+        await db.execute(sql17`
           INSERT INTO split_signatures
             (split_version_id, contract_id, signer_name, signer_email, signer_title,
              signature_data, signature_hash, ip_address, user_agent, mode,
@@ -10833,7 +12116,7 @@ async function registerSecurityRoutes(app) {
             ip_address     = EXCLUDED.ip_address,
             signed_at      = NOW()
         `);
-        const versionRow = await db.execute(sql12`
+        const versionRow = await db.execute(sql17`
           SELECT sv.id, sv.contract_id, sv.version_number, sv.content_hash, sv.prev_hash,
                  sv.total_pct, sv.collaborators,
                  COUNT(ss.id) AS sig_count
@@ -10849,14 +12132,14 @@ async function registerSecurityRoutes(app) {
         if (allSigned) {
           const signedAt = /* @__PURE__ */ new Date();
           const lockExpiry = computeLockExpiry(signedAt);
-          await db.execute(sql12`
+          await db.execute(sql17`
             UPDATE split_versions SET
               status          = 'signed',
               signed_at       = ${signedAt},
               lock_expires_at = ${lockExpiry}
             WHERE id = ${versionId}::uuid AND status IN ('draft','pending_signatures')
           `);
-          await db.execute(sql12`
+          await db.execute(sql17`
             INSERT INTO zk_ownership_proofs
               (contract_id, version_number, content_hash, prev_hash, status,
                total_pct, is_valid, is_finalized, signature_count, collaborator_count, signed_at)
@@ -10865,19 +12148,19 @@ async function registerSecurityRoutes(app) {
                'signed', ${v.total_pct}, TRUE, TRUE, ${actualSigs}, ${requiredSigs}, ${signedAt})
           `);
           setTimeout(async () => {
-            await db.execute(sql12`
+            await db.execute(sql17`
               UPDATE split_versions SET status = 'locked', locked_at = NOW()
               WHERE id = ${versionId}::uuid AND status = 'signed'
             `).catch(() => {
             });
-            await db.execute(sql12`
+            await db.execute(sql17`
               UPDATE zk_ownership_proofs SET locked_at = NOW()
               WHERE contract_id = ${v.contract_id} AND version_number = ${v.version_number}
             `).catch(() => {
             });
           }, 48 * 60 * 60 * 1e3);
         } else {
-          await db.execute(sql12`
+          await db.execute(sql17`
             UPDATE split_versions SET status = 'pending_signatures'
             WHERE id = ${versionId}::uuid AND status = 'draft'
           `);
@@ -10927,7 +12210,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/disputes", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql17`
       SELECT id, contract_id, dispute_type, status, description,
              freeze_payouts, created_at, updated_at
       FROM disputes
@@ -10967,7 +12250,7 @@ async function registerSecurityRoutes(app) {
       const body = schema.parse(req.body);
       const { raw, hash, prefix } = generateApiKey();
       const scopesLiteral = `{${body.scopes.map((s) => `"${s.replace(/"/g, '\\"')}"`).join(",")}}`;
-      await db.execute(sql12`
+      await db.execute(sql17`
         INSERT INTO api_keys (owner_id, key_hash, key_prefix, name, scopes, expires_at)
         VALUES (${userId}, ${hash}, ${prefix}, ${body.name},
                 ${scopesLiteral}::text[], ${body.expiresAt ?? null}::timestamptz)
@@ -10999,7 +12282,7 @@ async function registerSecurityRoutes(app) {
   });
   app.get("/api/api-keys", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql17`
       SELECT id, key_prefix, name, scopes, rate_limit, is_active,
              last_used_at, expires_at, created_at
       FROM api_keys WHERE owner_id = ${userId}
@@ -11009,7 +12292,7 @@ async function registerSecurityRoutes(app) {
   });
   app.delete("/api/api-keys/:id", isAuthenticated, async (req, res) => {
     const userId = req.user?.claims?.sub;
-    await db.execute(sql12`
+    await db.execute(sql17`
       UPDATE api_keys SET is_active = FALSE
       WHERE id = ${req.params.id}::uuid AND owner_id = ${userId}
     `);
@@ -11034,7 +12317,7 @@ async function registerSecurityRoutes(app) {
     }
   );
   app.get("/api/admin/fraud-events", isAuthenticated, isAdmin, async (_req, res) => {
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql17`
       SELECT fe.*, crp.current_score, crp.freeze_active
       FROM fraud_events fe
       LEFT JOIN contract_risk_profiles crp ON crp.contract_id = fe.contract_id
@@ -11047,7 +12330,7 @@ async function registerSecurityRoutes(app) {
   app.get("/api/splits/:contractId/history", ...requireActivePermission("agreement.read"), async (req, res) => {
     const owned = await requireOwnedContract(req, res, req.params.contractId);
     if (!owned) return;
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql17`
       SELECT version_number, content_hash, prev_hash, status,
              total_pct, created_at, signed_at, locked_at,
              jsonb_array_length(collaborators) AS collaborator_count
@@ -11060,7 +12343,7 @@ async function registerSecurityRoutes(app) {
   app.get("/api/audit-log", ...requireActiveOrg(), async (req, res) => {
     const userId = req.user?.claims?.sub;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
-    const rows = await db.execute(sql12`
+    const rows = await db.execute(sql17`
       SELECT id, action, resource_type, resource_id, ip_address, created_at
       FROM audit_log
       WHERE user_id = ${userId}
@@ -11343,11 +12626,11 @@ var init_compliance_routes = __esm({
 });
 
 // server/verification-routes.ts
-import crypto7 from "crypto";
+import crypto6 from "crypto";
 import { z as z11 } from "zod";
 import { and as and4, desc as desc3, eq as eq8, gt, isNull as isNull3 } from "drizzle-orm";
 function generateSixDigitCode() {
-  return crypto7.randomInt(0, 1e6).toString().padStart(6, "0");
+  return crypto6.randomInt(0, 1e6).toString().padStart(6, "0");
 }
 function registerVerificationRoutes(app) {
   app.post("/api/verify/send-code", isAuthenticated, async (req, res) => {
@@ -11415,7 +12698,7 @@ function registerVerificationRoutes(app) {
         return;
       }
       const codeHash = sha256(body.code);
-      const matches = crypto7.timingSafeEqual(
+      const matches = crypto6.timingSafeEqual(
         Buffer.from(codeHash, "hex"),
         Buffer.from(pending.codeHash, "hex")
       );
@@ -11482,10 +12765,10 @@ var init_verification_routes = __esm({
 
 // server/creator-routes.ts
 import { z as z12 } from "zod";
-import crypto8 from "crypto";
+import crypto7 from "crypto";
 async function generateUniqueSlCreatorId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto8.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto7.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slCreatorId = `SL-CREATOR-${shortId}`;
     const existing = await storage.getCreatorBySlCreatorId(slCreatorId);
     if (!existing) return slCreatorId;
@@ -11776,138 +13059,6 @@ var init_legal_routes = __esm({
     init_schema();
     init_security();
     docTypeParamSchema = z14.enum(LEGAL_DOC_TYPES);
-  }
-});
-
-// server/agreement-ledger.ts
-import { eq as eq9, sql as sql13 } from "drizzle-orm";
-function generateSlSongId() {
-  const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
-  return `SL-SONG-${hex}`;
-}
-function asRecord(data) {
-  return data && typeof data === "object" ? data : {};
-}
-async function syncAgreementToRightsLedger(contractId, actorId) {
-  const contract = await storage.getContract(contractId);
-  if (!contract) return { synced: false, reason: "Contract not found" };
-  if (contract.status !== "signed" && contract.status !== "confirmed") {
-    return { synced: false, reason: "Contract is not fully executed" };
-  }
-  const template = contract.templateId ? await storage.getContractTemplate(contract.templateId) : await storage.getContractTemplateByType(contract.type);
-  const rights = template?.rightsCategories ?? [];
-  const data = asRecord(contract.data);
-  const createdBy = actorId || contract.createdBy;
-  const needsOwnership = rights.includes("OWNERSHIP") || rights.includes("COMPOSITION") || contract.type === "split-sheet" || Array.isArray(data.collaborators) || Array.isArray(data.ownershipSplit);
-  const needsLicense = rights.includes("LICENSE") || rights.includes("SYNCHRONIZATION") || (template?.agreementType ?? "").includes("license") || contract.type.includes("license");
-  if (!needsOwnership && !needsLicense) {
-    return { synced: false, reason: "Template does not map to ledger ownership or license records" };
-  }
-  let assetId;
-  let ownershipVersion;
-  let licenseId;
-  if (needsOwnership) {
-    const title = String(data.songTitle || data.recordingTitle || data.title || contract.title || "Untitled").trim();
-    const existingAssets = await storage.getSongAssetsByContract(contractId);
-    let asset = existingAssets[0];
-    if (!asset) {
-      asset = await storage.createSongAsset({
-        title,
-        artistName: String(data.artistName || data.artist || "") || null,
-        createdBy,
-        contractId,
-        status: "active",
-        slSongId: generateSlSongId(),
-        metadata: {
-          source: "agreement_sync",
-          contractType: contract.type,
-          templateId: contract.templateId,
-          templateVersion: contract.templateVersion ?? template?.version ?? null
-        }
-      });
-    }
-    assetId = asset.id;
-    const splits = extractOwnershipSplits(contract, data);
-    if (splits.length > 0) {
-      const prepared = await ensureUserIdsForSplits(splits, createdBy);
-      const total = prepared.reduce((s, p) => s + parseFloat(p.ownershipPercentage), 0);
-      if (Math.abs(total - 100) <= 0.01) {
-        const records = await storage.updateOwnershipSplit(
-          asset.id,
-          prepared,
-          createdBy,
-          `Synced from executed agreement ${contract.id} (${contract.type})`
-        );
-        ownershipVersion = records[0]?.version;
-      }
-    }
-  }
-  if (needsLicense) {
-    if (!assetId) {
-      const existingAssets = await storage.getSongAssetsByContract(contractId);
-      assetId = existingAssets[0]?.id;
-    }
-    const [latest] = await db.select({ maxVersion: sql13`coalesce(max(${licenseRecords.version}), 0)` }).from(licenseRecords).where(eq9(licenseRecords.contractId, contractId));
-    const nextVersion = Number(latest?.maxVersion ?? 0) + 1;
-    const [row] = await db.insert(licenseRecords).values({
-      contractId,
-      assetId: assetId ?? null,
-      licenseType: contract.type,
-      licensorName: String(data.licensor || data.partyA || "") || null,
-      licenseeName: String(data.licensee || data.partyB || "") || null,
-      territory: String(data.territory || "") || null,
-      term: String(data.term || "") || null,
-      exclusivity: String(data.exclusivity || "") || null,
-      rightsGranted: Array.isArray(data.rightsGranted) ? data.rightsGranted : rights,
-      fee: data.licenseFee != null || data.fee != null ? String(data.licenseFee ?? data.fee) : null,
-      metadata: {
-        source: "agreement_sync",
-        templateVersion: contract.templateVersion ?? template?.version ?? null
-      },
-      version: nextVersion,
-      createdBy
-    }).returning();
-    licenseId = row.id;
-  }
-  const meta = asRecord(contract.metadata);
-  await storage.updateContract(contractId, {
-    metadata: {
-      ...meta,
-      rightsLedgerSync: {
-        at: (/* @__PURE__ */ new Date()).toISOString(),
-        assetId,
-        ownershipVersion,
-        licenseId
-      }
-    }
-  });
-  return { synced: true, assetId, ownershipVersion, licenseId };
-}
-function extractOwnershipSplits(_contract, data) {
-  const fromCollabs = Array.isArray(data.collaborators) ? data.collaborators : [];
-  const fromSplit = Array.isArray(data.ownershipSplit) ? data.ownershipSplit : [];
-  const rows = [...fromCollabs, ...fromSplit];
-  return rows.map((r) => ({
-    name: r.name,
-    email: r.email,
-    userId: r.userId,
-    ownershipPercentage: String(r.ownershipPercentage ?? r.percentage ?? r.share ?? ""),
-    role: String(r.role || "writer")
-  })).filter((r) => r.ownershipPercentage && !Number.isNaN(parseFloat(r.ownershipPercentage)));
-}
-async function ensureUserIdsForSplits(splits, fallbackUserId) {
-  return splits.map((s) => ({
-    userId: s.userId || fallbackUserId,
-    ownershipPercentage: s.ownershipPercentage,
-    role: s.role
-  }));
-}
-var init_agreement_ledger = __esm({
-  "server/agreement-ledger.ts"() {
-    "use strict";
-    init_db();
-    init_schema();
-    init_storage();
   }
 });
 
@@ -12300,10 +13451,10 @@ var init_license_readiness = __esm({
 
 // server/rights-ledger-routes.ts
 import { z as z15 } from "zod";
-import crypto9 from "crypto";
+import crypto8 from "crypto";
 async function generateUniqueSlSongId() {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const shortId = crypto9.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
+    const shortId = crypto8.randomBytes(6).toString("hex").slice(0, 8).toUpperCase();
     const slSongId = `SL-SONG-${shortId}`;
     const existing = await storage.getSongAssetBySlSongId(slSongId);
     if (!existing) return slSongId;
@@ -12514,13 +13665,13 @@ var init_rights_ledger_routes = __esm({
 });
 
 // server/stripe-subscription-webhook.ts
-import { sql as sql14 } from "drizzle-orm";
+import { sql as sql18 } from "drizzle-orm";
 function isProductionLike2() {
   return isVercelRuntime() || process.env.NODE_ENV === "production" || process.env.LOCAL_DEV === "false";
 }
 async function alreadyProcessed(eventId) {
   try {
-    const rows = await db.execute(sql14`
+    const rows = await db.execute(sql18`
       SELECT 1 FROM payment_events
       WHERE stripe_event_id = ${eventId}
       LIMIT 1
@@ -12533,7 +13684,7 @@ async function alreadyProcessed(eventId) {
 }
 async function recordEvent(event, processed) {
   try {
-    await db.execute(sql14`
+    await db.execute(sql18`
       INSERT INTO payment_events
         (stripe_event_id, event_type, payload, processed)
       VALUES
@@ -12546,7 +13697,7 @@ async function recordEvent(event, processed) {
 }
 async function markProcessed(eventId) {
   try {
-    await db.execute(sql14`
+    await db.execute(sql18`
       UPDATE payment_events
       SET processed = TRUE
       WHERE stripe_event_id = ${eventId}
@@ -14243,14 +15394,14 @@ async function registerRoutes(app) {
       const collaborators = await storage.getContractCollaborators(req.params.id);
       const existingConfirmations = await storage.getConfirmationsByContract(req.params.id);
       const newConfirmations = [];
-      const crypto10 = await import("crypto");
+      const crypto9 = await import("crypto");
       for (const collaborator of collaborators) {
         const existing = existingConfirmations.find((c) => c.collaboratorId === collaborator.id);
         if (existing) {
           newConfirmations.push(existing);
           continue;
         }
-        const token = crypto10.randomBytes(32).toString("hex");
+        const token = crypto9.randomBytes(32).toString("hex");
         const confirmation = await storage.createConfirmation({
           contractId: req.params.id,
           collaboratorId: collaborator.id,
@@ -14440,7 +15591,7 @@ var init_static_serve = __esm({
 });
 
 // server/seedData.ts
-import { eq as eq10 } from "drizzle-orm";
+import { eq as eq9 } from "drizzle-orm";
 async function seedContractTemplates() {
   try {
     console.log("Seeding entertainment agreement template library (MVP-gated)...");
@@ -14490,7 +15641,7 @@ async function seedContractTemplates() {
         isActive: row.isActive,
         template: preserveLegacyJson ? current.template : row.template,
         updatedAt: /* @__PURE__ */ new Date()
-      }).where(eq10(contractTemplates.id, current.id));
+      }).where(eq9(contractTemplates.id, current.id));
       updated += 1;
     }
     console.log(
@@ -14554,9 +15705,9 @@ var init_transport_security = __esm({
 });
 
 // server/db-migrations.ts
-import { sql as sql15 } from "drizzle-orm";
+import { sql as sql19 } from "drizzle-orm";
 async function runCoreSchemaMigrations() {
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS stripe_connect_account_id varchar,
       ADD COLUMN IF NOT EXISTS stripe_connect_onboarded boolean DEFAULT false,
@@ -14567,29 +15718,29 @@ async function runCoreSchemaMigrations() {
       ADD COLUMN IF NOT EXISTS auth0_sub varchar,
       ADD COLUMN IF NOT EXISTS active_organization_id varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth0_sub
       ON users (auth0_sub)
       WHERE auth0_sub IS NOT NULL;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE INDEX IF NOT EXISTS idx_contracts_organization_id ON contracts (organization_id);
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS confirmations (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL REFERENCES contracts(id),
@@ -14605,7 +15756,7 @@ async function runCoreSchemaMigrations() {
       updated_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS song_assets (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       title       varchar NOT NULL,
@@ -14619,11 +15770,11 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE song_assets
       ADD COLUMN IF NOT EXISTS sl_song_id varchar UNIQUE;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS ownership_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id             varchar NOT NULL REFERENCES song_assets(id),
@@ -14637,13 +15788,13 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE ownership_records
       ADD COLUMN IF NOT EXISTS ownership_type varchar DEFAULT 'composition',
       ADD COLUMN IF NOT EXISTS territory varchar,
       ADD COLUMN IF NOT EXISTS expiration_date timestamp;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS revenue_events (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       asset_id     varchar NOT NULL REFERENCES song_assets(id),
@@ -14657,7 +15808,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS payout_records (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       revenue_event_id     varchar NOT NULL REFERENCES revenue_events(id),
@@ -14672,7 +15823,7 @@ async function runCoreSchemaMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS user_balances (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -14683,7 +15834,7 @@ async function runCoreSchemaMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS split_confirmations (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL REFERENCES contracts(id),
@@ -14702,27 +15853,27 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE split_confirmations
       ADD COLUMN IF NOT EXISTS revoked_at timestamp;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE split_confirmations
       ADD COLUMN IF NOT EXISTS consumed_at timestamp;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE split_confirmations
       ADD COLUMN IF NOT EXISTS consent_versions jsonb;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE legal_acceptances
       ADD COLUMN IF NOT EXISTS organization_id varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     ALTER TABLE organizations
       ADD COLUMN IF NOT EXISTS stripe_customer_id varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS payment_events (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       stripe_event_id varchar NOT NULL UNIQUE,
@@ -14732,7 +15883,7 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS error_logs (
       id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       level      varchar NOT NULL DEFAULT 'error',
@@ -14744,14 +15895,14 @@ async function runCoreSchemaMigrations() {
       created_at timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS rate_limit_buckets (
       bucket_key varchar PRIMARY KEY,
       count      integer NOT NULL DEFAULT 0,
       reset_at   timestamp NOT NULL
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS organizations (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_org_id   varchar NOT NULL UNIQUE,
@@ -14766,7 +15917,7 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS organization_members (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -14777,9 +15928,9 @@ async function runCoreSchemaMigrations() {
       UNIQUE (organization_id, user_id)
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_org_members_org ON organization_members (organization_id);`);
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members (user_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS organization_api_keys (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_id varchar NOT NULL REFERENCES organizations(id),
@@ -14793,8 +15944,8 @@ async function runCoreSchemaMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_org_api_keys_org ON organization_api_keys (organization_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar REFERENCES users(id),
@@ -14810,7 +15961,7 @@ async function runCoreSchemaMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS rights_organizations (
       id                varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       name              varchar NOT NULL,
@@ -14821,7 +15972,7 @@ async function runCoreSchemaMigrations() {
       created_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS creators (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       sl_creator_id varchar NOT NULL UNIQUE,
@@ -14838,8 +15989,8 @@ async function runCoreSchemaMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_creators_created_by ON creators (created_by);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS creator_rights_profiles (
       id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id            varchar NOT NULL UNIQUE REFERENCES users(id),
@@ -14852,7 +16003,7 @@ async function runCoreSchemaMigrations() {
       updated_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS composition_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14863,7 +16014,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS master_assets (
       id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id    varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14877,7 +16028,7 @@ async function runCoreSchemaMigrations() {
       updated_at       timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS license_readiness (
       id                       varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       song_asset_id            varchar NOT NULL UNIQUE REFERENCES song_assets(id),
@@ -14890,7 +16041,7 @@ async function runCoreSchemaMigrations() {
       last_checked_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     INSERT INTO rights_organizations (name, territory, organization_type, website, supported_rights)
     SELECT * FROM (VALUES
       ('SOCAN',        'CA',    'pro',              'https://www.socan.com',      ARRAY['performance_rights']::text[]),
@@ -14911,7 +16062,7 @@ async function runCoreSchemaMigrations() {
   `);
 }
 async function runLegalDocumentMigrations() {
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS legal_documents (
       id             varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       doc_type       varchar NOT NULL,
@@ -14923,7 +16074,7 @@ async function runLegalDocumentMigrations() {
       UNIQUE (doc_type, version)
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS legal_acceptances (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL REFERENCES users(id),
@@ -14934,18 +16085,18 @@ async function runLegalDocumentMigrations() {
       user_agent   varchar
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);`);
+  await db.execute(sql19`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('tos', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_TOS_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     INSERT INTO legal_documents (doc_type, version, effective_date, markdown_body)
     VALUES ('privacy', ${SEED_LEGAL_VERSION}, ${SEED_LEGAL_EFFECTIVE_DATE}::timestamp, ${SEED_PRIVACY_MARKDOWN})
     ON CONFLICT (doc_type, version) DO NOTHING;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'tos', u.terms_version, u.terms_accepted_at
     FROM users u
@@ -14956,7 +16107,7 @@ async function runLegalDocumentMigrations() {
         WHERE la.user_id = u.id AND la.doc_type = 'tos' AND la.version = u.terms_version
       );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     INSERT INTO legal_acceptances (user_id, doc_type, version, accepted_at)
     SELECT u.id, 'privacy', ${SEED_LEGAL_VERSION}, u.terms_accepted_at
     FROM users u
@@ -14969,7 +16120,7 @@ async function runLegalDocumentMigrations() {
   `);
 }
 async function runSecurityEngineMigrations() {
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS split_versions (
       id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar NOT NULL,
@@ -14987,8 +16138,8 @@ async function runSecurityEngineMigrations() {
       UNIQUE (contract_id, version_number)
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_split_versions_contract ON split_versions (contract_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS split_signatures (
       id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       split_version_id uuid NOT NULL REFERENCES split_versions(id) ON DELETE CASCADE,
@@ -15009,7 +16160,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (split_version_id, signer_email)
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS fraud_events (
       id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id    varchar NOT NULL,
@@ -15022,8 +16173,8 @@ async function runSecurityEngineMigrations() {
       created_at     timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_fraud_events_contract ON fraud_events (contract_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS contract_risk_profiles (
       contract_id        varchar PRIMARY KEY,
       current_score      integer NOT NULL DEFAULT 0,
@@ -15035,7 +16186,7 @@ async function runSecurityEngineMigrations() {
       updated_at          timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS audit_log (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       varchar,
@@ -15051,8 +16202,8 @@ async function runSecurityEngineMigrations() {
       created_at    timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log (user_id, created_at DESC);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS api_keys (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       owner_id     varchar NOT NULL,
@@ -15067,8 +16218,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys (owner_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS login_events (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL,
@@ -15080,8 +16231,8 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_login_events_user ON login_events (user_id, created_at DESC);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS user_devices (
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      varchar NOT NULL,
@@ -15094,7 +16245,7 @@ async function runSecurityEngineMigrations() {
       UNIQUE (user_id, device_hash)
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS disputes (
       id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id       varchar NOT NULL,
@@ -15111,8 +16262,8 @@ async function runSecurityEngineMigrations() {
       updated_at        timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_disputes_contract ON disputes (contract_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS dispute_transitions (
       id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       dispute_id  uuid NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
@@ -15123,7 +16274,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS zk_ownership_proofs (
       proof_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id        varchar NOT NULL,
@@ -15143,8 +16294,8 @@ async function runSecurityEngineMigrations() {
       created_at         timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_zk_proofs_contract ON zk_ownership_proofs (contract_id, version_number DESC);`);
+  await db.execute(sql19`
     ALTER TABLE contract_templates
       ADD COLUMN IF NOT EXISTS slug varchar,
       ADD COLUMN IF NOT EXISTS category varchar,
@@ -15164,14 +16315,14 @@ async function runSecurityEngineMigrations() {
       ADD COLUMN IF NOT EXISTS supported_transactions jsonb DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS parent_template_id varchar;
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_contract_templates_type ON contract_templates (type);`);
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_contract_templates_category ON contract_templates (category);`);
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_contract_templates_status ON contract_templates (status);`);
+  await db.execute(sql19`
     ALTER TABLE contracts
       ADD COLUMN IF NOT EXISTS template_version varchar;
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS template_audit_log (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       template_id varchar REFERENCES contract_templates(id),
@@ -15182,7 +16333,7 @@ async function runSecurityEngineMigrations() {
       created_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS license_records (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       contract_id     varchar REFERENCES contracts(id),
@@ -15201,8 +16352,8 @@ async function runSecurityEngineMigrations() {
       created_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_license_records_contract ON license_records (contract_id);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS voice_sessions (
       id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id         varchar NOT NULL REFERENCES users(id),
@@ -15219,8 +16370,8 @@ async function runSecurityEngineMigrations() {
       updated_at      timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions (user_id, created_at DESC);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS voice_turns (
       id                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id            varchar NOT NULL REFERENCES voice_sessions(id),
@@ -15239,8 +16390,8 @@ async function runSecurityEngineMigrations() {
       created_at            timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_voice_turns_session ON voice_turns (session_id, created_at);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS voice_pending_actions (
       id           varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id   varchar NOT NULL REFERENCES voice_sessions(id),
@@ -15257,8 +16408,8 @@ async function runSecurityEngineMigrations() {
       created_at   timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
-  await db.execute(sql15`
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_voice_pending_user ON voice_pending_actions (user_id, status);`);
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS voice_provenance (
       id                   varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id           varchar REFERENCES voice_sessions(id),
@@ -15273,7 +16424,7 @@ async function runSecurityEngineMigrations() {
       created_at           timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`
+  await db.execute(sql19`
     CREATE TABLE IF NOT EXISTS voice_user_memory (
       id          varchar PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     varchar NOT NULL REFERENCES users(id),
@@ -15286,7 +16437,7 @@ async function runSecurityEngineMigrations() {
       updated_at  timestamp DEFAULT now()
     );
   `);
-  await db.execute(sql15`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
+  await db.execute(sql19`CREATE INDEX IF NOT EXISTS idx_voice_memory_user ON voice_user_memory (user_id, key);`);
 }
 var SEED_TOS_MARKDOWN, SEED_PRIVACY_MARKDOWN, SEED_LEGAL_VERSION, SEED_LEGAL_EFFECTIVE_DATE;
 var init_db_migrations = __esm({

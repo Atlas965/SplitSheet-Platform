@@ -36,6 +36,18 @@ export async function syncAgreementToRightsLedger(
     return { synced: false, reason: "Contract is not fully executed" };
   }
 
+  const existingSync = asRecord(asRecord(contract.metadata).rightsLedgerSync);
+  if (existingSync.ownershipVersion != null || existingSync.licenseId != null) {
+    return {
+      synced: true,
+      reason: "already_synced",
+      assetId: typeof existingSync.assetId === "string" ? existingSync.assetId : undefined,
+      ownershipVersion:
+        existingSync.ownershipVersion != null ? Number(existingSync.ownershipVersion) : undefined,
+      licenseId: typeof existingSync.licenseId === "string" ? existingSync.licenseId : undefined,
+    };
+  }
+
   const template = contract.templateId
     ? await storage.getContractTemplate(contract.templateId)
     : await storage.getContractTemplateByType(contract.type);
@@ -89,7 +101,8 @@ export async function syncAgreementToRightsLedger(
     }
     assetId = asset.id;
 
-    const splits = extractOwnershipSplits(contract, data);
+    const tableCollabs = await storage.getContractCollaborators(contractId);
+    const splits = extractOwnershipSplits(contract, data, tableCollabs);
     if (splits.length > 0) {
       const prepared = await ensureUserIdsForSplits(splits, createdBy);
       const total = prepared.reduce((s, p) => s + parseFloat(p.ownershipPercentage), 0);
@@ -165,10 +178,24 @@ export async function syncAgreementToRightsLedger(
 function extractOwnershipSplits(
   _contract: Contract,
   data: Record<string, unknown>,
+  tableCollabs: Array<{
+    name: string;
+    email?: string | null;
+    userId?: string | null;
+    ownershipPercentage?: string | number | null;
+    role: string;
+  }> = [],
 ): Array<{ name?: string; email?: string; userId?: string; ownershipPercentage: string; role: string }> {
+  const fromTable = tableCollabs.map((r) => ({
+    name: r.name,
+    email: r.email,
+    userId: r.userId,
+    ownershipPercentage: String(r.ownershipPercentage ?? ""),
+    role: r.role,
+  }));
   const fromCollabs = Array.isArray(data.collaborators) ? data.collaborators : [];
   const fromSplit = Array.isArray(data.ownershipSplit) ? data.ownershipSplit : [];
-  const rows = [...fromCollabs, ...fromSplit] as any[];
+  const rows = (fromTable.length ? fromTable : [...fromCollabs, ...fromSplit]) as any[];
 
   return rows
     .map((r) => ({

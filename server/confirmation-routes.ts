@@ -33,6 +33,13 @@ import {
   generateConfirmationToken,
   opaqueConfirmUrl,
 } from "./confirmation-url";
+import {
+  evaluateEvent,
+  getProjectWorkflow,
+  loadWorkflowSnapshot,
+  recordWorkflowEvent,
+  RSEE_ACTIONS,
+} from "./rights-state-engine";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -70,6 +77,19 @@ export function registerConfirmationRoutes(app: Express): void {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
         const contract = { title: owned.title, status: owned.status, created_by: owned.createdBy };
+
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "REQUEST_CONFIRMATIONS");
+          if (!allowed.ok) {
+            res.status(400).json({
+              error: allowed.error,
+              code: allowed.code,
+              validation: allowed.validation,
+            });
+            return;
+          }
+        }
 
         // Get all collaborators
         const collabRows = await db.execute(sql`
@@ -165,6 +185,16 @@ export function registerConfirmationRoutes(app: Express): void {
             };
           })
         );
+
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.CONFIRMATION_REQUESTED,
+          projectId: contractId,
+          previousState: snapshot ? snapshot.contractStatus : "AGREEMENT_READY",
+          newState: "CONFIRMATION_REQUESTED",
+          actorType: "operator",
+          actorId: userId,
+          req,
+        });
 
         res.json({ contractId, contractTitle: contract.title, confirmations });
       } catch (err: any) {
@@ -279,6 +309,26 @@ export function registerConfirmationRoutes(app: Express): void {
     }
   );
 
+  app.get(
+    "/api/contracts/:id/workflow",
+    ...requireActivePermission("project.read"),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const owned = await requireOwnedContract(req, res, req.params.id);
+        if (!owned) return;
+        const workflow = await getProjectWorkflow(req.params.id);
+        if (!workflow) {
+          res.status(404).json({ error: "Project not found" });
+          return;
+        }
+        res.json(workflow);
+      } catch (err: any) {
+        console.error("[GET-WORKFLOW]", err.message);
+        res.status(500).json({ error: "Could not load workflow status." });
+      }
+    },
+  );
+
   // ══════════════════════════════════════════════════════════════════════════
   // OPERATOR: Mark a confirmation link as sent (updates sentAt + status)
   // POST /api/contracts/:id/confirmations/:confirmId/mark-sent
@@ -321,6 +371,14 @@ export function registerConfirmationRoutes(app: Express): void {
       try {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "REVOKE_TOKEN", { requireValidSplits: false });
+          if (!allowed.ok) {
+            res.status(409).json({ error: allowed.error, code: allowed.code });
+            return;
+          }
+        }
         const result = await db.execute(sql`
           UPDATE split_confirmations
           SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
@@ -351,6 +409,17 @@ export function registerConfirmationRoutes(app: Express): void {
           afterState: { contractId },
           req,
         });
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.TOKEN_REVOKED,
+          projectId: contractId,
+          previousState: snapshot ? "CONFIRMATION_REQUESTED" : null,
+          newState: "REVOKED",
+          actorType: "operator",
+          actorId: userId,
+          entityType: "split_confirmation",
+          entityId: confirmId,
+          req,
+        });
         res.json({ revoked: true });
       } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -368,6 +437,14 @@ export function registerConfirmationRoutes(app: Express): void {
       try {
         const owned = await requireOwnedContract(req, res, contractId);
         if (!owned) return;
+        const snapshot = await loadWorkflowSnapshot(contractId);
+        if (snapshot) {
+          const allowed = evaluateEvent(snapshot, "GENERATE_QR", { requireValidSplits: false });
+          if (!allowed.ok) {
+            res.status(409).json({ error: allowed.error, code: allowed.code });
+            return;
+          }
+        }
         const rows = await db.execute(sql`
           SELECT sc.id, sc.token, sc.status, sc.expires_at, sc.revoked_at,
                  cc.name AS collaborator_name
@@ -427,6 +504,19 @@ export function registerConfirmationRoutes(app: Express): void {
             req,
           });
         }
+        await recordWorkflowEvent({
+          action: RSEE_ACTIONS.QR_GENERATED,
+          projectId: contractId,
+          previousState: snapshot ? "CONFIRMATION_REQUESTED" : null,
+          newState: "CONFIRMATION_REQUESTED",
+          actorType: "operator",
+          actorId: userId,
+          entityType: "split_confirmation",
+          entityId: confirmId,
+          accessMethod: "qr",
+          metadata: { rotated: rotate },
+          req,
+        });
         res.json({
           id: confirmId,
           status: rotate && row.status === "revoked" ? "not_sent" : row.status,
