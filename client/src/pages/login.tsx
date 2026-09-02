@@ -141,6 +141,13 @@ export default function Login() {
   }, []);
 
   const enabled = providers.filter((p) => p.enabled);
+  const providerNames = enabled.map((p) => p.label.replace(/^Continue with\s+/i, ""));
+  const signInLead =
+    providerNames.length === 0
+      ? "Sign in with a configured provider to open your operator workspace."
+      : providerNames.length === 1
+        ? `Sign in with ${providerNames[0]} to open your operator workspace.`
+        : `Sign in with ${providerNames.join(", ").replace(/, ([^,]+)$/, ", or $1")} to open your operator workspace.`;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -164,11 +171,7 @@ export default function Login() {
           <div className="rounded-2xl border border-border bg-card p-8 shadow-sm">
             <h1 className="text-2xl font-bold text-foreground tracking-tight">Sign in to SplitSheet</h1>
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-              {enabled.length === 0
-                ? "Sign in with a configured provider to open your operator workspace."
-                : enabled.length === 1
-                  ? `Sign in with ${enabled[0].label} to open your operator workspace.`
-                  : `Sign in with ${enabled.map((p) => p.label).join(", ").replace(/, ([^,]+)$/, ", or $1")} to open your operator workspace.`}
+              {signInLead}
             </p>
 
             {(error || loadError) && (
