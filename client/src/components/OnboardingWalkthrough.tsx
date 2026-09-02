@@ -20,74 +20,58 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    phase: "Phase 1 of 5 · Welcome",
+    phase: "1 of 6 · Welcome",
     title: "Welcome to SplitSheet",
-    body: "You're the Operator — a studio, producer, or publisher managing music agreements for your roster. SplitSheet handles the full B2B2C workflow: you set up splits, contributors confirm from their phone, and everything is documented.",
+    body: "You are the operator — a studio, producer, or label documenting splits and related agreements for other people. Contributors confirm from a link. They do not need a SplitSheet account.",
     cta: "Show me how",
     type: "center",
     targetPath: "/",
   },
   {
-    phase: "Phase 1 of 5 · Workflow",
-    title: "Your 4-Stage Pipeline",
-    body: "Follow this checklist on every project: Client Intake → Split Setup → Contributor Confirmation → Rights Ledger. Each stage links to the right page in your dashboard.",
+    phase: "2 of 6 · Pipeline",
+    title: "The job, in order",
+    body: "Project → contributors and splits → send a confirmation link or QR → evidence → Rights Ledger. Use this checklist on the dashboard for every song.",
     cta: "Next",
     type: "spotlight",
     targetPath: "/",
     spotlight: "workflow-banner",
   },
   {
-    phase: "Phase 2 of 5 · Client Intake",
-    title: "Add Your Clients (B2B)",
-    body: "Clients are the artists, producers, and labels you work for. Add them first so every project is linked to the right person. You'll find all collaborators you've worked with in your Clients list.",
-    cta: "Go to Clients",
-    type: "center",
-    targetPath: "/clients",
-  },
-  {
-    phase: "Phase 2 of 5 · Projects",
-    title: "Create a Split Project",
-    body: "Each project is a song or track workspace. Add every contributor with their role, PRO affiliation, IPI number, and ownership percentage. Percentages must total exactly 100% before you can send confirmation links.",
+    phase: "3 of 6 · Project",
+    title: "Create a project first",
+    body: "Start from Projects. Enter the song title, then add every contributor with role and ownership percentage. Percentages must total 100% before links can be sent. Clients are the people on your roster — add them here or they appear after you put them on a project.",
     cta: "Go to Projects",
     type: "center",
     targetPath: "/projects",
   },
   {
-    phase: "Phase 3 of 5 · B2B2C",
-    title: "Contributors Confirm — No Login Required",
-    body: "This is the B2C side: generate a unique link for each contributor and send it via WhatsApp, SMS, or email. They review their split on a mobile-friendly page and tap Confirm — no account, no app download. Every confirmation is timestamped and IP-logged.",
+    phase: "4 of 6 · Confirm",
+    title: "Send a link or QR — same workflow",
+    body: "Generate a confirmation link and share it by email, WhatsApp, or QR. The contributor opens /confirm on their phone, reviews the split, and confirms. No login. Expired and revoked links stop working.",
     cta: "Next",
     type: "center",
     targetPath: "/projects",
   },
   {
-    phase: "Phase 3 of 5 · Agreements",
-    title: "Entertainment Agreement Templates",
-    body: "Use the Entertainment Agreement Templates Library for split sheets, producer deals, master rights, sync licenses, and more. Fill fields, add collaborators, export PDFs, and track confirmations — without treating templates as legal advice.",
+    phase: "5 of 6 · Agreements",
+    title: "Agreements are documentation",
+    body: "Templates help you assemble the paperwork for a project. They are workflow documents, not legal advice. SplitSheet is not a law firm.",
     cta: "Go to Agreements",
     type: "center",
     targetPath: "/contracts",
   },
   {
-    phase: "Phase 4 of 5 · Rights Ledger",
-    title: "Permanent Rights Record",
-    body: "Once splits are confirmed, register song assets in the Rights Ledger. Track ISWC codes, ownership history, revenue events, and audit logs — your long-term institutional record.",
-    cta: "Go to Rights Ledger",
+    phase: "6 of 6 · Rights Ledger",
+    title: "The record after confirmation",
+    body: "When every active contributor confirms, SplitSheet writes a versioned rights record. Amendments add a new version. History is kept. This records what was entered and confirmed — it does not determine legal ownership.",
+    cta: "Finish",
     type: "center",
     targetPath: "/ownership",
-  },
-  {
-    phase: "Phase 5 of 5 · CoPilot",
-    title: "SoundLedger CoPilot Is Always On",
-    body: "Tap the CoPilot button anytime for AI guidance on split sheets, PROs, pricing, and platform features. It knows which page you're on and tailors answers to your workflow.",
-    cta: "Finish Setup",
-    type: "center",
-    targetPath: "/",
   },
 ];
 
 function resolvePageKey(path: string): string {
-  const roots = ["/clients", "/projects", "/contracts", "/ownership", "/billing", "/analytics"];
+  const roots = ["/clients", "/projects", "/contracts", "/ownership", "/billing"];
   if (path === "/") return "/";
   for (const root of roots) {
     if (path === root || path.startsWith(`${root}/`)) return root;

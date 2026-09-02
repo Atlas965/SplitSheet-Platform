@@ -29,7 +29,7 @@ export async function lookupConfirmation(token: string, contractId?: string) {
         sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at, sc.confirmed_at,
         sc.collaborator_id, sc.contract_id,
         cc.name AS collaborator_name, cc.email AS collaborator_email, cc.role, cc.ownership_percentage,
-        c.title AS contract_title
+        c.title AS contract_title, c.created_by AS created_by
       FROM split_confirmations sc
       JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
       JOIN contracts c ON c.id = sc.contract_id
@@ -43,7 +43,7 @@ export async function lookupConfirmation(token: string, contractId?: string) {
       sc.id, sc.status, sc.expires_at, sc.revoked_at, sc.consumed_at, sc.confirmed_at,
       sc.collaborator_id, sc.contract_id,
       cc.name AS collaborator_name, cc.email AS collaborator_email, cc.role, cc.ownership_percentage,
-      c.title AS contract_title
+      c.title AS contract_title, c.created_by AS created_by
     FROM split_confirmations sc
     JOIN contract_collaborators cc ON cc.id = sc.collaborator_id
     JOIN contracts c ON c.id = sc.contract_id
@@ -361,6 +361,24 @@ export async function handlePublicConfirmPost(
       },
       req,
     });
+
+    const operatorId = (row.created_by as string | undefined) || null;
+    if (operatorId) {
+      const who = String(name || row.collaborator_name || "A contributor").trim();
+      try {
+        await storage.createNotification(
+          operatorId,
+          action === "confirm" ? "Contributor confirmed" : "Change requested",
+          action === "confirm"
+            ? `${who} confirmed their split on "${row.contract_title}".`
+            : `${who} requested a change on "${row.contract_title}".`,
+          action === "confirm" ? "confirmation" : "change_request",
+          `/projects/${resolvedContractId}`,
+        );
+      } catch (notifyErr: any) {
+        console.warn("[PUBLIC-CONFIRM-POST] notification skipped:", notifyErr?.message);
+      }
+    }
 
     res.json({
       success: true,

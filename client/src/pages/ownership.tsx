@@ -887,7 +887,7 @@ export default function Ownership() {
                   </Card>
                 </div>
 
-                {/* CWR Export — PRO registration file (SOCAN/ASCAP/BMI/PRS) */}
+                {/* Sample CWR export — not a filing-ready PRO registration */}
                 {ownershipNamed.length > 0 && (
                   <CWRExport
                     contractId={selectedAsset.id}

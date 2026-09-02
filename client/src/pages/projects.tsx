@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { Link, useLocation } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { Music2, Search, Plus, CheckCircle2, Clock, FileEdit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import Footer from "@/components/Footer";
 
 interface Project {
@@ -37,7 +40,30 @@ const TYPE_LABELS: Record<string, string> = {
 
 export default function Projects() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
+  const [showNew, setShowNew] = useState(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
+  );
+  const [title, setTitle] = useState("");
+
+  const createProject = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/projects", { title, songTitle: title }).then(async (r) => {
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.message || "Failed to create project");
+      return body;
+    }),
+    onSuccess: (project: Project) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      setShowNew(false);
+      setTitle("");
+      setLocation(`/projects/${project.id}`);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Could not create project", description: err.message, variant: "destructive" });
+    },
+  });
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
@@ -80,10 +106,8 @@ export default function Projects() {
               All your songs, tracks, and music projects
             </p>
           </div>
-          <Button asChild>
-            <Link href="/templates">
-              <Plus className="h-4 w-4 mr-1.5" /> New Project
-            </Link>
+          <Button onClick={() => setShowNew(true)} data-testid="button-new-project">
+            <Plus className="h-4 w-4 mr-1.5" /> New Project
           </Button>
         </div>
 
@@ -131,9 +155,7 @@ export default function Projects() {
               {search ? "Try a different keyword." : "Create your first split sheet to get started."}
             </p>
             {!search && (
-              <Button asChild size="sm">
-                <Link href="/contract/split-sheet">Create split sheet</Link>
-              </Button>
+              <Button size="sm" onClick={() => setShowNew(true)}>Create project</Button>
             )}
           </div>
         ) : (
@@ -192,6 +214,36 @@ export default function Projects() {
           </div>
         )}
       </div>
+      <Dialog open={showNew} onOpenChange={setShowNew}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New project</DialogTitle>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!title.trim()) return;
+              createProject.mutate();
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="project-title">Song or project title</Label>
+              <Input
+                id="project-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Midnight Drive"
+                autoFocus
+                data-testid="input-project-title"
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={!title.trim() || createProject.isPending}>
+              {createProject.isPending ? "Creating…" : "Create project"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Footer />
     </div>
   );

@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { Users, Search, FileText, Mail, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import Footer from "@/components/Footer";
 
 interface Client {
@@ -18,7 +22,23 @@ interface Client {
 
 export default function Clients() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", type: "artist" });
+
+  const addClient = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/clients", form).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setShowAdd(false);
+      setForm({ name: "", email: "", type: "artist" });
+      toast({ title: "Client added" });
+    },
+    onError: async (err: any) => {
+      toast({ title: "Could not add client", description: err?.message ?? "Try again.", variant: "destructive" });
+    },
+  });
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) window.location.href = "/api/login";
@@ -57,10 +77,8 @@ export default function Clients() {
               Everyone you've worked with across your contracts
             </p>
           </div>
-          <Button asChild>
-            <Link href="/contract/split-sheet">
-              <Plus className="h-4 w-4 mr-1.5" /> New Contract
-            </Link>
+          <Button onClick={() => setShowAdd(true)} data-testid="button-add-client">
+            <Plus className="h-4 w-4 mr-1.5" /> Add Client
           </Button>
         </div>
 
@@ -87,12 +105,10 @@ export default function Clients() {
               {search ? "No clients match your search" : "No collaborators yet"}
             </p>
             <p className="text-sm text-muted-foreground mt-1 mb-4">
-              {search ? "Try a different name or email." : "Add collaborators to a contract to see them here."}
+              {search ? "Try a different name or email." : "Add the artists, producers, or labels you work for. They also appear here after you put them on a project."}
             </p>
             {!search && (
-              <Button asChild size="sm">
-                <Link href="/contract/split-sheet">Create your first split sheet</Link>
-              </Button>
+              <Button size="sm" onClick={() => setShowAdd(true)}>Add your first client</Button>
             )}
           </div>
         ) : (
@@ -138,6 +154,28 @@ export default function Clients() {
           </div>
         )}
       </div>
+      <Dialog open={showAdd} onOpenChange={setShowAdd}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add client</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Name</Label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Artist or label name" />
+            </div>
+            <div>
+              <Label>Email</Label>
+              <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="optional" />
+            </div>
+            <Button
+              className="w-full"
+              disabled={!form.name.trim() || addClient.isPending}
+              onClick={() => addClient.mutate()}
+            >
+              {addClient.isPending ? "Saving…" : "Save client"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Footer />
     </div>
   );

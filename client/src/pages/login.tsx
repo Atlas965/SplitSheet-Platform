@@ -164,7 +164,11 @@ export default function Login() {
           <div className="rounded-2xl border border-border bg-card p-8 shadow-sm">
             <h1 className="text-2xl font-bold text-foreground tracking-tight">Sign in to SplitSheet</h1>
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-              Authenticate with Google, Apple, or another connected provider to access your rights workflow.
+              {enabled.length === 0
+                ? "Sign in with a configured provider to open your operator workspace."
+                : enabled.length === 1
+                  ? `Sign in with ${enabled[0].label} to open your operator workspace.`
+                  : `Sign in with ${enabled.map((p) => p.label).join(", ").replace(/, ([^,]+)$/, ", or $1")} to open your operator workspace.`}
             </p>
 
             {(error || loadError) && (

@@ -1,12 +1,6 @@
 /**
- * CWRExport.tsx
- * ─────────────────────────────────────────────────────────────────────────────
- * Common Works Registration (CWR) export for Performing Rights Organizations.
- * CWR is the global standard format accepted by SOCAN, ASCAP, BMI, PRS, etc.
- * Generates a .cwr text file that can be submitted directly to your PRO.
- *
- * Addresses the PRO Integration gap in the Platform Assessment Report.
- * ─────────────────────────────────────────────────────────────────────────────
+ * Sample CWR-shaped export. Sender IPI is a placeholder (000000000) until
+ * SplitSheet is assigned a real PRO sender ID. Do not file this as-is.
  */
 
 import { useState } from "react";
@@ -291,8 +285,8 @@ export default function CWRExport({
 
       setExported(true);
       toast({
-        title: "CWR file exported",
-        description: `${songTitle}.cwr is ready to submit to SOCAN, ASCAP, BMI, or PRS.`,
+        title: "Sample CWR file downloaded",
+        description: "This is a preview file. Sender IPI is a placeholder — do not submit it to a PRO for filing.",
       });
     } catch {
       toast({
@@ -312,23 +306,22 @@ export default function CWRExport({
           </div>
           <div>
             <p className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-              PRO Submission Export
+              Sample CWR export
               <TooltipProvider delayDuration={200}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent side="top" className="max-w-[260px] text-xs">
-                    CWR (Common Works Registration) is the international standard
-                    format accepted by SOCAN, ASCAP, BMI, PRS, and 80+ other PROs.
-                    Submit this file to your PRO to register ownership and collect
-                    performance royalties.
+                    CWR is the format PROs accept. This download uses a placeholder
+                    sender IPI (000000000) until SplitSheet has a real sender ID.
+                    Use it as a working sample — not as a filing.
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </p>
             <p className="text-xs text-muted-foreground">
-              CWR format · accepted by SOCAN, ASCAP, BMI, PRS &amp; 80+ PROs
+              Preview only · not ready for PRO filing
             </p>
           </div>
         </div>
@@ -347,7 +340,7 @@ export default function CWRExport({
             data-testid="btn-cwr-export"
           >
             <Download className="h-3.5 w-3.5 mr-1.5" />
-            Export .cwr
+            Download sample
           </Button>
         )}
       </div>
@@ -365,9 +358,9 @@ export default function CWRExport({
       </div>
 
       <p className="text-[10px] text-muted-foreground mt-3 leading-relaxed">
-        The generated CWR file includes all collaborator splits, IPI numbers,
-        PRO affiliations, and ISRC. Submit it directly through your PRO's online
-        portal or member services.
+        Includes collaborator splits and any IPI / ISRC you entered. Sender IPI is
+        currently <span className="font-mono">000000000</span>. Do not submit this
+        file to SOCAN, ASCAP, BMI, or PRS until a real sender ID is assigned.
       </p>
     </div>
   );

@@ -21,6 +21,11 @@ import {
   RSEE_ACTIONS,
 } from "./rights-state-engine";
 import { validateSplits } from "@shared/split-validation";
+import {
+  assertUnderLimit,
+  contributorLimitForTier,
+  projectLimitForTier,
+} from "@shared/plan-limits";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -123,6 +128,53 @@ async function buildClientList(userId: string, organizationId?: string | null) {
   return Array.from(clientMap.values());
 }
 
+async function ensureOperatorClientsTable(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operator_clients (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      organization_id varchar,
+      created_by varchar NOT NULL,
+      name varchar NOT NULL,
+      email varchar,
+      phone varchar,
+      type varchar DEFAULT 'artist',
+      notes text,
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    )
+  `);
+}
+
+async function listRosterClients(userId: string, organizationId?: string | null) {
+  await ensureOperatorClientsTable();
+  const rows = organizationId
+    ? await db.execute(sql`
+        SELECT id, name, email, phone, type, notes, created_at, created_by
+        FROM operator_clients
+        WHERE organization_id = ${organizationId}
+        ORDER BY created_at DESC
+      `)
+    : await db.execute(sql`
+        SELECT id, name, email, phone, type, notes, created_at, created_by
+        FROM operator_clients
+        WHERE created_by = ${userId} AND organization_id IS NULL
+        ORDER BY created_at DESC
+      `);
+  return (rows.rows as Record<string, unknown>[]).map((r) => ({
+    id: String(r.id),
+    name: String(r.name),
+    email: (r.email as string) ?? null,
+    phone: (r.phone as string) ?? null,
+    type: (r.type as string) ?? "artist",
+    role: (r.type as string) ?? "artist",
+    notes: (r.notes as string) ?? null,
+    contractCount: 0,
+    lastActivity: r.created_at,
+    createdAt: r.created_at,
+    source: "roster",
+  }));
+}
+
 const contributorSchema = z.object({
   name: z.string().min(1).max(200),
   email: z.string().email().optional().or(z.literal("")),
@@ -155,16 +207,18 @@ export function registerServiceRoutes(app: Express): void {
         }
       }
 
-      const clients = await buildClientList(userId, orgId);
+      const roster = await listRosterClients(userId, orgId);
+      const derived = await buildClientList(userId, orgId);
+      const clients = roster.length + derived.length;
       res.json({
-        clients: clients.length,
+        clients,
         projects: userContracts.length,
         contributors: totalContributors,
         pendingConfirmations,
         confirmedProjects,
         stages: [
-          { id: "intake", label: "Client Intake", complete: clients.length > 0, href: "/clients" },
-          { id: "splits", label: "Split Setup", complete: userContracts.length > 0, href: "/projects" },
+          { id: "intake", label: "Project created", complete: userContracts.length > 0, href: "/projects" },
+          { id: "splits", label: "Splits set", complete: totalContributors > 0, href: "/projects" },
           { id: "confirm", label: "Confirmation", complete: pendingConfirmations > 0 || confirmedProjects > 0, href: "/projects" },
           { id: "ledger", label: "Rights Ledger", complete: confirmedProjects > 0, href: "/ownership" },
         ],
@@ -179,18 +233,70 @@ export function registerServiceRoutes(app: Express): void {
   app.get("/api/clients", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      res.json(await buildClientList(userId, req.orgAuth?.organizationId));
+      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
+      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
+      const seen = new Set(
+        roster.map((c) => (c.email || c.name).toLowerCase()).filter(Boolean),
+      );
+      const extras = derived.filter((c) => {
+        const key = String(c.email || c.name || "").toLowerCase();
+        return key && !seen.has(key);
+      });
+      res.json([...roster, ...extras]);
     } catch (error) {
       console.error("[CLIENTS LIST]", error);
       res.status(500).json({ message: "Failed to fetch clients" });
     }
   });
 
+  app.post("/api/clients", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user.claims.sub;
+      const name = String(req.body?.name ?? "").trim();
+      if (!name) {
+        res.status(400).json({ message: "Client name is required." });
+        return;
+      }
+      await ensureOperatorClientsTable();
+      const orgId = req.orgAuth?.organizationId ?? null;
+      const inserted = await db.execute(sql`
+        INSERT INTO operator_clients (organization_id, created_by, name, email, phone, type, notes)
+        VALUES (
+          ${orgId},
+          ${userId},
+          ${name},
+          ${String(req.body?.email ?? "").trim() || null},
+          ${String(req.body?.phone ?? "").trim() || null},
+          ${String(req.body?.type ?? "artist")},
+          ${String(req.body?.notes ?? "").trim() || null}
+        )
+        RETURNING id, name, email, phone, type, notes, created_at
+      `);
+      const row = inserted.rows[0] as Record<string, unknown>;
+      res.status(201).json({
+        id: row.id,
+        name: row.name,
+        email: row.email ?? null,
+        phone: row.phone ?? null,
+        type: row.type,
+        role: row.type,
+        notes: row.notes ?? null,
+        contractCount: 0,
+        createdAt: row.created_at,
+        source: "roster",
+      });
+    } catch (error) {
+      console.error("[CLIENTS CREATE]", error);
+      res.status(500).json({ message: "Failed to create client" });
+    }
+  });
+
   app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
-      const client = clients.find((c) => c.id === req.params.id);
+      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
+      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
+      const client = [...roster, ...derived].find((c) => c.id === req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
         return;
@@ -204,8 +310,9 @@ export function registerServiceRoutes(app: Express): void {
   app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const clients = await buildClientList(userId, req.orgAuth?.organizationId);
-      const client = clients.find((c) => c.id === req.params.id);
+      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
+      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
+      const client = [...roster, ...derived].find((c) => c.id === req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
         return;
@@ -217,10 +324,13 @@ export function registerServiceRoutes(app: Express): void {
       const name = client.name as string;
       const projects = [];
       for (const contract of userContracts) {
+        const data = (contract.data ?? {}) as Record<string, unknown>;
         const collabs = await storage.getContractCollaborators(contract.id);
-        const match = collabs.some(
-          (c) => c.id === req.params.id || c.email === email || c.name === name,
-        );
+        const match =
+          data.clientId === req.params.id ||
+          collabs.some(
+            (c) => c.id === req.params.id || c.email === email || c.name === name,
+          );
         if (match) projects.push(contractToProject(contract));
       }
       res.json(projects);
@@ -259,6 +369,43 @@ export function registerServiceRoutes(app: Express): void {
   });
 
   // ── Projects (contract alias) ───────────────────────────────────────────────
+  app.post("/api/projects", ...requireActivePermission("project.create"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user.claims.sub;
+      const title = String(req.body?.title ?? req.body?.songTitle ?? "").trim();
+      if (!title) {
+        res.status(400).json({ message: "Project title is required." });
+        return;
+      }
+      const user = await storage.getUser(userId);
+      const existing = req.orgAuth?.organizationId
+        ? await storage.getContractsForOrganization(req.orgAuth.organizationId, userId)
+        : await storage.getContracts(userId);
+      const limit = projectLimitForTier(user?.subscriptionTier);
+      const gate = assertUnderLimit(existing.length, limit, "projects");
+      if (!gate.ok) {
+        res.status(402).json({ message: gate.message, code: "PLAN_LIMIT" });
+        return;
+      }
+      const created = await storage.createContract({
+        title,
+        type: "split-sheet",
+        status: "draft",
+        createdBy: userId,
+        organizationId: req.orgAuth?.organizationId ?? null,
+        data: {
+          songTitle: String(req.body?.songTitle ?? title).trim(),
+          notes: String(req.body?.notes ?? "").trim() || null,
+          clientId: req.body?.clientId ?? null,
+        },
+      } as any);
+      res.status(201).json(contractToProject(created));
+    } catch (error) {
+      console.error("[PROJECTS CREATE]", error);
+      res.status(500).json({ message: "Failed to create project" });
+    }
+  });
+
   app.get("/api/projects", ...requireActivePermission("project.read"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
@@ -372,6 +519,14 @@ export function registerServiceRoutes(app: Express): void {
       const result = await assertContractAccess(req, req.params.id, req.user.claims.sub);
       if ("error" in result) {
         res.status(result.status).json({ message: result.error });
+        return;
+      }
+      const operator = await storage.getUser(req.user.claims.sub);
+      const existingCollabs = await storage.getContractCollaborators(req.params.id);
+      const contribLimit = contributorLimitForTier(operator?.subscriptionTier);
+      const contribGate = assertUnderLimit(existingCollabs.length, contribLimit, "contributors");
+      if (!contribGate.ok) {
+        res.status(402).json({ message: contribGate.message, code: "PLAN_LIMIT" });
         return;
       }
       const { name, email, role, pro, ipi, ownershipPercentage } = parsed.data;

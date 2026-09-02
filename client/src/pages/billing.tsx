@@ -5,8 +5,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import Footer from "@/components/Footer";
@@ -14,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import {
   CreditCard, CheckCircle2, AlertCircle,
   FileText, Users, HardDrive, Plus, Download, ArrowRight,
-  Loader2, XCircle, RefreshCw, Layers, Lock,
+  Loader2, XCircle, RefreshCw, Layers,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -236,212 +234,11 @@ function UpgradePlanDialog({ open, onClose, currentPlan }: {
   );
 }
 
-// ── Update Payment Method Dialog ──────────────────────────────────────────────
-function UpdatePaymentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { toast } = useToast();
-  const [cardNumber, setCardNumber] = useState("");
-  const [expiry,     setExpiry]     = useState("");
-  const [cvc,        setCvc]        = useState("");
-  const [name,       setName]       = useState("");
-  const [saving,     setSaving]     = useState(false);
-  const [saved,      setSaved]      = useState(false);
-
-  // Format card number with spaces every 4 digits
-  const formatCard = (v: string) =>
-    v.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim();
-
-  // Format expiry MM / YY
-  const formatExpiry = (v: string) => {
-    const d = v.replace(/\D/g, "").slice(0, 4);
-    return d.length >= 3 ? `${d.slice(0, 2)} / ${d.slice(2)}` : d;
-  };
-
-  const isComplete =
-    cardNumber.replace(/\s/g, "").length === 16 &&
-    expiry.replace(/\s\/\s/g, "").length === 4 &&
-    cvc.length >= 3 &&
-    name.trim().length > 1;
-
-  const handleSave = async () => {
-    if (!isComplete) return;
-    setSaving(true);
-    // In production this would call Stripe's Setup Intent API.
-    // For demo, we log the action and show success.
-    await new Promise((r) => setTimeout(r, 1200));
-    await apiRequest("POST", "/api/activity", {
-      activityType: "payment_method_update_requested",
-      activityData: { last4: cardNumber.replace(/\s/g, "").slice(-4), name, updatedAt: new Date().toISOString() },
-    }).catch(() => {});
-    setSaving(false);
-    setSaved(true);
-    toast({ title: "Payment method updated", description: `Card ending in ${cardNumber.replace(/\s/g, "").slice(-4)} saved.` });
-    setTimeout(() => { setSaved(false); onClose(); }, 1500);
-  };
-
-  const resetAndClose = () => {
-    setCardNumber(""); setExpiry(""); setCvc(""); setName(""); setSaved(false);
-    onClose();
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && resetAndClose()}>
-      <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 pt-5 pb-4 border-b border-border">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
-              <CreditCard className="h-4 w-4 text-accent" />
-            </div>
-            <div>
-              <DialogTitle className="text-sm font-semibold leading-none">Update Payment Method</DialogTitle>
-              <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                Your card details are encrypted and never stored on our servers.
-              </DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-
-        <div className="px-6 py-5 space-y-4">
-          {saved ? (
-            <div className="flex flex-col items-center gap-3 py-6">
-              <div className="w-14 h-14 rounded-full bg-green-50 dark:bg-green-950/30 flex items-center justify-center">
-                <CheckCircle2 className="h-7 w-7 text-green-600 dark:text-green-400" />
-              </div>
-              <p className="font-semibold text-foreground">Payment method updated</p>
-              <p className="text-xs text-muted-foreground">
-                Card ending in {cardNumber.replace(/\s/g, "").slice(-4)} is now active.
-              </p>
-            </div>
-          ) : (
-            <>
-              {/* Card number */}
-              <div className="space-y-1.5">
-                <Label htmlFor="card-number" className="text-sm">Card number</Label>
-                <div className="relative">
-                  <Input
-                    id="card-number"
-                    inputMode="numeric"
-                    placeholder="1234 5678 9012 3456"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(formatCard(e.target.value))}
-                    className="pr-10 font-mono tracking-wider"
-                    maxLength={19}
-                    data-testid="input-card-number"
-                  />
-                  <CreditCard className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                </div>
-              </div>
-
-              {/* Expiry + CVC */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="expiry" className="text-sm">Expiry date</Label>
-                  <Input
-                    id="expiry"
-                    inputMode="numeric"
-                    placeholder="MM / YY"
-                    value={expiry}
-                    onChange={(e) => setExpiry(formatExpiry(e.target.value))}
-                    maxLength={7}
-                    data-testid="input-expiry"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="cvc" className="text-sm">CVC</Label>
-                  <Input
-                    id="cvc"
-                    inputMode="numeric"
-                    placeholder="123"
-                    value={cvc}
-                    onChange={(e) => setCvc(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                    maxLength={4}
-                    data-testid="input-cvc"
-                  />
-                </div>
-              </div>
-
-              {/* Name on card */}
-              <div className="space-y-1.5">
-                <Label htmlFor="card-name" className="text-sm">Name on card</Label>
-                <Input
-                  id="card-name"
-                  placeholder="Jordan Smith"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  data-testid="input-card-name"
-                />
-              </div>
-
-              {/* Accepted cards */}
-              <div className="flex items-center gap-2 pt-1">
-                {["fab fa-cc-visa", "fab fa-cc-mastercard", "fab fa-cc-amex"].map((icon) => (
-                  <i key={icon} className={`${icon} text-2xl text-muted-foreground`} />
-                ))}
-                <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-                  <Lock className="h-3 w-3" /> SSL encrypted
-                </span>
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <Button variant="outline" className="flex-1" onClick={resetAndClose}>Cancel</Button>
-                <Button
-                  className="flex-1"
-                  disabled={!isComplete || saving}
-                  onClick={handleSave}
-                  data-testid="btn-save-payment"
-                >
-                  {saving
-                    ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</>
-                    : <><CreditCard className="h-4 w-4 mr-2" />Save Card</>}
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="px-6 py-3 bg-muted/30 border-t border-border">
-          <p className="text-[10px] text-muted-foreground text-center">
-            Payments processed securely by Stripe · SoundLedger Technologies Inc. · Ontario, Canada
-          </p>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Invoice CSV download from live contract data ───────────────────────────────
-function downloadInvoiceCSV(contracts: Contract[], planName: string, planPrice: string) {
-  if (!contracts.length) return null;
-
-  const header = "Date,Description,Status,Amount,Type\n";
-  const rows = contracts.map((c) => {
-    const date = new Date(c.createdAt).toLocaleDateString("en-CA");
-    const desc = `"${c.title.replace(/"/g, '""')}"`;
-    return `${date},${desc},${c.status},—,${c.type}`;
-  });
-
-  // Append subscription row if paid
-  if (planPrice !== "$0") {
-    const today = new Date().toLocaleDateString("en-CA");
-    rows.unshift(`${today},"${planName} Plan Subscription",active,${planPrice} — session,subscription`);
-  }
-
-  const csv = header + rows.join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href     = url;
-  a.download = `splitsheet-billing-${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-  return rows.length;
-}
-
 // ── Main Billing Page ─────────────────────────────────────────────────────────
 export default function Billing() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // Live data
   const { data: subscriptionData, isLoading: subLoading } = useQuery<SubscriptionData>({
@@ -461,6 +258,34 @@ export default function Billing() {
     retry: false,
     enabled: isAuthenticated,
   });
+
+  const openCustomerPortal = async () => {
+    try {
+      const res = await apiRequest("POST", "/api/billing/portal", {});
+      const data = await res.json();
+      if (!data?.url) throw new Error("Stripe did not return a portal URL.");
+      window.location.href = data.url;
+    } catch (err: any) {
+      const raw = String(err?.message ?? "");
+      let description = "Could not open the Stripe customer portal.";
+      try {
+        const jsonStart = raw.indexOf("{");
+        if (jsonStart >= 0) {
+          const parsed = JSON.parse(raw.slice(jsonStart));
+          if (parsed.message) description = parsed.message;
+        } else if (raw) {
+          description = raw.replace(/^\d+:\s*/, "");
+        }
+      } catch {
+        if (raw) description = raw.replace(/^\d+:\s*/, "");
+      }
+      toast({
+        title: "Billing portal unavailable",
+        description,
+        variant: "destructive",
+      });
+    }
+  };
 
   const cancelMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/stripe/cancel-subscription", {}),
@@ -564,13 +389,20 @@ export default function Billing() {
                         {plan.price} · {plan.billing}
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      onClick={() => setShowUpgrade(true)}
-                      data-testid="button-change-plan"
-                    >
-                      {planKey === "free" ? "Upgrade Session" : "Change Plan"}
-                    </Button>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      {planKey !== "free" && (
+                        <Button variant="outline" onClick={() => openCustomerPortal()} data-testid="button-stripe-portal">
+                          Stripe portal
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowUpgrade(true)}
+                        data-testid="button-change-plan"
+                      >
+                        {planKey === "free" ? "Upgrade Session" : "Change Plan"}
+                      </Button>
+                    </div>
                   </div>
 
                   {/* Feature list */}
@@ -642,19 +474,19 @@ export default function Billing() {
                   <h2 className="text-lg font-semibold text-foreground">Payment Method</h2>
                   <button
                     className="text-sm text-accent hover:underline"
-                    onClick={() => toast({ title: "Stripe Portal", description: "Payment updates are managed in the Stripe customer portal." })}
+                    onClick={() => openCustomerPortal()}
                     data-testid="button-update-payment"
                   >
                     Update
                   </button>
                 </div>
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-8 bg-blue-600 rounded flex items-center justify-center shrink-0">
-                    <i className="fab fa-cc-visa text-white text-lg" />
+                  <div className="w-12 h-8 bg-muted rounded flex items-center justify-center shrink-0">
+                    <CreditCard className="h-5 w-5 text-muted-foreground" />
                   </div>
                   <div>
-                    <p className="font-medium text-foreground">•••• •••• •••• 4242</p>
-                    <p className="text-muted-foreground text-xs mt-0.5">Managed securely via Stripe</p>
+                    <p className="font-medium text-foreground">Card on file</p>
+                    <p className="text-muted-foreground text-xs mt-0.5">View and update payment methods in the Stripe customer portal</p>
                   </div>
                 </div>
               </div>
@@ -691,7 +523,7 @@ export default function Billing() {
                       <p className="font-semibold text-foreground text-sm">{plan.price}</p>
                       <button
                         className="text-accent text-xs hover:underline mt-0.5 flex items-center gap-1 ml-auto"
-                        onClick={() => toast({ title: "Invoice", description: "Manage invoices in your Stripe customer portal." })}
+                        onClick={() => openCustomerPortal()}
                         data-testid="button-download-invoice"
                       >
                         <Download className="h-3 w-3" /> Invoice
@@ -702,7 +534,7 @@ export default function Billing() {
                     Full invoice history available in your{" "}
                     <button
                       className="text-accent hover:underline"
-                      onClick={() => toast({ title: "Stripe Portal", description: "Customer portal integration — coming soon." })}
+                      onClick={() => openCustomerPortal()}
                     >
                       Stripe customer portal →
                     </button>
@@ -823,7 +655,7 @@ export default function Billing() {
                 {/* 1. Update Payment Method */}
                 <button
                   className="flex items-center gap-3 w-full p-3.5 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm font-medium text-foreground text-left group"
-                  onClick={() => setShowPaymentModal(true)}
+                  onClick={() => openCustomerPortal()}
                   data-testid="quick-action-update-payment"
                 >
                   <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center shrink-0 group-hover:bg-blue-100 dark:group-hover:bg-blue-900/40 transition-colors">
@@ -843,47 +675,23 @@ export default function Billing() {
                 {/* 2. Download All Invoices */}
                 <button
                   className="flex items-center gap-3 w-full p-3.5 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm font-medium text-foreground text-left group"
-                  onClick={() => {
-                    if (!contracts || contracts.length === 0) {
-                      toast({
-                        title: "No invoices yet",
-                        description: "Create your first contract to generate billing records.",
-                      });
-                      return;
-                    }
-                    const count = downloadInvoiceCSV(contracts, plan.name, plan.price);
-                    if (count) {
-                      toast({
-                        title: "Invoices downloaded",
-                        description: `${count} record${count !== 1 ? "s" : ""} exported as CSV.`,
-                      });
-                      apiRequest("POST", "/api/activity", {
-                        activityType: "invoices_downloaded",
-                        activityData: { count, exportedAt: new Date().toISOString() },
-                      }).catch(() => {});
-                    }
-                  }}
+                  onClick={() => openCustomerPortal()}
                   data-testid="quick-action-download-invoices"
                 >
                   <div className="w-9 h-9 rounded-lg bg-green-50 dark:bg-green-950/30 flex items-center justify-center shrink-0 group-hover:bg-green-100 dark:group-hover:bg-green-900/40 transition-colors">
                     <Download className="h-4 w-4 text-green-600 dark:text-green-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-foreground">Download All Invoices</p>
+                    <p className="font-medium text-foreground">Open invoices in Stripe</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {contractsLoading
-                        ? "Loading…"
-                        : contractCount > 0
-                        ? `Export ${contractCount} record${contractCount !== 1 ? "s" : ""} as CSV`
-                        : "No billing records yet"}
+                      Real invoices and receipts live in the Stripe customer portal
                     </p>
                   </div>
                   <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0 group-hover:text-foreground transition-colors" />
                 </button>
 
-                {/* 3. Create New Contract */}
                 <Link
-                  href="/contract/split-sheet"
+                  href="/projects?new=1"
                   className="flex items-center gap-3 w-full p-3.5 rounded-lg bg-accent text-accent-foreground hover:opacity-90 transition-opacity font-medium text-sm group"
                   data-testid="quick-action-new-contract"
                 >
@@ -891,9 +699,9 @@ export default function Billing() {
                     <Plus className="h-4 w-4" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium">Create New Contract</p>
+                    <p className="font-medium">Create New Project</p>
                     <p className="text-xs opacity-80 mt-0.5">
-                      Split sheet, performance, producer or management
+                      Document a song split and send confirmation links
                     </p>
                   </div>
                   <ArrowRight className="h-4 w-4 opacity-70 shrink-0 group-hover:opacity-100 transition-opacity" />
@@ -912,11 +720,6 @@ export default function Billing() {
         open={showUpgrade}
         onClose={() => setShowUpgrade(false)}
         currentPlan={planKey}
-      />
-
-      <UpdatePaymentDialog
-        open={showPaymentModal}
-        onClose={() => setShowPaymentModal(false)}
       />
     </div>
   );

@@ -10,10 +10,7 @@ import {
   Home,
   User,
   FileText,
-  Mail,
   Users,
-  Search,
-  BarChart,
   Layers,
   CreditCard,
   Plus,
@@ -24,7 +21,6 @@ import {
   HelpCircle,
   FolderOpen,
   Building2,
-  Mic2,
   Shield,
 } from "lucide-react";
 
@@ -46,34 +42,23 @@ type NavSection = {
 
 const NAV_SECTIONS: NavSection[] = [
   {
-    title: "Core",
+    title: "Workspace",
     items: [
       { href: "/", label: "Dashboard", icon: Home, testId: "nav-dashboard" },
       { href: "/clients", label: "Clients", icon: Users, testId: "nav-clients" },
       { href: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
       { href: "/organizations", label: "Organizations", icon: Building2, testId: "nav-organizations" },
-      { href: "/creators", label: "Creators", icon: Mic2, testId: "nav-creators" },
-      { href: "/contracts", label: "Contracts", icon: FileText, testId: "nav-contracts" },
-      { href: "/profile", label: "Profile", icon: User, testId: "nav-profile" },
+      { href: "/contracts", label: "Agreements", icon: FileText, testId: "nav-contracts" },
     ],
   },
   {
-    title: "Communication",
-    items: [
-      { href: "/messages", label: "Messages", icon: Mail, testId: "nav-messages" },
-      { href: "/matches", label: "Connections", icon: Users, testId: "nav-matches" },
-      { href: "/search", label: "Search", icon: Search, testId: "nav-search" },
-      { href: "/notifications", label: "Notifications", icon: Bell, testId: "nav-notifications" },
-    ],
-  },
-  {
-    title: "Tools",
+    title: "Records",
     items: [
       { href: "/ownership", label: "Rights Ledger", icon: BookOpen, testId: "nav-ownership" },
-      { href: "/analytics", label: "Analytics", icon: BarChart, testId: "nav-analytics" },
-      { href: "/templates", label: "Agreements", icon: Layers, testId: "nav-templates" },
+      { href: "/templates", label: "Templates", icon: Layers, testId: "nav-templates" },
+      { href: "/notifications", label: "Notifications", icon: Bell, testId: "nav-notifications" },
       { href: "/billing", label: "Billing", icon: CreditCard, testId: "nav-billing" },
-      { href: "/admin", label: "Admin", icon: Shield, testId: "nav-admin" },
+      { href: "/profile", label: "Profile", icon: User, testId: "nav-profile" },
     ],
   },
 ];
@@ -86,13 +71,15 @@ function isActivePath(location: string, href: string): boolean {
 function SidebarNav({
   location,
   onNavigate,
+  sections = NAV_SECTIONS,
 }: {
   location: string;
   onNavigate?: () => void;
+  sections?: NavSection[];
 }) {
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6" aria-label="Main">
-      {NAV_SECTIONS.map((section) => (
+      {sections.map((section) => (
         <div key={section.title}>
           <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             {section.title}
@@ -128,9 +115,19 @@ function SidebarNav({
 }
 
 export default function OperatorLayout({ children }: OperatorLayoutProps) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const navSections =
+    user?.role === "admin"
+      ? [
+          ...NAV_SECTIONS,
+          {
+            title: "Admin",
+            items: [{ href: "/admin", label: "Admin", icon: Shield, testId: "nav-admin" }],
+          },
+        ]
+      : NAV_SECTIONS;
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -168,14 +165,14 @@ export default function OperatorLayout({ children }: OperatorLayoutProps) {
 
         <div className="px-3 pt-4">
           <Button asChild className="w-full justify-start gap-2" data-testid="btn-new-contract">
-            <Link href="/contract/new">
+            <Link href="/projects?new=1">
               <Plus className="h-4 w-4" />
-              New Contract
+              New Project
             </Link>
           </Button>
         </div>
 
-        <SidebarNav location={location} />
+        <SidebarNav location={location} sections={navSections} />
 
         <div className="border-t border-sidebar-border p-3 space-y-2">
           <button
@@ -225,13 +222,13 @@ export default function OperatorLayout({ children }: OperatorLayoutProps) {
             </div>
             <div className="px-3 pt-4">
               <Button asChild className="w-full justify-start gap-2" onClick={() => setMobileOpen(false)}>
-                <Link href="/contract/new">
+                <Link href="/projects?new=1">
                   <Plus className="h-4 w-4" />
-                  New Contract
+                  New Project
                 </Link>
               </Button>
             </div>
-            <SidebarNav location={location} onNavigate={() => setMobileOpen(false)} />
+            <SidebarNav location={location} onNavigate={() => setMobileOpen(false)} sections={navSections} />
             <div className="border-t border-sidebar-border p-3">
               <div className="flex items-center gap-3 px-3 py-2">
                 <UserAvatar />

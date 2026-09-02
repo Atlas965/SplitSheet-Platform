@@ -28,6 +28,7 @@ import {
   insertNotificationSchema,
 } from "@shared/schema";
 import { registerConfirmationRoutes } from "./confirmation-routes";
+import { createBillingPortalSession } from "./stripe-billing-portal";
 import { registerCopilotRoutes } from "./copilot-routes";
 import { registerVoiceRoutes } from "./voice-routes";
 import { registerServiceRoutes } from "./service-routes";
@@ -998,6 +999,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // Stripe Customer Portal — invoices, payment methods, plan changes
+  app.post(
+    "/api/billing/portal",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        if (!stripe) {
+          return res.status(503).json({
+            message: "Stripe is not configured. Add STRIPE_SECRET_KEY to open the billing portal.",
+          });
+        }
+
+        const userId = req.user.claims.sub;
+        const user = await storage.getUser(userId);
+        if (!user?.stripeCustomerId) {
+          return res.status(400).json({
+            message: "No Stripe customer on this account yet. Subscribe first, then manage billing here.",
+          });
+        }
+
+        const returnUrl =
+          process.env.APP_URL
+            ? `${process.env.APP_URL.replace(/\/$/, "")}/billing`
+            : `${req.protocol}://${req.get("host")}/billing`;
+
+        const session = await createBillingPortalSession(
+          stripe,
+          user.stripeCustomerId,
+          returnUrl,
+        );
+
+        return res.json({ url: session.url });
+      } catch (error: any) {
+        console.error("[BILLING PORTAL]", error?.message ?? error);
+        return res.status(400).json({
+          message: error?.message ?? "Could not open the billing portal.",
+        });
+      }
+    },
+  );
+
   // Get subscription details endpoint
   app.get(
     "/api/stripe/subscription",
@@ -1066,20 +1108,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const contracts = await storage.getContracts(userId);
 
       const now = new Date();
+      const isPending = (c: { status?: string | null }) =>
+        c.status === "pending_confirmation" || c.status === "pending";
+      const isConfirmed = (c: { status?: string | null }) =>
+        c.status === "confirmed" || c.status === "signed";
       const stats = {
-        totalContracts: contracts.length,
-        pendingSignatures: contracts.filter((c) => c.status === "pending")
-          .length,
-        completedThisMonth: contracts.filter((c) => {
-          if (c.status !== "signed" || !c.updatedAt) return false;
+        totalProjects: contracts.length,
+        pendingConfirmation: contracts.filter(isPending).length,
+        confirmedThisMonth: contracts.filter((c) => {
+          if (!isConfirmed(c) || !c.updatedAt) return false;
           const updatedDate = new Date(c.updatedAt);
           return (
             updatedDate.getMonth() === now.getMonth() &&
             updatedDate.getFullYear() === now.getFullYear()
           );
         }).length,
-        revenueSplit:
-          contracts.filter((c) => c.status === "signed").length * 100, // Simplified: $100 per signed contract
+        drafts: contracts.filter((c) => c.status === "draft").length,
+        // Legacy keys kept so older clients do not break
+        totalContracts: contracts.length,
+        pendingSignatures: contracts.filter(isPending).length,
+        completedThisMonth: contracts.filter((c) => {
+          if (!isConfirmed(c) || !c.updatedAt) return false;
+          const updatedDate = new Date(c.updatedAt);
+          return (
+            updatedDate.getMonth() === now.getMonth() &&
+            updatedDate.getFullYear() === now.getFullYear()
+          );
+        }).length,
       };
 
       res.json(stats);

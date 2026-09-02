@@ -5,6 +5,7 @@ export interface AuthUser {
   lastName?: string | null;
   profileImageUrl?: string | null;
   subscriptionTier?: string;
+  role?: string | null;
 }
 
 /** Two-letter initials from name, or first letter of email. */

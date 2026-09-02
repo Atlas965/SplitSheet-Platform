@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import { useEffect } from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -12,24 +13,16 @@ import ContractDetails from "@/pages/contract-details";
 import ContractEdit from "@/pages/contract-edit";
 import Profile from "@/pages/profile";
 import Templates from "@/pages/templates";
-import Analytics from "@/pages/analytics";
 import Billing from "@/pages/billing";
 import Subscribe from "@/pages/subscribe";
 import ContractForm from "@/pages/contract-form";
-import Negotiations from "@/pages/negotiations";
-import NegotiationDetail from "@/pages/negotiation-detail";
-import Matches from "@/pages/matches";
-import Messages from "@/pages/messages";
 import Admin from "@/pages/admin";
-import Search from "@/pages/search";
 import Ownership from "@/pages/ownership";
 import Notifications from "@/pages/notifications";
 import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
 import Organizations from "@/pages/organizations";
 import OrganizationDetail from "@/pages/organization-detail";
-import Creators from "@/pages/creators";
-import CreatorDetail from "@/pages/creator-detail";
 import ConfirmSplit from "@/pages/confirm-split";
 import NotFound from "@/pages/not-found";
 import SoundLedgerCopilot from "@/components/SoundLedgerCopilot";
@@ -38,6 +31,14 @@ import TermsGate from "@/components/TermsGate";
 import OperatorLayout from "@/components/OperatorLayout";
 import ClientDetail from "@/pages/client-detail";
 import ProjectDetail from "@/pages/project-detail";
+
+function RedirectTo({ href }: { href: string }) {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation(href);
+  }, [href, setLocation]);
+  return null;
+}
 
 function AuthenticatedRoutes() {
   return (
@@ -48,7 +49,6 @@ function AuthenticatedRoutes() {
         <Route path="/contracts/:id" component={ContractDetails} />
         <Route path="/contracts/:id/edit" component={ContractEdit} />
         <Route path="/profile" component={Profile} />
-        <Route path="/analytics" component={Analytics} />
         <Route path="/templates" component={Templates} />
         <Route path="/billing" component={Billing} />
         <Route
@@ -59,12 +59,6 @@ function AuthenticatedRoutes() {
             return <Subscribe plan={plan} />;
           }}
         />
-        <Route path="/negotiations" component={Negotiations} />
-        <Route path="/negotiations/:id" component={NegotiationDetail} />
-        <Route path="/matches" component={Matches} />
-        <Route path="/messages" component={Messages} />
-        <Route path="/messages/:userId" component={Messages} />
-        <Route path="/search" component={Search} />
         <Route path="/admin" component={Admin} />
         <Route path="/ownership" component={Ownership} />
         <Route path="/ownership/:id" component={Ownership} />
@@ -75,15 +69,16 @@ function AuthenticatedRoutes() {
         <Route path="/projects/:id" component={ProjectDetail} />
         <Route path="/organizations" component={Organizations} />
         <Route path="/organizations/:id" component={OrganizationDetail} />
-        <Route path="/creators" component={Creators} />
-        <Route path="/creators/:id" component={CreatorDetail} />
-        <Route
-          path="/contract/new"
-          component={() => {
-            window.location.replace("/contract/split-sheet");
-            return null;
-          }}
-        />
+        <Route path="/contract/new" component={() => <RedirectTo href="/projects?new=1" />} />
+        <Route path="/analytics" component={() => <RedirectTo href="/" />} />
+        <Route path="/negotiations" component={() => <RedirectTo href="/" />} />
+        <Route path="/negotiations/:id" component={() => <RedirectTo href="/" />} />
+        <Route path="/matches" component={() => <RedirectTo href="/" />} />
+        <Route path="/messages" component={() => <RedirectTo href="/" />} />
+        <Route path="/messages/:userId" component={() => <RedirectTo href="/" />} />
+        <Route path="/search" component={() => <RedirectTo href="/" />} />
+        <Route path="/creators" component={() => <RedirectTo href="/clients" />} />
+        <Route path="/creators/:id" component={() => <RedirectTo href="/clients" />} />
         <Route path="/contract/:type" component={ContractForm} />
         <Route component={NotFound} />
       </Switch>
@@ -92,11 +87,15 @@ function AuthenticatedRoutes() {
 }
 
 function Router() {
-  const { isAuthenticated, isLoading, error } = useAuth();
-  const showCopilot = !isLoading && isAuthenticated;
+  const { isAuthenticated, isLoading } = useAuth();
+  const showCopilot = isAuthenticated;
+  const publicConfirm = window.location.pathname.startsWith("/confirm/");
+  const publicMarketing =
+    window.location.pathname === "/" || window.location.pathname === "/login";
 
-  // Brief boot spinner only — never block the login page on API outages
-  if (isLoading && !error) {
+  // Do not block landing/login/confirm on a slow /api/auth/user call.
+  // Deep authenticated links still wait briefly so the shell does not flash.
+  if (isLoading && !publicConfirm && !publicMarketing) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" aria-label="Loading" />
@@ -109,10 +108,9 @@ function Router() {
       <Switch>
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
         <Route path="/confirm/:token" component={ConfirmSplit} />
-        {!isAuthenticated && <Route path="/login" component={Login} />}
-        {!isAuthenticated && <Route path="/" component={Landing} />}
         {isAuthenticated && <Route component={AuthenticatedRoutes} />}
-        {!isAuthenticated && <Route component={Landing} />}
+        <Route path="/login" component={Login} />
+        <Route path="/" component={Landing} />
         <Route component={NotFound} />
       </Switch>
       {showCopilot && <SoundLedgerCopilot />}
