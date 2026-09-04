@@ -53,12 +53,12 @@ const STEPS: Step[] = [
     targetPath: "/projects",
   },
   {
-    phase: "5 of 6 · Agreements",
-    title: "Agreements are documentation",
-    body: "Templates help you assemble the paperwork for a project. They are workflow documents, not legal advice. SplitSheet is not a law firm.",
-    cta: "Go to Agreements",
+    phase: "5 of 6 · Templates",
+    title: "Templates are documentation",
+    body: "Use the template library to assemble paperwork for a project. They are workflow documents, not legal advice. SplitSheet is not a law firm.",
+    cta: "Go to Templates",
     type: "center",
-    targetPath: "/contracts",
+    targetPath: "/templates",
   },
   {
     phase: "6 of 6 · Rights Ledger",
@@ -71,7 +71,7 @@ const STEPS: Step[] = [
 ];
 
 function resolvePageKey(path: string): string {
-  const roots = ["/clients", "/projects", "/contracts", "/ownership", "/billing"];
+  const roots = ["/clients", "/projects", "/templates", "/ownership", "/billing", "/analytics"];
   if (path === "/") return "/";
   for (const root of roots) {
     if (path === root || path.startsWith(`${root}/`)) return root;

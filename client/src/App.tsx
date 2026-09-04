@@ -13,6 +13,7 @@ import ContractDetails from "@/pages/contract-details";
 import ContractEdit from "@/pages/contract-edit";
 import Profile from "@/pages/profile";
 import Templates from "@/pages/templates";
+import Analytics from "@/pages/analytics";
 import Billing from "@/pages/billing";
 import Subscribe from "@/pages/subscribe";
 import ContractForm from "@/pages/contract-form";
@@ -50,6 +51,7 @@ function AuthenticatedRoutes() {
         <Route path="/contracts/:id/edit" component={ContractEdit} />
         <Route path="/profile" component={Profile} />
         <Route path="/templates" component={Templates} />
+        <Route path="/analytics" component={Analytics} />
         <Route path="/billing" component={Billing} />
         <Route
           path="/subscribe"
@@ -70,7 +72,6 @@ function AuthenticatedRoutes() {
         <Route path="/organizations" component={Organizations} />
         <Route path="/organizations/:id" component={OrganizationDetail} />
         <Route path="/contract/new" component={() => <RedirectTo href="/projects?new=1" />} />
-        <Route path="/analytics" component={() => <RedirectTo href="/" />} />
         <Route path="/negotiations" component={() => <RedirectTo href="/" />} />
         <Route path="/negotiations/:id" component={() => <RedirectTo href="/" />} />
         <Route path="/matches" component={() => <RedirectTo href="/" />} />

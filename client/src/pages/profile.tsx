@@ -67,6 +67,8 @@ export default function ProfilePage() {
   const [newSkill, setNewSkill] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showResetDialog, setShowResetDialog] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState("");
 
   // Track page view
   React.useEffect(() => {
@@ -245,6 +247,26 @@ export default function ProfilePage() {
       setIsExporting(false);
     }
   };
+
+  const resetWorkspaceMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/account/reset-workspace", { confirm: "RESET" }),
+    onSuccess: async () => {
+      toast({
+        title: "Workspace reset",
+        description: "Your projects, clients, and notifications were cleared. You are on Starter (free).",
+      });
+      setShowResetDialog(false);
+      setResetConfirm("");
+      await queryClient.invalidateQueries();
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Reset failed",
+        description: err.message || "Could not reset this workspace.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const deleteAccountMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/account/delete", { confirm: true }),
@@ -671,6 +693,18 @@ export default function ProfilePage() {
               </Button>
             </div>
 
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-lg border">
+              <div>
+                <p className="font-medium">Reset workspace to Starter</p>
+                <p className="text-sm text-muted-foreground">
+                  Clears only your projects, roster clients, and notifications, then returns this account to the free plan. Other operators are not affected. Type RESET to confirm.
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => setShowResetDialog(true)} data-testid="button-reset-workspace">
+                Reset workspace
+              </Button>
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-lg border border-destructive/30 bg-destructive/5">
               <div>
                 <p className="font-medium text-destructive">Delete my account</p>
@@ -687,6 +721,46 @@ export default function ProfilePage() {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog
+        open={showResetDialog}
+        onOpenChange={(open) => {
+          setShowResetDialog(open);
+          if (!open) setResetConfirm("");
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset this workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes your projects, confirmation links, roster clients, and notifications, then sets billing to Starter. Your login stays. Other accounts are not touched.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reset-confirm">Type RESET to continue</Label>
+            <Input
+              id="reset-confirm"
+              value={resetConfirm}
+              onChange={(e) => setResetConfirm(e.target.value)}
+              autoComplete="off"
+              data-testid="input-reset-confirm"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={resetConfirm !== "RESET" || resetWorkspaceMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                resetWorkspaceMutation.mutate();
+              }}
+              data-testid="button-confirm-reset-workspace"
+            >
+              {resetWorkspaceMutation.isPending ? "Resetting…" : "Reset to Starter"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>

@@ -9,7 +9,6 @@ import { resetOnboarding } from "@/components/OnboardingWalkthrough";
 import {
   Home,
   User,
-  FileText,
   Users,
   Layers,
   CreditCard,
@@ -22,6 +21,7 @@ import {
   FolderOpen,
   Building2,
   Shield,
+  BarChart3,
 } from "lucide-react";
 
 interface OperatorLayoutProps {
@@ -48,13 +48,13 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/clients", label: "Clients", icon: Users, testId: "nav-clients" },
       { href: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
       { href: "/organizations", label: "Organizations", icon: Building2, testId: "nav-organizations" },
-      { href: "/contracts", label: "Agreements", icon: FileText, testId: "nav-contracts" },
     ],
   },
   {
     title: "Records",
     items: [
       { href: "/ownership", label: "Rights Ledger", icon: BookOpen, testId: "nav-ownership" },
+      { href: "/analytics", label: "Analytics", icon: BarChart3, testId: "nav-analytics" },
       { href: "/templates", label: "Templates", icon: Layers, testId: "nav-templates" },
       { href: "/notifications", label: "Notifications", icon: Bell, testId: "nav-notifications" },
       { href: "/billing", label: "Billing", icon: CreditCard, testId: "nav-billing" },

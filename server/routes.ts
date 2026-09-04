@@ -1,5 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
+import { sql } from "drizzle-orm";
+import { db } from "./db";
 import { createServer, type Server } from "http";
 import Stripe from "stripe";
 import { storage } from "./storage";
@@ -29,6 +31,8 @@ import {
 } from "@shared/schema";
 import { registerConfirmationRoutes } from "./confirmation-routes";
 import { createBillingPortalSession } from "./stripe-billing-portal";
+import { resetOperatorWorkspace } from "./workspace-reset";
+import { summarizeWorkspace } from "@shared/workspace-analytics";
 import { registerCopilotRoutes } from "./copilot-routes";
 import { registerVoiceRoutes } from "./voice-routes";
 import { registerServiceRoutes } from "./service-routes";
@@ -1039,6 +1043,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     },
   );
+
+  app.post("/api/account/reset-workspace", isAuthenticated, async (req: any, res) => {
+    try {
+      if (String(req.body?.confirm ?? "") !== "RESET") {
+        return res.status(400).json({
+          message: "Type RESET to confirm you want to clear this workspace and return to Starter.",
+        });
+      }
+      const userId = req.user.claims.sub;
+      const result = await resetOperatorWorkspace(userId, stripe);
+      res.json({
+        ok: true,
+        ...result,
+        tier: "free",
+        message: "Workspace cleared. You are on the Starter (free) plan.",
+      });
+    } catch (error: any) {
+      console.error("[RESET WORKSPACE]", error?.message ?? error);
+      res.status(error?.status ?? 500).json({
+        message: error?.message ?? "Could not reset workspace.",
+      });
+    }
+  });
+
+  app.get("/api/analytics/workspace", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      const projects = await storage.getContracts(userId);
+      let clientCount = 0;
+      let contributorCount = 0;
+      const confirmations: { status?: string | null }[] = [];
+      try {
+        const clients = await db.execute(sql`
+          SELECT COUNT(*) AS cnt FROM operator_clients WHERE created_by = ${userId}
+        `);
+        clientCount = Number((clients.rows[0] as any)?.cnt ?? 0);
+        for (const project of projects) {
+          const collabs = await storage.getContractCollaborators(project.id);
+          contributorCount += collabs.length;
+          const conf = await db.execute(sql`
+            SELECT status FROM split_confirmations WHERE contract_id = ${project.id}
+          `);
+          for (const row of conf.rows as any[]) {
+            confirmations.push({ status: row.status });
+          }
+        }
+      } catch (inner: any) {
+        console.warn("[analytics/workspace] extra counts skipped:", inner?.message);
+      }
+      res.json(
+        summarizeWorkspace({
+          projects,
+          confirmations,
+          clientCount,
+          contributorCount,
+          tier: user?.subscriptionTier,
+        }),
+      );
+    } catch (error: any) {
+      console.error("[analytics/workspace]", error?.message ?? error);
+      res.status(500).json({ message: "Failed to load workspace analytics" });
+    }
+  });
 
   // Get subscription details endpoint
   app.get(
