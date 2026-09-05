@@ -55,6 +55,7 @@ export const users = pgTable("users", {
   // Terms of Service / Privacy Policy acceptance
   termsAcceptedAt: timestamp("terms_accepted_at"),
   termsVersion: varchar("terms_version"),
+  referralCode: varchar("referral_code"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

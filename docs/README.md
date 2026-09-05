@@ -395,6 +395,13 @@ All authenticated routes require an active session cookie. Public routes are not
 | POST | `/api/projects/bulk-send` | ✅ | Email pending contributors on selected projects (also `/api/sessions/bulk-send`) |
 | POST | `/api/projects/bulk-remind` | ✅ | Remind contributors who already received a first send |
 | POST | `/api/projects/:id/resend` | ✅ | Resend pending confirmation emails for one project |
+| GET/POST | `/api/cron/reminders` | Cron secret | Automated 3/7/14-day reminders from first send |
+| GET | `/api/analytics/workspace` | ✅ | Operator metrics, previous-period compare, estimated time saved |
+| GET | `/api/studio/:id` | Public | Studio name, logo, verification badge |
+| GET/POST | `/api/custom-fields` | ✅ | Operator custom template fields |
+| GET | `/api/copilot/history-suggestions` | ✅ | Deterministic previous-split suggestions |
+| GET | `/api/v1/*` | API key | Read-only ledger/sessions/contributors |
+| GET | `/api/referrals` | ✅ | Referral code, link, and stats |
 
 ### Contributor Confirmation (Public)
 

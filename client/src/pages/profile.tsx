@@ -693,6 +693,8 @@ export default function ProfilePage() {
               </Button>
             </div>
 
+            <ReferralCard />
+
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-lg border">
               <div>
                 <p className="font-medium">Reset workspace to Starter</p>
@@ -785,6 +787,23 @@ export default function ProfilePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+function ReferralCard() {
+  const { data } = useQuery<{ code: string; link: string; stats: Record<string, number> }>({
+    queryKey: ["/api/referrals"],
+  });
+  if (!data) return null;
+  return (
+    <div className="p-4 rounded-lg border space-y-2">
+      <p className="font-medium">Refer another studio</p>
+      <p className="text-sm text-muted-foreground">Share this link. Attribution is recorded server-side. No discounts are applied yet.</p>
+      <p className="text-sm font-mono break-all">{data.link}</p>
+      <p className="text-xs text-muted-foreground">
+        Pending {data.stats.pending ?? 0} · Signed up {data.stats.signedUp ?? 0} · Converted {data.stats.converted ?? 0}
+      </p>
     </div>
   );
 }

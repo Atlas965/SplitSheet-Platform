@@ -110,6 +110,10 @@ async function syncSubscriptionToUser(subscription: Stripe.Subscription): Promis
     stripeSubscriptionId: subscription.id,
     stripeCustomerId: customerId,
   });
+  if (active) {
+    const { markReferralConverted } = await import("./referral-routes");
+    await markReferralConverted(user.id);
+  }
 
   console.log(
     `[stripe/webhook] user=${user.id} sub=${subscription.id} status=${subscription.status} tier=${active ? tier : "free"}`,

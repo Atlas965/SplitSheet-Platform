@@ -7,6 +7,7 @@ import StatCard from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Plus, Users, FolderOpen, FileText } from "lucide-react";
 import WorkflowBanner from "@/components/WorkflowBanner";
+import { apiRequest } from "@/lib/queryClient";
 
 interface DashboardStats {
   totalProjects?: number;
@@ -30,6 +31,15 @@ interface Contract {
 export default function Dashboard() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const code = localStorage.getItem("splitsheet_ref");
+    if (!code) return;
+    apiRequest("POST", "/api/referrals/claim", { code })
+      .then(() => localStorage.removeItem("splitsheet_ref"))
+      .catch(() => localStorage.removeItem("splitsheet_ref"));
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {

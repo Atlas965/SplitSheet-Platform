@@ -140,6 +140,11 @@ export default function Login() {
     };
   }, []);
 
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get("ref");
+    if (ref) localStorage.setItem("splitsheet_ref", ref.toUpperCase());
+  }, []);
+
   const enabled = providers.filter((p) => p.enabled);
   const providerNames = enabled.map((p) => p.label.replace(/^Continue with\s+/i, ""));
   const signInLead =
