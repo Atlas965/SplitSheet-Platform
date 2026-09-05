@@ -9,9 +9,15 @@ type WorkspaceAnalytics = {
   drafts: number;
   pendingConfirmation: number;
   confirmed: number;
+  sessionsThisMonth?: number;
+  sessionsVsPreviousPeriod?: { label: string };
+  averageConfirmationHours?: number | null;
   confirmationRate: number;
   clientCount: number;
   contributorCount: number;
+  sessionsOverTime?: { month: string; count: number }[];
+  agreementTypes?: { type: string; count: number }[];
+  estimatedTimeSaved?: { minutes: number; label: string; calculation: string };
   plan: {
     tier: string;
     projectLimit: number | null;
@@ -94,6 +100,27 @@ export default function Analytics() {
           hint="People on your projects"
           icon={Layers}
           testId="stat-contributors"
+        />
+        <MetricCard
+          title="Sessions this month"
+          value={data?.sessionsThisMonth ?? 0}
+          hint={data?.sessionsVsPreviousPeriod?.label ?? "Compared with your previous period"}
+          icon={FolderOpen}
+          testId="stat-month"
+        />
+        <MetricCard
+          title="Avg confirmation time"
+          value={data?.averageConfirmationHours != null ? `${data.averageConfirmationHours}h` : "—"}
+          hint="From send to confirm"
+          icon={Clock}
+          testId="stat-avg-time"
+        />
+        <MetricCard
+          title={data?.estimatedTimeSaved?.label ?? "Estimated time saved"}
+          value={`${data?.estimatedTimeSaved?.minutes ?? 0} min`}
+          hint={data?.estimatedTimeSaved?.calculation ?? "Estimate, not an industry benchmark"}
+          icon={CheckCircle2}
+          testId="stat-time-saved"
         />
       </div>
 
