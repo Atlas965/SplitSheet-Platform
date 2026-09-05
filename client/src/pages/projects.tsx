@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
-import { Music2, Search, Plus, CheckCircle2, Clock, FileEdit } from "lucide-react";
+import { Music2, Search, Plus, CheckCircle2, Clock, FileEdit, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import Footer from "@/components/Footer";
@@ -49,6 +50,15 @@ export default function Projects() {
     searchParams.get("new") === "1" || Boolean(prefillClientId),
   );
   const [title, setTitle] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkResult, setBulkResult] = useState<{
+    sent: number;
+    failed: number;
+    skipped: number;
+    truncated?: boolean;
+    projects: { projectId: string; title: string; message?: string; recipients: { name: string; status: string; message: string }[] }[];
+  } | null>(null);
 
   const { data: prefillClient } = useQuery<{ id: string; name: string }>({
     queryKey: ["/api/clients", prefillClientId],
@@ -74,6 +84,24 @@ export default function Projects() {
     },
     onError: (err: Error) => {
       toast({ title: "Could not create project", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const bulkSend = useMutation({
+    mutationFn: (projectIds: string[]) =>
+      apiRequest("POST", "/api/projects/bulk-send", { projectIds }).then((r) => r.json()),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      setBulkResult(data);
+      setSelecting(false);
+      setSelected([]);
+      toast({
+        title: "Bulk send finished",
+        description: `${data.sent} sent, ${data.failed} failed, ${data.skipped} skipped.`,
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Could not send confirmations", description: err.message, variant: "destructive" });
     },
   });
 
@@ -118,9 +146,33 @@ export default function Projects() {
               All your songs, tracks, and music projects
             </p>
           </div>
-          <Button onClick={() => setShowNew(true)} data-testid="button-new-project">
-            <Plus className="h-4 w-4 mr-1.5" /> New Project
-          </Button>
+          <div className="flex items-center gap-2">
+            {filtered.length > 0 && (
+              <Button
+                variant={selecting ? "secondary" : "outline"}
+                onClick={() => {
+                  setSelecting((v) => !v);
+                  setSelected([]);
+                }}
+                data-testid="button-select-projects"
+              >
+                {selecting ? "Cancel" : "Select"}
+              </Button>
+            )}
+            {selecting && (
+              <Button
+                onClick={() => bulkSend.mutate(selected)}
+                disabled={selected.length === 0 || bulkSend.isPending}
+                data-testid="button-bulk-send"
+              >
+                <Send className="h-4 w-4 mr-1.5" />
+                {bulkSend.isPending ? "Sending…" : `Send pending (${selected.length})`}
+              </Button>
+            )}
+            <Button onClick={() => setShowNew(true)} data-testid="button-new-project">
+              <Plus className="h-4 w-4 mr-1.5" /> New Project
+            </Button>
+          </div>
         </div>
 
         {/* Stats row */}
@@ -175,10 +227,28 @@ export default function Projects() {
             {filtered.map((project) => {
               const statusCfg = STATUS_CONFIG[project.status] ?? STATUS_CONFIG.draft;
               const collaborators = project.collaborators ?? [];
+              const checked = selected.includes(project.id);
+              const toggle = () => {
+                setSelected((ids) => {
+                  if (ids.includes(project.id)) return ids.filter((id) => id !== project.id);
+                  if (ids.length >= 10) return ids;
+                  return [...ids, project.id];
+                });
+              };
 
               return (
-                <Link key={project.id} href={`/projects/${project.id}`}>
-                  <div className="bg-card border border-border rounded-xl p-5 hover:border-accent/40 hover:shadow-sm transition-all cursor-pointer group">
+                <div key={project.id} className="relative">
+                  {selecting && (
+                    <div className="absolute top-3 left-3 z-10">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggle()}
+                        aria-label={`Select ${project.title}`}
+                      />
+                    </div>
+                  )}
+                <Link href={selecting ? "#" : `/projects/${project.id}`} onClick={(e) => { if (selecting) { e.preventDefault(); toggle(); } }}>
+                  <div className={`bg-card border border-border rounded-xl p-5 hover:border-accent/40 hover:shadow-sm transition-all cursor-pointer group ${selecting ? "pl-10" : ""} ${checked ? "border-accent/50" : ""}`}>
                     {/* Header */}
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 group-hover:bg-accent/20 transition-colors">
@@ -221,11 +291,36 @@ export default function Projects() {
                     </p>
                   </div>
                 </Link>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+      <Dialog open={!!bulkResult} onOpenChange={(open) => { if (!open) setBulkResult(null); }}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Confirmation send results</DialogTitle>
+            <DialogDescription>
+              {bulkResult?.sent ?? 0} sent, {bulkResult?.failed ?? 0} failed, {bulkResult?.skipped ?? 0} skipped.
+              {bulkResult?.truncated ? " Some recipients were deferred — retry to continue." : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {(bulkResult?.projects ?? []).map((project) => (
+              <div key={project.projectId} className="border border-border rounded-lg p-3">
+                <p className="font-medium">{project.title || "Project"}</p>
+                {project.message && <p className="text-xs text-muted-foreground mt-1">{project.message}</p>}
+                {project.recipients.map((r) => (
+                  <p key={`${project.projectId}-${r.name}-${r.message}`} className="text-xs text-muted-foreground mt-1">
+                    {r.name}: {r.message}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={showNew} onOpenChange={setShowNew}>
         <DialogContent>
           <DialogHeader>

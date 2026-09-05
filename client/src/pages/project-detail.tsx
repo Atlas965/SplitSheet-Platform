@@ -205,6 +205,20 @@ export default function ProjectDetail() {
     onError: () => toast({ title: "Error", description: "Failed to remove.", variant: "destructive" }),
   });
 
+  const resendMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/projects/${id}/resend`, {}).then((r) => r.json()),
+    onSuccess: (data: { sent: number; failed: number; skipped: number; truncated?: boolean }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "contributors"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/contracts/${id}/confirmations`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", id, "workflow"] });
+      toast({
+        title: "Pending emails processed",
+        description: `${data.sent} sent, ${data.failed} failed, ${data.skipped} skipped.${data.truncated ? " Retry to continue." : ""}`,
+      });
+    },
+    onError: (err: Error) => toast({ title: "Could not resend", description: err.message, variant: "destructive" }),
+  });
+
   const sendConfirmationsMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/projects/${id}/send-confirmations`, {}),
     onSuccess: (data: any) => {
@@ -528,6 +542,15 @@ export default function ProjectDetail() {
                 >
                   <Send className="h-4 w-4 mr-2" />
                   {sendConfirmationsMutation.isPending ? "Generating…" : status === "confirmed" ? "All Confirmed ✓" : "Generate Confirmation Links"}
+                </Button>
+                <Button
+                  className="w-full"
+                  variant="outline"
+                  onClick={() => resendMutation.mutate()}
+                  disabled={!isValid || contributors.length === 0 || resendMutation.isPending || status === "confirmed" || status === "archived"}
+                  data-testid="button-resend-confirmations"
+                >
+                  {resendMutation.isPending ? "Sending…" : "Email pending confirmations"}
                 </Button>
                 {!isValid && contributors.length > 0 && (
                   <p className="text-xs text-red-600">Fix ownership total before sending confirmations.</p>

@@ -392,7 +392,23 @@ export default function ConfirmationTracker({ contractId, contractTitle }: Confi
       qc.invalidateQueries({ queryKey: [`/api/contracts/${contractId}/confirmations`] }),
   });
 
+  const resendMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", `/api/projects/${contractId}/resend`, {}).then((r) => r.json()),
+    onSuccess: (result: { sent: number; failed: number; skipped: number }) => {
+      qc.invalidateQueries({ queryKey: [`/api/contracts/${contractId}/confirmations`] });
+      toast({
+        title: "Pending emails processed",
+        description: `${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped.`,
+      });
+    },
+    onError: () => toast({ title: "Failed", description: "Could not resend confirmation emails.", variant: "destructive" }),
+  });
+
   const hasLinks = (data?.confirmations?.length ?? 0) > 0;
+  const pendingWithEmail = (data?.confirmations ?? []).filter(
+    (c) => c.status !== "confirmed" && c.status !== "revoked" && !!c.collaborator?.email,
+  ).length;
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -416,6 +432,17 @@ export default function ConfirmationTracker({ contractId, contractTitle }: Confi
             className="text-xs"
           >
             <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => resendMutation.mutate()}
+            disabled={resendMutation.isPending || pendingWithEmail === 0}
+            data-testid="btn-resend-confirmations"
+          >
+            {resendMutation.isPending
+              ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Sending…</>
+              : <><Send className="h-3.5 w-3.5 mr-1.5" />Email pending</>}
           </Button>
           <Button
             size="sm"

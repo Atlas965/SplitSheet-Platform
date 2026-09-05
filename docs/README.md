@@ -392,6 +392,9 @@ All authenticated routes require an active session cookie. Public routes are not
 | PATCH | `/api/projects/:projectId/contributors/:id` | ✅ | Edit a contributor |
 | DELETE | `/api/projects/:projectId/contributors/:id` | ✅ | Remove a contributor |
 | POST | `/api/projects/:id/send-confirmations` | ✅ | Generate confirmation tokens |
+| POST | `/api/projects/bulk-send` | ✅ | Email pending contributors on selected projects (also `/api/sessions/bulk-send`) |
+| POST | `/api/projects/bulk-remind` | ✅ | Remind contributors who already received a first send |
+| POST | `/api/projects/:id/resend` | ✅ | Resend pending confirmation emails for one project |
 
 ### Contributor Confirmation (Public)
 

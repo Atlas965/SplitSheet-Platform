@@ -33,6 +33,8 @@ import {
   parseOptionalPercent,
 } from "@shared/client-profile";
 import { logger } from "./logger";
+import { MAX_EMAILS_PER_REQUEST, parseBulkProjectIds, type ConfirmationSendMode } from "@shared/confirmation-send";
+import { dispatchPendingConfirmations, summarizeDispatch } from "./confirmation-dispatch";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -1019,6 +1021,95 @@ export function registerServiceRoutes(app: Express): void {
       res.status(500).json({ message: "Failed to remove contributor" });
     }
   });
+
+  const bulkDispatch = (mode: ConfirmationSendMode) =>
+    async (req: OrgAuthedRequest, res: Response) => {
+      try {
+        const userId = (req as any).user?.claims?.sub as string;
+        const parsed = parseBulkProjectIds(req.body);
+        if (!parsed.ok) {
+          res.status(400).json({ message: parsed.message });
+          return;
+        }
+        const remainingEmails = { value: MAX_EMAILS_PER_REQUEST };
+        const startedAt = Date.now();
+        const projects = [];
+        for (const id of parsed.ids) {
+          const access = await assertContractAccess(req, id, userId);
+          if ("error" in access) {
+            projects.push({
+              projectId: id,
+              title: "",
+              ok: false,
+              skipped: true,
+              code: access.status === 404 ? "not_found" as const : "unauthorized" as const,
+              message: access.error,
+              recipients: [],
+            });
+            continue;
+          }
+          projects.push(await dispatchPendingConfirmations({
+            mode,
+            contract: access.contract,
+            userId,
+            req,
+            remainingEmails,
+            startedAt,
+          }));
+        }
+        const summary = summarizeDispatch(projects);
+        logger.info(mode === "remind" ? "confirmation.bulk_remind" : "confirmation.bulk_send", {
+          userId,
+          mode,
+          projects: parsed.ids.length,
+          sent: summary.sent,
+          failed: summary.failed,
+          skipped: summary.skipped,
+        });
+        res.json(summary);
+      } catch (error) {
+        logger.error("confirmation.bulk_send_failed", { error: (error as Error)?.message, mode });
+        res.status(500).json({ message: "Failed to send confirmations" });
+      }
+    };
+
+  const resendOne = async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user?.claims?.sub as string;
+      const access = await assertContractAccess(req, req.params.id, userId);
+      if ("error" in access) {
+        res.status(access.status).json({ message: access.error });
+        return;
+      }
+      const project = await dispatchPendingConfirmations({
+        mode: "resend",
+        contract: access.contract,
+        userId,
+        req,
+        remainingEmails: { value: MAX_EMAILS_PER_REQUEST },
+        startedAt: Date.now(),
+      });
+      const summary = summarizeDispatch([project]);
+      logger.info("confirmation.resend", {
+        userId,
+        projectId: req.params.id,
+        sent: summary.sent,
+        failed: summary.failed,
+        skipped: summary.skipped,
+      });
+      res.json(summary);
+    } catch (error) {
+      logger.error("confirmation.resend_failed", { error: (error as Error)?.message });
+      res.status(500).json({ message: "Failed to resend confirmations" });
+    }
+  };
+
+  app.post("/api/projects/bulk-send", ...requireActivePermission("agreement.send"), bulkDispatch("send"));
+  app.post("/api/sessions/bulk-send", ...requireActivePermission("agreement.send"), bulkDispatch("send"));
+  app.post("/api/projects/bulk-remind", ...requireActivePermission("agreement.send"), bulkDispatch("remind"));
+  app.post("/api/sessions/bulk-remind", ...requireActivePermission("agreement.send"), bulkDispatch("remind"));
+  app.post("/api/projects/:id/resend", ...requireActivePermission("agreement.send"), resendOne);
+  app.post("/api/sessions/:id/resend", ...requireActivePermission("agreement.send"), resendOne);
 
   app.post("/api/projects/:id/send-confirmations", ...requireActivePermission("agreement.send"), async (req: Request, res: Response) => {
     const contractId = req.params.id;

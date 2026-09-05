@@ -40,6 +40,8 @@ import {
   recordWorkflowEvent,
   RSEE_ACTIONS,
 } from "./rights-state-engine";
+import { dispatchPendingConfirmations, summarizeDispatch } from "./confirmation-dispatch";
+import { MAX_EMAILS_PER_REQUEST } from "@shared/confirmation-send";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -325,6 +327,31 @@ export function registerConfirmationRoutes(app: Express): void {
       } catch (err: any) {
         console.error("[GET-WORKFLOW]", err.message);
         res.status(500).json({ error: "Could not load workflow status." });
+      }
+    },
+  );
+
+  // OPERATOR: Resend pending confirmation emails (same tokens, skip confirmed)
+  app.post(
+    "/api/contracts/:id/confirmations/resend",
+    ...requireActivePermission("agreement.send"),
+    async (req: Request, res: Response): Promise<void> => {
+      const contractId = req.params.id;
+      const userId = (req as any).user?.claims?.sub;
+      try {
+        const owned = await requireOwnedContract(req, res, contractId);
+        if (!owned) return;
+        const project = await dispatchPendingConfirmations({
+          mode: "resend",
+          contract: owned,
+          userId,
+          req,
+          remainingEmails: { value: MAX_EMAILS_PER_REQUEST },
+          startedAt: Date.now(),
+        });
+        res.json(summarizeDispatch([project]));
+      } catch (err: any) {
+        res.status(500).json({ error: "Failed to resend confirmations" });
       }
     },
   );
