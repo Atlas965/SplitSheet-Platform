@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { LEGAL_DISCLAIMER } from "@shared/agreement-catalog";
 import { Search, FileText, ShieldAlert, Eye } from "lucide-react";
+import CustomFieldsManager from "@/components/CustomFieldsManager";
 
 type TemplateRow = {
   id: string;
@@ -132,6 +133,9 @@ export default function Templates() {
           <p className="mt-3 text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-3">
             {meta?.disclaimer || LEGAL_DISCLAIMER}
           </p>
+          <div className="mt-4">
+            <CustomFieldsManager templateType="split-sheet" />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">

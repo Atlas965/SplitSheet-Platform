@@ -200,6 +200,20 @@ export function generateContractPDF(contract: ContractData): jsPDF {
     yPosition = margin;
   }
   
+  const customFields = contract.data?.customFieldSnapshot as { id: string; label: string }[] | undefined;
+  const customValues = contract.data?.customFieldValues as Record<string, unknown> | undefined;
+  if (customFields?.length) {
+    doc.setFont(undefined, 'bold');
+    doc.text('CUSTOM FIELDS', margin, yPosition);
+    yPosition += 8;
+    doc.setFont(undefined, 'normal');
+    for (const field of customFields) {
+      yPosition = addWrappedText(`${field.label}: ${customValues?.[field.id] ?? "—"}`, margin, yPosition, contentWidth, 11);
+      yPosition += 4;
+    }
+    yPosition += 8;
+  }
+
   doc.setFont(undefined, 'bold');
   doc.text('LEGAL DISCLAIMER', margin, yPosition);
   yPosition += 10;
