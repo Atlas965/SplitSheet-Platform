@@ -6,7 +6,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { isAuthenticated } from "./replitAuth";
-import { requireOwnedCollaborator, resourceBelongsToOrg, resolveRequestOrgId } from "./authz-helpers";
+import { resourceBelongsToOrg, resolveRequestOrgId } from "./authz-helpers";
 import { requireActivePermission } from "./rbac-middleware";
 import { storage } from "./storage";
 import { db } from "./db";
@@ -26,6 +26,13 @@ import {
   contributorLimitForTier,
   projectLimitForTier,
 } from "@shared/plan-limits";
+import {
+  clientDuplicateKey,
+  clientProfileSchema,
+  parseClientCsv,
+  parseOptionalPercent,
+} from "@shared/client-profile";
+import { logger } from "./logger";
 
 function generateToken(): string {
   return generateConfirmationToken();
@@ -114,13 +121,19 @@ async function buildClientList(userId: string, organizationId?: string | null) {
           name: collab.name,
           email: collab.email ?? null,
           phone: null,
+          company: null,
           type: collab.role ?? "artist",
           role: collab.role,
           status: collab.status,
           notes: null,
+          defaultOwnershipPercentage: collab.ownershipPercentage != null
+            ? Number(collab.ownershipPercentage)
+            : null,
+          defaultRoyaltyPercentage: null,
           contractCount: 1,
           lastActivity: contract.updatedAt ?? contract.createdAt,
           createdAt: collab.createdAt,
+          source: "project",
         });
       }
     }
@@ -137,11 +150,29 @@ async function ensureOperatorClientsTable(): Promise<void> {
       name varchar NOT NULL,
       email varchar,
       phone varchar,
+      company varchar,
       type varchar DEFAULT 'artist',
       notes text,
+      default_ownership_percentage decimal(5, 2),
+      default_royalty_percentage decimal(5, 2),
       created_at timestamp DEFAULT now(),
       updated_at timestamp DEFAULT now()
     )
+  `);
+  await db.execute(sql`
+    ALTER TABLE operator_clients
+      ADD COLUMN IF NOT EXISTS company varchar,
+      ADD COLUMN IF NOT EXISTS default_ownership_percentage decimal(5, 2),
+      ADD COLUMN IF NOT EXISTS default_royalty_percentage decimal(5, 2);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_created_by ON operator_clients (created_by);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_created_by_email ON operator_clients (created_by, email);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_organization_id ON operator_clients (organization_id);
   `);
 }
 
@@ -149,30 +180,221 @@ async function listRosterClients(userId: string, organizationId?: string | null)
   await ensureOperatorClientsTable();
   const rows = organizationId
     ? await db.execute(sql`
-        SELECT id, name, email, phone, type, notes, created_at, created_by
+        SELECT id, name, email, phone, company, type, notes,
+               default_ownership_percentage, default_royalty_percentage,
+               created_at, created_by
         FROM operator_clients
         WHERE organization_id = ${organizationId}
         ORDER BY created_at DESC
       `)
     : await db.execute(sql`
-        SELECT id, name, email, phone, type, notes, created_at, created_by
+        SELECT id, name, email, phone, company, type, notes,
+               default_ownership_percentage, default_royalty_percentage,
+               created_at, created_by
         FROM operator_clients
         WHERE created_by = ${userId} AND organization_id IS NULL
         ORDER BY created_at DESC
       `);
-  return (rows.rows as Record<string, unknown>[]).map((r) => ({
+  return (rows.rows as Record<string, unknown>[]).map((r) => mapRosterRow(r));
+}
+
+function mapRosterRow(r: Record<string, unknown>) {
+  return {
     id: String(r.id),
     name: String(r.name),
     email: (r.email as string) ?? null,
     phone: (r.phone as string) ?? null,
+    company: (r.company as string) ?? null,
     type: (r.type as string) ?? "artist",
     role: (r.type as string) ?? "artist",
     notes: (r.notes as string) ?? null,
+    defaultOwnershipPercentage: r.default_ownership_percentage != null
+      ? Number(r.default_ownership_percentage)
+      : null,
+    defaultRoyaltyPercentage: r.default_royalty_percentage != null
+      ? Number(r.default_royalty_percentage)
+      : null,
     contractCount: 0,
     lastActivity: r.created_at,
     createdAt: r.created_at,
-    source: "roster",
-  }));
+    source: "roster" as const,
+  };
+}
+
+async function findOwnedClient(
+  userId: string,
+  organizationId: string | null | undefined,
+  id: string,
+) {
+  const roster = await listRosterClients(userId, organizationId);
+  const derived = await buildClientList(userId, organizationId);
+  return [...roster, ...derived].find((c) => c.id === id) ?? null;
+}
+
+type ParsedClientProfile = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+  type: string;
+  notes: string | null;
+  ownership: number | null;
+  royalty: number | null;
+};
+
+function parseClientBody(body: unknown): { ok: true; data: ParsedClientProfile } | { ok: false; message: string } {
+  const parsed = clientProfileSchema.safeParse(body);
+  if (!parsed.success) {
+    return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid client data." };
+  }
+  try {
+    return {
+      ok: true,
+      data: {
+        name: parsed.data.name,
+        email: parsed.data.email?.trim() || null,
+        phone: parsed.data.phone?.trim() || null,
+        company: parsed.data.company?.trim() || null,
+        type: (parsed.data.role || parsed.data.type || "artist").trim(),
+        notes: parsed.data.notes?.trim() || null,
+        ownership: parseOptionalPercent(parsed.data.defaultOwnershipPercentage, "Default ownership"),
+        royalty: parseOptionalPercent(parsed.data.defaultRoyaltyPercentage, "Default royalty"),
+      },
+    };
+  } catch (err: any) {
+    return { ok: false, message: err.message };
+  }
+}
+
+async function insertRosterClient(
+  userId: string,
+  organizationId: string | null,
+  data: ParsedClientProfile,
+) {
+  await ensureOperatorClientsTable();
+  const inserted = await db.execute(sql`
+    INSERT INTO operator_clients (
+      organization_id, created_by, name, email, phone, company, type, notes,
+      default_ownership_percentage, default_royalty_percentage
+    ) VALUES (
+      ${organizationId},
+      ${userId},
+      ${data.name},
+      ${data.email},
+      ${data.phone},
+      ${data.company},
+      ${data.type},
+      ${data.notes},
+      ${data.ownership},
+      ${data.royalty}
+    )
+    RETURNING id, name, email, phone, company, type, notes,
+              default_ownership_percentage, default_royalty_percentage,
+              created_at, created_by
+  `);
+  return mapRosterRow(inserted.rows[0] as Record<string, unknown>);
+}
+
+async function updateRosterClient(
+  userId: string,
+  organizationId: string | null | undefined,
+  id: string,
+  data: ParsedClientProfile,
+) {
+  await ensureOperatorClientsTable();
+  const updated = organizationId
+    ? await db.execute(sql`
+        UPDATE operator_clients SET
+          name = ${data.name},
+          email = ${data.email},
+          phone = ${data.phone},
+          company = ${data.company},
+          type = ${data.type},
+          notes = ${data.notes},
+          default_ownership_percentage = ${data.ownership},
+          default_royalty_percentage = ${data.royalty},
+          updated_at = now()
+        WHERE id = ${id} AND organization_id = ${organizationId}
+        RETURNING id, name, email, phone, company, type, notes,
+                  default_ownership_percentage, default_royalty_percentage,
+                  created_at, created_by
+      `)
+    : await db.execute(sql`
+        UPDATE operator_clients SET
+          name = ${data.name},
+          email = ${data.email},
+          phone = ${data.phone},
+          company = ${data.company},
+          type = ${data.type},
+          notes = ${data.notes},
+          default_ownership_percentage = ${data.ownership},
+          default_royalty_percentage = ${data.royalty},
+          updated_at = now()
+        WHERE id = ${id} AND created_by = ${userId} AND organization_id IS NULL
+        RETURNING id, name, email, phone, company, type, notes,
+                  default_ownership_percentage, default_royalty_percentage,
+                  created_at, created_by
+      `);
+  const row = updated.rows[0] as Record<string, unknown> | undefined;
+  return row ? mapRosterRow(row) : null;
+}
+
+async function deleteRosterClient(
+  userId: string,
+  organizationId: string | null | undefined,
+  id: string,
+): Promise<boolean> {
+  await ensureOperatorClientsTable();
+  const deleted = organizationId
+    ? await db.execute(sql`
+        DELETE FROM operator_clients
+        WHERE id = ${id} AND organization_id = ${organizationId}
+        RETURNING id
+      `)
+    : await db.execute(sql`
+        DELETE FROM operator_clients
+        WHERE id = ${id} AND created_by = ${userId} AND organization_id IS NULL
+        RETURNING id
+      `);
+  return deleted.rows.length > 0;
+}
+
+function clientSnapshotFromRoster(client: ReturnType<typeof mapRosterRow>) {
+  return {
+    id: client.id,
+    name: client.name,
+    email: client.email,
+    phone: client.phone,
+    company: client.company,
+    type: client.type,
+    role: client.role,
+    notes: client.notes,
+    defaultOwnershipPercentage: client.defaultOwnershipPercentage,
+    defaultRoyaltyPercentage: client.defaultRoyaltyPercentage,
+    copiedAt: new Date().toISOString(),
+  };
+}
+
+async function resolveOwnedRosterClient(
+  userId: string,
+  organizationId: string | null | undefined,
+  clientId: string | null | undefined,
+) {
+  if (!clientId) return null;
+  const roster = await listRosterClients(userId, organizationId);
+  return roster.find((c) => c.id === clientId) ?? null;
+}
+
+async function rosterHasDuplicate(
+  userId: string,
+  organizationId: string | null | undefined,
+  email: string | null | undefined,
+  name: string | null | undefined,
+  exceptId?: string,
+): Promise<boolean> {
+  const roster = await listRosterClients(userId, organizationId);
+  const key = clientDuplicateKey(email, name);
+  return roster.some((c) => c.id !== exceptId && clientDuplicateKey(c.email, c.name) === key);
 }
 
 const contributorSchema = z.object({
@@ -229,22 +451,37 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  // ── Clients (derived from collaborators) ────────────────────────────────────
+  // ── Clients (reusable roster + derived project people) ─────────────────────
   app.get("/api/clients", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
-      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
+      const orgId = req.orgAuth?.organizationId;
+      const roster = await listRosterClients(userId, orgId);
+      const derived = await buildClientList(userId, orgId);
       const seen = new Set(
-        roster.map((c) => (c.email || c.name).toLowerCase()).filter(Boolean),
+        roster.map((c) => clientDuplicateKey(c.email, c.name)).filter(Boolean),
       );
       const extras = derived.filter((c) => {
-        const key = String(c.email || c.name || "").toLowerCase();
+        const key = clientDuplicateKey(c.email as string | null, c.name as string);
         return key && !seen.has(key);
       });
-      res.json([...roster, ...extras]);
+      const userContracts = orgId
+        ? await storage.getContractsForOrganization(orgId, userId)
+        : await storage.getContracts(userId);
+      const clientIdCounts = new Map<string, number>();
+      for (const contract of userContracts) {
+        const linked = ((contract.data ?? {}) as Record<string, unknown>).clientId;
+        if (typeof linked === "string" && linked) {
+          clientIdCounts.set(linked, (clientIdCounts.get(linked) ?? 0) + 1);
+        }
+      }
+      const merged = [...roster, ...extras].map((c) => ({
+        ...c,
+        contractCount: Math.max(Number(c.contractCount ?? 0), clientIdCounts.get(String(c.id)) ?? 0),
+      }));
+      res.json(merged);
     } catch (error) {
-      console.error("[CLIENTS LIST]", error);
+      logger.error("clients.list_failed", { error: (error as Error)?.message });
       res.status(500).json({ message: "Failed to fetch clients" });
     }
   });
@@ -252,51 +489,117 @@ export function registerServiceRoutes(app: Express): void {
   app.post("/api/clients", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const name = String(req.body?.name ?? "").trim();
-      if (!name) {
-        res.status(400).json({ message: "Client name is required." });
+      const parsed = parseClientBody(req.body);
+      if (!parsed.ok) {
+        res.status(400).json({ message: parsed.message });
         return;
       }
-      await ensureOperatorClientsTable();
       const orgId = req.orgAuth?.organizationId ?? null;
-      const inserted = await db.execute(sql`
-        INSERT INTO operator_clients (organization_id, created_by, name, email, phone, type, notes)
-        VALUES (
-          ${orgId},
-          ${userId},
-          ${name},
-          ${String(req.body?.email ?? "").trim() || null},
-          ${String(req.body?.phone ?? "").trim() || null},
-          ${String(req.body?.type ?? "artist")},
-          ${String(req.body?.notes ?? "").trim() || null}
-        )
-        RETURNING id, name, email, phone, type, notes, created_at
-      `);
-      const row = inserted.rows[0] as Record<string, unknown>;
-      res.status(201).json({
-        id: row.id,
-        name: row.name,
-        email: row.email ?? null,
-        phone: row.phone ?? null,
-        type: row.type,
-        role: row.type,
-        notes: row.notes ?? null,
-        contractCount: 0,
-        createdAt: row.created_at,
-        source: "roster",
-      });
+      if (await rosterHasDuplicate(userId, orgId, parsed.data.email, parsed.data.name)) {
+        res.status(409).json({ message: "A client with this email or name already exists." });
+        return;
+      }
+      const created = await insertRosterClient(userId, orgId, parsed.data);
+      logger.info("client.created", { userId, clientId: created.id });
+      res.status(201).json(created);
     } catch (error) {
-      console.error("[CLIENTS CREATE]", error);
+      logger.error("clients.create_failed", { error: (error as Error)?.message });
       res.status(500).json({ message: "Failed to create client" });
+    }
+  });
+
+  app.post("/api/clients/import", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user.claims.sub;
+      const orgId = req.orgAuth?.organizationId ?? null;
+      const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+      if (!csv.trim()) {
+        res.status(400).json({ message: "CSV content is required." });
+        return;
+      }
+      const { rows, errors } = parseClientCsv(csv);
+      if (rows.length > 200) {
+        res.status(400).json({ message: "CSV import is limited to 200 rows." });
+        return;
+      }
+      const created: ReturnType<typeof mapRosterRow>[] = [];
+      const skipped: { line: number; message: string }[] = [...errors];
+      const seenInFile = new Set<string>();
+      for (let i = 0; i < rows.length; i++) {
+        const parsed = parseClientBody(rows[i]);
+        if (!parsed.ok) {
+          skipped.push({ line: i + 2, message: parsed.message });
+          continue;
+        }
+        const key = clientDuplicateKey(parsed.data.email, parsed.data.name);
+        if (seenInFile.has(key)) {
+          skipped.push({ line: i + 2, message: "Duplicate row in this file." });
+          continue;
+        }
+        seenInFile.add(key);
+        if (await rosterHasDuplicate(userId, orgId, parsed.data.email, parsed.data.name)) {
+          skipped.push({ line: i + 2, message: "A client with this email or name already exists." });
+          continue;
+        }
+        created.push(await insertRosterClient(userId, orgId, parsed.data));
+      }
+      logger.info("clients.imported", { userId, created: created.length, skipped: skipped.length });
+      res.status(200).json({ created: created.length, skipped: skipped.length, clients: created, errors: skipped });
+    } catch (error) {
+      logger.error("clients.import_failed", { error: (error as Error)?.message });
+      res.status(500).json({ message: "Failed to import clients" });
+    }
+  });
+
+  app.post("/api/clients/from-contributor", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user.claims.sub;
+      const projectId = String(req.body?.projectId ?? "").trim();
+      const contributorId = String(req.body?.contributorId ?? "").trim();
+      if (!projectId || !contributorId) {
+        res.status(400).json({ message: "projectId and contributorId are required." });
+        return;
+      }
+      const access = await assertContractAccess(req, projectId, userId);
+      if ("error" in access) {
+        res.status(access.status).json({ message: access.error });
+        return;
+      }
+      const collabs = await storage.getContractCollaborators(projectId);
+      const collab = collabs.find((c) => c.id === contributorId);
+      if (!collab) {
+        res.status(404).json({ message: "Contributor not found on this project." });
+        return;
+      }
+      const parsed = parseClientBody({
+        name: collab.name,
+        email: collab.email ?? "",
+        type: collab.role,
+        role: collab.role,
+        defaultOwnershipPercentage: collab.ownershipPercentage ?? undefined,
+      });
+      if (!parsed.ok) {
+        res.status(400).json({ message: parsed.message });
+        return;
+      }
+      const orgId = req.orgAuth?.organizationId ?? null;
+      if (await rosterHasDuplicate(userId, orgId, parsed.data.email, parsed.data.name)) {
+        res.status(409).json({ message: "A client with this email or name already exists." });
+        return;
+      }
+      const created = await insertRosterClient(userId, orgId, parsed.data);
+      logger.info("client.created_from_contributor", { userId, clientId: created.id, projectId });
+      res.status(201).json(created);
+    } catch (error) {
+      logger.error("clients.from_contributor_failed", { error: (error as Error)?.message });
+      res.status(500).json({ message: "Failed to save contributor as client" });
     }
   });
 
   app.get("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
-      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
-      const client = [...roster, ...derived].find((c) => c.id === req.params.id);
+      const client = await findOwnedClient(userId, req.orgAuth?.organizationId, req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
         return;
@@ -307,12 +610,10 @@ export function registerServiceRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
+  const listClientProjects = async (req: OrgAuthedRequest, res: Response) => {
     try {
       const userId = (req as any).user.claims.sub;
-      const roster = await listRosterClients(userId, req.orgAuth?.organizationId);
-      const derived = await buildClientList(userId, req.orgAuth?.organizationId);
-      const client = [...roster, ...derived].find((c) => c.id === req.params.id);
+      const client = await findOwnedClient(userId, req.orgAuth?.organizationId, req.params.id);
       if (!client) {
         res.status(404).json({ message: "Client not found" });
         return;
@@ -329,7 +630,7 @@ export function registerServiceRoutes(app: Express): void {
         const match =
           data.clientId === req.params.id ||
           collabs.some(
-            (c) => c.id === req.params.id || c.email === email || c.name === name,
+            (c) => c.id === req.params.id || (!!email && c.email === email) || c.name === name,
           );
         if (match) projects.push(contractToProject(contract));
       }
@@ -337,34 +638,97 @@ export function registerServiceRoutes(app: Express): void {
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch client projects" });
     }
-  });
+  };
 
-  app.patch("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: any, res: Response) => {
+  app.get("/api/clients/:id/projects", ...requireActivePermission("client.manage"), listClientProjects);
+  app.get("/api/clients/:id/sessions", ...requireActivePermission("client.manage"), listClientProjects);
+
+  const updateClientHandler = async (req: OrgAuthedRequest, res: Response) => {
     try {
-      const owned = await requireOwnedCollaborator(req, res, req.params.id);
-      if (!owned) return;
-
-      const { name, email, role, type } = req.body ?? {};
-      const updates: Record<string, unknown> = {};
-      if (name) updates.name = name;
-      if (email !== undefined) updates.email = email || null;
-      if (role || type) updates.role = role ?? type;
-      if (!Object.keys(updates).length) {
-        res.status(400).json({ message: "No updates provided" });
+      const userId = (req as any).user.claims.sub;
+      const orgId = req.orgAuth?.organizationId ?? null;
+      const roster = await listRosterClients(userId, orgId);
+      const existing = roster.find((c) => c.id === req.params.id);
+      if (!existing) {
+        const derived = await findOwnedClient(userId, orgId, req.params.id);
+        if (derived) {
+          res.status(400).json({
+            message: "This person is on a project. Save them as a client profile to edit reusable details without changing existing rights.",
+          });
+          return;
+        }
+        res.status(404).json({ message: "Client not found" });
         return;
       }
-      const updated = await storage.updateContractCollaborator(req.params.id, updates);
-      res.json({
-        id: updated.id,
-        name: updated.name,
-        email: updated.email,
-        phone: null,
-        type: updated.role,
-        notes: null,
-        createdAt: updated.createdAt,
-      });
+      const merged = {
+        name: req.body?.name ?? existing.name,
+        email: req.body?.email === undefined ? existing.email : req.body.email,
+        phone: req.body?.phone === undefined ? existing.phone : req.body.phone,
+        company: req.body?.company === undefined ? existing.company : req.body.company,
+        type: req.body?.type ?? req.body?.role ?? existing.type,
+        role: req.body?.role ?? req.body?.type ?? existing.role,
+        notes: req.body?.notes === undefined ? existing.notes : req.body.notes,
+        defaultOwnershipPercentage:
+          req.body?.defaultOwnershipPercentage === undefined
+            ? existing.defaultOwnershipPercentage
+            : req.body.defaultOwnershipPercentage,
+        defaultRoyaltyPercentage:
+          req.body?.defaultRoyaltyPercentage === undefined
+            ? existing.defaultRoyaltyPercentage
+            : req.body.defaultRoyaltyPercentage,
+      };
+      const parsed = parseClientBody(merged);
+      if (!parsed.ok) {
+        res.status(400).json({ message: parsed.message });
+        return;
+      }
+      if (await rosterHasDuplicate(userId, orgId, parsed.data.email, parsed.data.name, existing.id)) {
+        res.status(409).json({ message: "A client with this email or name already exists." });
+        return;
+      }
+      const updated = await updateRosterClient(userId, orgId, existing.id, parsed.data);
+      if (!updated) {
+        res.status(404).json({ message: "Client not found" });
+        return;
+      }
+      logger.info("client.updated", { userId, clientId: updated.id });
+      res.json(updated);
     } catch (error) {
+      logger.error("clients.update_failed", { error: (error as Error)?.message });
       res.status(500).json({ message: "Failed to update client" });
+    }
+  };
+
+  app.patch("/api/clients/:id", ...requireActivePermission("client.manage"), updateClientHandler);
+  app.put("/api/clients/:id", ...requireActivePermission("client.manage"), updateClientHandler);
+
+  app.delete("/api/clients/:id", ...requireActivePermission("client.manage"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const userId = (req as any).user.claims.sub;
+      const orgId = req.orgAuth?.organizationId ?? null;
+      const roster = await listRosterClients(userId, orgId);
+      const existing = roster.find((c) => c.id === req.params.id);
+      if (!existing) {
+        const derived = await findOwnedClient(userId, orgId, req.params.id);
+        if (derived) {
+          res.status(400).json({
+            message: "Project contributors cannot be deleted from Clients. Remove them from the project instead.",
+          });
+          return;
+        }
+        res.status(404).json({ message: "Client not found" });
+        return;
+      }
+      const removed = await deleteRosterClient(userId, orgId, existing.id);
+      if (!removed) {
+        res.status(404).json({ message: "Client not found" });
+        return;
+      }
+      logger.info("client.deleted", { userId, clientId: existing.id });
+      res.json({ success: true });
+    } catch (error) {
+      logger.error("clients.delete_failed", { error: (error as Error)?.message });
+      res.status(500).json({ message: "Failed to delete client" });
     }
   });
 
@@ -387,6 +751,16 @@ export function registerServiceRoutes(app: Express): void {
         res.status(402).json({ message: gate.message, code: "PLAN_LIMIT" });
         return;
       }
+      const requestedClientId = typeof req.body?.clientId === "string" ? req.body.clientId.trim() : "";
+      let rosterClient: ReturnType<typeof mapRosterRow> | null = null;
+      if (requestedClientId) {
+        rosterClient = await resolveOwnedRosterClient(userId, req.orgAuth?.organizationId, requestedClientId);
+        if (!rosterClient) {
+          res.status(403).json({ message: "Client not found or not authorized." });
+          return;
+        }
+      }
+      const snapshot = rosterClient ? clientSnapshotFromRoster(rosterClient) : null;
       const created = await storage.createContract({
         title,
         type: "split-sheet",
@@ -396,9 +770,31 @@ export function registerServiceRoutes(app: Express): void {
         data: {
           songTitle: String(req.body?.songTitle ?? title).trim(),
           notes: String(req.body?.notes ?? "").trim() || null,
-          clientId: req.body?.clientId ?? null,
+          clientId: rosterClient?.id ?? null,
+          clientSnapshot: snapshot,
         },
       } as any);
+      const seedContributor = req.body?.seedContributor !== false;
+      if (rosterClient && seedContributor) {
+        try {
+          const ownership = rosterClient.defaultOwnershipPercentage != null
+            ? String(rosterClient.defaultOwnershipPercentage)
+            : "100";
+          await storage.addContractCollaborator({
+            contractId: created.id,
+            name: rosterClient.name,
+            email: rosterClient.email,
+            role: rosterClient.role || rosterClient.type || "artist",
+            ownershipPercentage: ownership,
+            status: "pending",
+          });
+        } catch (seedErr) {
+          logger.error("projects.seed_contributor_failed", {
+            projectId: created.id,
+            error: (seedErr as Error)?.message,
+          });
+        }
+      }
       res.status(201).json(contractToProject(created));
     } catch (error) {
       console.error("[PROJECTS CREATE]", error);
@@ -457,7 +853,24 @@ export function registerServiceRoutes(app: Express): void {
       const data = { ...(result.contract.data as Record<string, unknown>) };
       if (songTitle !== undefined) data.songTitle = songTitle;
       if (notes !== undefined) data.notes = notes;
-      if (clientId !== undefined) data.clientId = clientId;
+      if (clientId !== undefined) {
+        const nextId = typeof clientId === "string" && clientId.trim() ? clientId.trim() : null;
+        if (nextId) {
+          const rosterClient = await resolveOwnedRosterClient(
+            req.user.claims.sub,
+            req.orgAuth?.organizationId,
+            nextId,
+          );
+          if (!rosterClient) {
+            res.status(403).json({ message: "Client not found or not authorized." });
+            return;
+          }
+          data.clientId = rosterClient.id;
+          data.clientSnapshot = clientSnapshotFromRoster(rosterClient);
+        } else {
+          data.clientId = null;
+        }
+      }
       const updates: Partial<Contract> = { data };
       if (title) updates.title = title;
       if (status) updates.status = contractStatusFromProject(status);

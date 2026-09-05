@@ -43,13 +43,25 @@ export default function Projects() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
+  const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const prefillClientId = searchParams.get("clientId");
   const [showNew, setShowNew] = useState(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
+    searchParams.get("new") === "1" || Boolean(prefillClientId),
   );
   const [title, setTitle] = useState("");
 
+  const { data: prefillClient } = useQuery<{ id: string; name: string }>({
+    queryKey: ["/api/clients", prefillClientId],
+    queryFn: () => fetch(`/api/clients/${prefillClientId}`, { credentials: "include" }).then((r) => r.json()),
+    enabled: isAuthenticated && Boolean(prefillClientId),
+  });
+
   const createProject = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/projects", { title, songTitle: title }).then(async (r) => {
+    mutationFn: () => apiRequest("POST", "/api/projects", {
+      title,
+      songTitle: title,
+      clientId: prefillClientId || undefined,
+    }).then(async (r) => {
       const body = await r.json();
       if (!r.ok) throw new Error(body.message || "Failed to create project");
       return body;
@@ -238,6 +250,11 @@ export default function Projects() {
                 data-testid="input-project-title"
               />
             </div>
+            {prefillClient?.name && (
+              <p className="text-sm text-muted-foreground">
+                Starts from <span className="font-medium text-foreground">{prefillClient.name}</span>. Their details are copied into this project and will not change if you later edit the client profile.
+              </p>
+            )}
             <Button type="submit" className="w-full" disabled={!title.trim() || createProject.isPending}>
               {createProject.isPending ? "Creating…" : "Create project"}
             </Button>

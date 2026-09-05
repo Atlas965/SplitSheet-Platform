@@ -117,18 +117,22 @@ PostgreSQL-backed Express sessions via `connect-pg-simple`.
 
 ### Service Business Tables
 
-#### `clients`
-People and entities the operator works with.
+#### `operator_clients`
+Reusable client profiles owned by one operator/organization. Applying a profile **copies** values into a new project (`contracts.data.clientId` + `clientSnapshot`). Editing a profile never mutates confirmed rights.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | text (PK) | UUID |
-| `operatorId` | text | FK → users.id |
-| `name` | text | |
-| `email` | text | |
+| `organization_id` | text | Tenant (nullable for legacy personal rows) |
+| `created_by` | text | Operator user id |
+| `name` | text | Required |
+| `email` | text | Unique per operator when present |
 | `phone` | text | |
+| `company` | text | |
 | `type` | text | artist / producer / songwriter / group / label |
-| `notes` | text | |
+| `notes` | text | Internal only |
+| `default_ownership_percentage` | decimal | Copied into new projects, not live-linked |
+| `default_royalty_percentage` | decimal | Copied into new projects, not live-linked |
 
 #### `service_projects`
 One row per song / split sheet job.
@@ -364,12 +368,15 @@ All authenticated routes require an active session cookie. Public routes are not
 
 | Method | Route | Auth | Description |
 |---|---|---|---|
-| GET | `/api/clients` | ✅ | List operator's clients |
-| POST | `/api/clients` | ✅ | Create a new client |
+| GET | `/api/clients` | ✅ | List operator roster + people from projects |
+| POST | `/api/clients` | ✅ | Create a reusable client profile (does not change existing rights) |
+| POST | `/api/clients/import` | ✅ | CSV import scoped to the signed-in operator (max 200 rows) |
+| POST | `/api/clients/from-contributor` | ✅ | Copy a project contributor into the roster |
 | GET | `/api/clients/:id` | ✅ | Get client details |
-| PATCH | `/api/clients/:id` | ✅ | Update client |
-| DELETE | `/api/clients/:id` | ✅ | Delete client |
-| GET | `/api/clients/:id/projects` | ✅ | List projects for a client |
+| PATCH / PUT | `/api/clients/:id` | ✅ | Update a roster profile only |
+| DELETE | `/api/clients/:id` | ✅ | Delete a roster profile only |
+| GET | `/api/clients/:id/projects` | ✅ | Session history for a client |
+| GET | `/api/clients/:id/sessions` | ✅ | Alias of `/projects` |
 
 ### Service Business — Projects
 

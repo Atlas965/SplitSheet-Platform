@@ -31,7 +31,7 @@ import {
 import {
   Music2, Plus, Trash2, Send, CheckCircle2, Clock, AlertCircle,
   Copy, MoreVertical, ChevronLeft, Pencil, Archive,
-  ExternalLink, FileText,
+  ExternalLink, FileText, UserPlus,
 } from "lucide-react";
 
 interface Project {
@@ -59,7 +59,15 @@ interface Contributor {
   createdAt: string;
 }
 
-interface Client { id: string; name: string; type: string; }
+interface Client {
+  id: string;
+  name: string;
+  type: string;
+  role?: string;
+  email?: string | null;
+  defaultOwnershipPercentage?: number | null;
+  source?: "roster" | "project";
+}
 
 const ROLES = ["producer", "songwriter", "artist", "co-writer", "publisher", "mixer", "arranger", "other"];
 const PROS  = ["SOCAN", "BMI", "ASCAP", "PRS", "SESAC", "Other"];
@@ -149,6 +157,19 @@ export default function ProjectDetail() {
     onError: () => toast({ title: "Error", description: "Failed to archive.", variant: "destructive" }),
   });
 
+  const saveContributorAsClient = useMutation({
+    mutationFn: (c: Contributor) =>
+      apiRequest("POST", "/api/clients/from-contributor", {
+        projectId: id,
+        contributorId: c.id,
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Saved to clients", description: "Copied as a reusable profile. Existing rights were not changed." });
+    },
+    onError: (err: Error) => toast({ title: "Could not save client", description: err.message, variant: "destructive" }),
+  });
+
   const addContribMutation = useMutation({
     mutationFn: (data: typeof contribForm) => apiRequest("POST", `/api/projects/${id}/contributors`, data),
     onSuccess: () => {
@@ -210,8 +231,40 @@ export default function ProjectDetail() {
     toast({ title: "Copied!", description: "Confirmation link copied to clipboard." });
   };
 
+  const rosterClients = clients.filter((c) => c.source !== "project");
+
+  const applyRosterClient = (clientId: string) => {
+    const picked = rosterClients.find((c) => c.id === clientId);
+    if (!picked) return;
+    setContribForm({
+      ...contribForm,
+      name: picked.name,
+      email: picked.email ?? "",
+      role: picked.role || picked.type || contribForm.role,
+      ownershipPercentage:
+        picked.defaultOwnershipPercentage != null
+          ? String(picked.defaultOwnershipPercentage)
+          : contribForm.ownershipPercentage,
+    });
+  };
+
   const ContribFormFields = () => (
     <div className="space-y-4">
+      {rosterClients.length > 0 && (
+        <div>
+          <Label>Fill from saved client</Label>
+          <Select onValueChange={applyRosterClient}>
+            <SelectTrigger aria-label="Fill from saved client">
+              <SelectValue placeholder="Copy a client profile…" />
+            </SelectTrigger>
+            <SelectContent>
+              {rosterClients.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Name *</Label>
@@ -392,6 +445,9 @@ export default function ProjectDetail() {
                                 setEditContrib(c);
                               }}>
                                 <Pencil className="mr-2 h-4 w-4" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => saveContributorAsClient.mutate(c)}>
+                                <UserPlus className="mr-2 h-4 w-4" /> Save as client
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => setDeleteContrib(c)}>

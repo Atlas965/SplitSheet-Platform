@@ -61,6 +61,38 @@ export async function runCoreSchemaMigrations(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_song_assets_organization_id ON song_assets (organization_id);
   `);
   await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS operator_clients (
+      id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+      organization_id varchar,
+      created_by varchar NOT NULL,
+      name varchar NOT NULL,
+      email varchar,
+      phone varchar,
+      company varchar,
+      type varchar DEFAULT 'artist',
+      notes text,
+      default_ownership_percentage decimal(5, 2),
+      default_royalty_percentage decimal(5, 2),
+      created_at timestamp DEFAULT now(),
+      updated_at timestamp DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    ALTER TABLE operator_clients
+      ADD COLUMN IF NOT EXISTS company varchar,
+      ADD COLUMN IF NOT EXISTS default_ownership_percentage decimal(5, 2),
+      ADD COLUMN IF NOT EXISTS default_royalty_percentage decimal(5, 2);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_created_by ON operator_clients (created_by);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_organization_id ON operator_clients (organization_id);
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_operator_clients_created_by_email ON operator_clients (created_by, email);
+  `);
+  await db.execute(sql`
     UPDATE organization_members SET role = 'operator' WHERE role = 'member';
   `);
 

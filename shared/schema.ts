@@ -181,6 +181,23 @@ export const voiceUserMemory = pgTable("voice_user_memory", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/** Operator roster — reusable reference. Copied into projects; never live-linked to confirmed rights. */
+export const operatorClients = pgTable("operator_clients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id"),
+  createdBy: varchar("created_by").notNull(),
+  name: varchar("name").notNull(),
+  email: varchar("email"),
+  phone: varchar("phone"),
+  company: varchar("company"),
+  type: varchar("type").default("artist"),
+  notes: text("notes"),
+  defaultOwnershipPercentage: decimal("default_ownership_percentage", { precision: 5, scale: 2 }),
+  defaultRoyaltyPercentage: decimal("default_royalty_percentage", { precision: 5, scale: 2 }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Contracts
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
