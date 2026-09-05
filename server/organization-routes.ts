@@ -59,7 +59,9 @@ export function registerOrganizationRoutes(app: Express): void {
     const userId = (req as any).user.claims.sub;
     try {
       await ensurePersonalOrganization(userId);
-      const orgs = await storage.getOrganizationsForUser(userId);
+      const { isPersonalWorkspaceOrg } = await import("@shared/feature-policy");
+      const orgs = (await storage.getOrganizationsForUser(userId))
+        .filter((org) => !isPersonalWorkspaceOrg(org));
       res.json(orgs);
     } catch (error) {
       console.error("[ORG LIST ERROR]", error);

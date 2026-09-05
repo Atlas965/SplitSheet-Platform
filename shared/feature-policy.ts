@@ -126,6 +126,23 @@ export function titlesLookSimilar(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+/** Personal workspaces stay private until an operator sets a public slug. */
+export function isPublishedStudio(input: {
+  publicSlug?: string | null;
+  verificationStatus?: string | null;
+}): boolean {
+  return Boolean(input.publicSlug && String(input.publicSlug).trim());
+}
+
+/** Auto-created tenant shells from ensurePersonalOrganization. */
+export function isPersonalWorkspaceOrg(input: { name?: string | null; type?: string | null }): boolean {
+  return Boolean(
+    input.type === "studio" &&
+    typeof input.name === "string" &&
+    input.name.trim().toLowerCase().endsWith(" workspace"),
+  );
+}
+
 export function generateReferralCode(seed: string): string {
   const clean = seed.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 6) || "STUDIO";
   const suffix = Math.abs(hashString(seed)).toString(36).toUpperCase().slice(0, 4);

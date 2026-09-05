@@ -6,6 +6,8 @@ import {
   parseApiPage,
   titlesLookSimilar,
   validateCustomFieldValue,
+  isPublishedStudio,
+  isPersonalWorkspaceOrg,
 } from "../../shared/feature-policy";
 
 describe("reminder stages", () => {
@@ -33,5 +35,12 @@ describe("custom fields and analytics helpers", () => {
   it("detects similar titles and common splits", () => {
     expect(titlesLookSimilar("Midnight Drive", "midnight-drive")).toBe(true);
     expect(mostCommonSplit([50, 50, 60])?.label).toBe("50.00%");
+  });
+  it("keeps unpublished workspace orgs off the public studio surface", () => {
+    expect(isPublishedStudio({ publicSlug: null, verificationStatus: "unverified" })).toBe(false);
+    expect(isPublishedStudio({ publicSlug: "  ", verificationStatus: "verified" })).toBe(false);
+    expect(isPublishedStudio({ publicSlug: "apex-studio" })).toBe(true);
+    expect(isPersonalWorkspaceOrg({ name: "Alex Workspace", type: "studio" })).toBe(true);
+    expect(isPersonalWorkspaceOrg({ name: "Apex Studio", type: "studio" })).toBe(false);
   });
 });

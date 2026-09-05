@@ -253,7 +253,7 @@ export default function ConfirmSplit() {
           {data.studio?.logoUrl
             ? <img src={data.studio.logoUrl} alt="" width={28} height={28} style={{ borderRadius: "50%", objectFit: "cover" }} />
             : <Music2 size={20} color="#3b6ef5" />}
-          <span style={{ fontWeight: 700, fontSize: "18px", color: "#1a1d2e" }}>{data.studio?.name || "SplitSheet"}</span>
+          <span style={{ fontWeight: 700, fontSize: "18px", color: "#1a1d2e" }}>{data.studio?.name ?? "SplitSheet"}</span>
         </div>
         {data.studio?.verificationStatus === "verified" && (
           <p style={{ fontSize: "12px", color: "#1a7a52", marginBottom: 10 }} title="Verification indicates that this studio has been reviewed by SplitSheet according to its verification process.">

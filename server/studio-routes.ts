@@ -7,6 +7,7 @@ import { requireActivePermission } from "./rbac-middleware";
 import type { OrgAuthedRequest } from "./rbac-middleware";
 import { logger } from "./logger";
 import { ensureProductionFeatureSchema } from "./feature-schema";
+import { isPublishedStudio } from "@shared/feature-policy";
 
 function publicStudio(row: Record<string, unknown>) {
   return {
@@ -43,13 +44,40 @@ export function registerStudioRoutes(app: Express): void {
   app.get("/api/studio/:id", async (req: Request, res: Response) => {
     try {
       const studio = await loadStudio(req.params.id);
-      if (!studio) {
+      if (!studio || !isPublishedStudio({ publicSlug: studio.public_slug as string | null })) {
         res.status(404).json({ message: "Studio not found" });
         return;
       }
       res.json(publicStudio(studio));
     } catch (error) {
       res.status(500).json({ message: "Failed to load studio" });
+    }
+  });
+
+  app.delete("/api/studio/profile", ...requireActivePermission("project.update"), async (req: OrgAuthedRequest, res: Response) => {
+    try {
+      const orgId = req.orgAuth?.organizationId;
+      if (!orgId) {
+        res.status(403).json({ message: "No active organization" });
+        return;
+      }
+      await ensureProductionFeatureSchema();
+      await db.execute(sql`
+        UPDATE organizations SET
+          logo_url = NULL,
+          phone = NULL,
+          address = NULL,
+          public_slug = NULL,
+          verification_status = 'unverified',
+          verified_at = NULL,
+          badge_tier = 'none',
+          updated_at = now()
+        WHERE id = ${orgId}
+      `);
+      logger.info("studio.profile_cleared", { organizationId: orgId });
+      res.json({ ok: true, published: false });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to clear studio profile" });
     }
   });
 
@@ -90,6 +118,7 @@ export function registerStudioRoutes(app: Express): void {
     const rows = await db.execute(sql`
       SELECT id, sl_org_id, name, website, verification_status, verified_at, badge_tier
       FROM organizations
+      WHERE NOT (type = 'studio' AND name ILIKE '% Workspace')
       ORDER BY created_at DESC
       LIMIT 100
     `);
@@ -148,12 +177,13 @@ export function registerStudioRoutes(app: Express): void {
 export async function studioForContract(contractId: string) {
   const rows = await db.execute(sql`
     SELECT o.id, o.sl_org_id, o.name, o.website, o.logo_url, o.phone,
-           o.verification_status, o.verified_at, o.badge_tier
+           o.verification_status, o.verified_at, o.badge_tier, o.public_slug
     FROM contracts c
     JOIN organizations o ON o.id = c.organization_id
     WHERE c.id = ${contractId}
     LIMIT 1
   `);
   const row = rows.rows[0] as Record<string, unknown> | undefined;
-  return row ? publicStudio(row) : null;
+  if (!row || !isPublishedStudio({ publicSlug: row.public_slug as string | null })) return null;
+  return publicStudio(row);
 }
