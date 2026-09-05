@@ -115,6 +115,22 @@ export default function ProjectDetail() {
     queryKey: ["/api/clients"],
     enabled: isAuthenticated,
   });
+  const { data: historySuggestions } = useQuery<{
+    previousSplitPatterns: { label: string; count: number }[];
+    sourceSessions: { projectId: string; title: string; date: string; ownershipPercentage: number }[];
+    conflicts: { title: string; reason: string }[];
+    disclaimer: string;
+  }>({
+    queryKey: ["/api/copilot/history-suggestions", contribForm.email, contribForm.name, project?.songTitle],
+    queryFn: () => {
+      const q = new URLSearchParams();
+      if (contribForm.email) q.set("email", contribForm.email);
+      if (contribForm.name) q.set("name", contribForm.name);
+      if (project?.songTitle) q.set("title", project.songTitle);
+      return fetch(`/api/copilot/history-suggestions?${q}`, { credentials: "include" }).then((r) => r.json());
+    },
+    enabled: isAuthenticated && Boolean(contribForm.email || contribForm.name),
+  });
 
   const { data: recommendationData } = useQuery<{
     recommendations: Array<{
@@ -264,6 +280,21 @@ export default function ProjectDetail() {
 
   const ContribFormFields = () => (
     <div className="space-y-4">
+      {historySuggestions && (historySuggestions.previousSplitPatterns?.length > 0 || historySuggestions.conflicts?.length > 0) && (
+        <div className="rounded-lg border border-border p-3 text-xs space-y-1">
+          <p className="font-medium">Previous split patterns</p>
+          {historySuggestions.previousSplitPatterns.map((p) => (
+            <p key={p.label}>{p.label} — {p.count} time{p.count === 1 ? "" : "s"}</p>
+          ))}
+          {historySuggestions.sourceSessions.slice(0, 3).map((s) => (
+            <p key={s.projectId} className="text-muted-foreground">{s.title} · {s.ownershipPercentage}%</p>
+          ))}
+          {historySuggestions.conflicts.map((c) => (
+            <p key={c.title} className="text-amber-700 dark:text-amber-300">Potential conflict: {c.reason}</p>
+          ))}
+          <p className="text-muted-foreground">{historySuggestions.disclaimer}</p>
+        </div>
+      )}
       {rosterClients.length > 0 && (
         <div>
           <Label>Fill from saved client</Label>
