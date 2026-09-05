@@ -59,6 +59,8 @@ async function runBootMigrations(): Promise<void> {
   await runCoreSchemaMigrations();
   await runSecurityEngineMigrations();
   await runLegalDocumentMigrations();
+  const { ensureProductionFeatureSchema } = await import("./feature-schema");
+  await ensureProductionFeatureSchema();
   log("Database schema up to date");
 }
 

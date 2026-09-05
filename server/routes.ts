@@ -47,6 +47,12 @@ import { registerCreatorRoutes } from "./creator-routes";
 import { registerRightsRoutes } from "./rights-routes";
 import { registerLegalRoutes } from "./legal-routes";
 import { registerTemplateRoutes } from "./template-routes";
+import { registerReminderRoutes } from "./reminder-routes";
+import { registerStudioRoutes } from "./studio-routes";
+import { registerCustomFieldRoutes } from "./custom-field-routes";
+import { registerCopilotHistoryRoutes } from "./copilot-history";
+import { registerV1ApiRoutes } from "./v1-api-routes";
+import { registerReferralRoutes } from "./referral-routes";
 import { syncAgreementToRightsLedger } from "./agreement-ledger";
 import { isDraftableStatus, validateTemplateFieldValues } from "@shared/agreement-catalog";
 import { isAdmin } from "./adminAuth";
@@ -1074,32 +1080,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const projects = await storage.getContracts(userId);
       let clientCount = 0;
       let contributorCount = 0;
+      let averageConfirmationHours: number | null = null;
       const confirmations: { status?: string | null }[] = [];
       try {
         const clients = await db.execute(sql`
           SELECT COUNT(*) AS cnt FROM operator_clients WHERE created_by = ${userId}
         `);
         clientCount = Number((clients.rows[0] as any)?.cnt ?? 0);
-        for (const project of projects) {
-          const collabs = await storage.getContractCollaborators(project.id);
-          contributorCount += collabs.length;
-          const conf = await db.execute(sql`
-            SELECT status FROM split_confirmations WHERE contract_id = ${project.id}
-          `);
-          for (const row of conf.rows as any[]) {
-            confirmations.push({ status: row.status });
-          }
-        }
+        const contrib = await db.execute(sql`
+          SELECT COUNT(*) AS cnt
+          FROM contract_collaborators cc
+          JOIN contracts c ON c.id = cc.contract_id
+          WHERE c.created_by = ${userId}
+        `);
+        contributorCount = Number((contrib.rows[0] as any)?.cnt ?? 0);
+        const conf = await db.execute(sql`
+          SELECT sc.status
+          FROM split_confirmations sc
+          JOIN contracts c ON c.id = sc.contract_id
+          WHERE c.created_by = ${userId}
+        `);
+        for (const row of conf.rows as any[]) confirmations.push({ status: row.status });
+        const avg = await db.execute(sql`
+          SELECT AVG(EXTRACT(EPOCH FROM (sc.confirmed_at - sc.sent_at)) / 3600.0) AS hours
+          FROM split_confirmations sc
+          JOIN contracts c ON c.id = sc.contract_id
+          WHERE c.created_by = ${userId}
+            AND sc.confirmed_at IS NOT NULL
+            AND sc.sent_at IS NOT NULL
+        `);
+        const hours = Number((avg.rows[0] as any)?.hours);
+        averageConfirmationHours = Number.isFinite(hours) ? Math.round(hours * 10) / 10 : null;
       } catch (inner: any) {
         console.warn("[analytics/workspace] extra counts skipped:", inner?.message);
       }
       res.json(
         summarizeWorkspace({
-          projects,
+          projects: projects.map((p) => ({
+            status: p.status,
+            type: p.type,
+            createdAt: p.createdAt,
+            clientId: ((p.data ?? {}) as Record<string, unknown>).clientId as string | null,
+          })),
           confirmations,
           clientCount,
           contributorCount,
           tier: user?.subscriptionTier,
+          averageConfirmationHours,
         }),
       );
     } catch (error: any) {
@@ -2246,6 +2273,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // SoundLedger CoPilot AI assistant
   registerCopilotRoutes(app);
+  registerCopilotHistoryRoutes(app);
+  registerReminderRoutes(app);
+  registerStudioRoutes(app);
+  registerCustomFieldRoutes(app);
+  registerV1ApiRoutes(app);
+  registerReferralRoutes(app);
 
   // Copilot Voice Assistant orchestration layer (no UI)
   registerVoiceRoutes(app);

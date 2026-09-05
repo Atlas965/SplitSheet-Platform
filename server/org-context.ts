@@ -60,6 +60,8 @@ export async function ensureOrgTenantSchema(): Promise<void> {
   await ensureContributorTokenSchema();
   await ensureLegalOrgAcceptanceSchema();
   await ensureOrgStripeCustomerSchema();
+  const { ensureProductionFeatureSchema } = await import("./feature-schema");
+  await ensureProductionFeatureSchema();
 }
 
 /**

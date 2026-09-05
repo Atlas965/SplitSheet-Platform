@@ -105,6 +105,34 @@ export function confirmationLinkEmail(params: {
   return { subject, html, text };
 }
 
+export function reminderLinkEmail(params: {
+  contributorName: string;
+  songTitle: string;
+  confirmUrl: string;
+  stage: string;
+}): { subject: string; html: string; text: string } {
+  const { contributorName, songTitle, confirmUrl, stage } = params;
+  const subject = `Reminder: confirm your split for "${songTitle}"`;
+  const text =
+    `Hi ${contributorName},\n\n` +
+    `This is a reminder to review and confirm your split for "${songTitle}".\n\n` +
+    `Confirm here: ${confirmUrl}\n\n` +
+    `If you already confirmed, you can ignore this email.\n\n— SplitSheet`;
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1a1a1a;">
+      <h2>Reminder: confirm your split</h2>
+      <p>Hi ${contributorName},</p>
+      <p>Your confirmation for "${songTitle}" is still pending (${stage.replace("_", " ")}).</p>
+      <p style="margin:24px 0;">
+        <a href="${confirmUrl}" style="background:#111827;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;">
+          Review &amp; Confirm Split
+        </a>
+      </p>
+      <p style="font-size:12px;color:#999;">SplitSheet · SoundLedger Technologies</p>
+    </div>`;
+  return { subject, html, text };
+}
+
 /** Identity verification code email template. */
 export function verificationCodeEmail(code: string): { subject: string; html: string; text: string } {
   const subject = "Your SplitSheet verification code";
