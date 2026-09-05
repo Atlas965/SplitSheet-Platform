@@ -171,8 +171,17 @@ export async function handlePublicConfirmGet(
 
     await recordConfirmationAccess(req, { id: row.id, contract_id: resolvedContractId }, method);
 
+    let studio = null;
+    try {
+      const { studioForContract } = await import("./studio-routes");
+      studio = await studioForContract(resolvedContractId);
+    } catch {
+      studio = null;
+    }
+
     res.json({
       alreadyConfirmed: false,
+      studio,
       contractTitle: row.contract_title,
       collaboratorName: row.collaborator_name,
       collaboratorEmail: row.collaborator_email,

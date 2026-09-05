@@ -25,6 +25,11 @@ interface ConfirmPageData {
   collaboratorRole:    string;
   ownershipPercentage: number;
   expiresAt?:          string;
+  studio?: {
+    name: string;
+    logoUrl?: string | null;
+    verificationStatus?: string;
+  } | null;
   allCollaborators:    { name: string; role: string; ownershipPercentage: number }[];
 }
 
@@ -245,9 +250,16 @@ export default function ConfirmSplit() {
       <div style={styles.card}>
         {/* Header */}
         <div style={styles.logo}>
-          <Music2 size={20} color="#3b6ef5" />
-          <span style={{ fontWeight: 700, fontSize: "18px", color: "#1a1d2e" }}>SplitSheet</span>
+          {data.studio?.logoUrl
+            ? <img src={data.studio.logoUrl} alt="" width={28} height={28} style={{ borderRadius: "50%", objectFit: "cover" }} />
+            : <Music2 size={20} color="#3b6ef5" />}
+          <span style={{ fontWeight: 700, fontSize: "18px", color: "#1a1d2e" }}>{data.studio?.name || "SplitSheet"}</span>
         </div>
+        {data.studio?.verificationStatus === "verified" && (
+          <p style={{ fontSize: "12px", color: "#1a7a52", marginBottom: 10 }} title="Verification indicates that this studio has been reviewed by SplitSheet according to its verification process.">
+            Verified by SplitSheet
+          </p>
+        )}
 
         <p style={{ fontSize: "12px", fontWeight: 600, color: "#7c84a0", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>
           Split Confirmation

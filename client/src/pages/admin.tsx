@@ -390,7 +390,7 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="overview">
             <Settings className="h-4 w-4 mr-2" />
             Overview
@@ -407,6 +407,7 @@ export default function AdminPage() {
             <Activity className="h-4 w-4 mr-2" />
             Monitoring
           </TabsTrigger>
+          <TabsTrigger value="studios">Studios</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-6">
@@ -498,7 +499,55 @@ export default function AdminPage() {
         <TabsContent value="monitoring" className="mt-6">
           <SystemMonitoring />
         </TabsContent>
+
+        <TabsContent value="studios" className="mt-6">
+          <StudioVerificationAdmin />
+        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function StudioVerificationAdmin() {
+  const { toast } = useToast();
+  const { data: studios = [] } = useQuery<any[]>({ queryKey: ["/api/admin/studios"] });
+  const verify = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/studios/${id}/verify`, { tier: "standard" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/studios"] });
+      toast({ title: "Studio verified" });
+    },
+  });
+  const unverify = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/admin/studios/${id}/unverify`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/studios"] });
+      toast({ title: "Studio unverified" });
+    },
+  });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Studio verification</CardTitle>
+        <CardDescription>
+          Verification means SplitSheet reviewed the studio. It does not imply legal accreditation or licensing.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {studios.map((studio) => (
+          <div key={studio.id} className="flex items-center justify-between gap-3 border-b border-border pb-2">
+            <div>
+              <p className="font-medium">{studio.name}</p>
+              <p className="text-xs text-muted-foreground">{studio.verification_status} · {studio.badge_tier}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => verify.mutate(studio.id)}>Verify</Button>
+              <Button size="sm" variant="outline" onClick={() => unverify.mutate(studio.id)}>Unverify</Button>
+            </div>
+          </div>
+        ))}
+        {studios.length === 0 && <p className="text-sm text-muted-foreground">No studios yet.</p>}
+      </CardContent>
+    </Card>
   );
 }

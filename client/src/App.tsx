@@ -32,6 +32,7 @@ import TermsGate from "@/components/TermsGate";
 import OperatorLayout from "@/components/OperatorLayout";
 import ClientDetail from "@/pages/client-detail";
 import ProjectDetail from "@/pages/project-detail";
+import StudioPublic from "@/pages/studio-public";
 
 function RedirectTo({ href }: { href: string }) {
   const [, setLocation] = useLocation();
@@ -91,12 +92,13 @@ function Router() {
   const { isAuthenticated, isLoading } = useAuth();
   const showCopilot = isAuthenticated;
   const publicConfirm = window.location.pathname.startsWith("/confirm/");
+  const publicStudio = window.location.pathname.startsWith("/studio/");
   const publicMarketing =
     window.location.pathname === "/" || window.location.pathname === "/login";
 
   // Do not block landing/login/confirm on a slow /api/auth/user call.
   // Deep authenticated links still wait briefly so the shell does not flash.
-  if (isLoading && !publicConfirm && !publicMarketing) {
+  if (isLoading && !publicConfirm && !publicMarketing && !publicStudio) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" aria-label="Loading" />
@@ -109,6 +111,7 @@ function Router() {
       <Switch>
         <Route path="/confirm/:contractId/:token" component={ConfirmSplit} />
         <Route path="/confirm/:token" component={ConfirmSplit} />
+        <Route path="/studio/:id" component={StudioPublic} />
         {isAuthenticated && <Route component={AuthenticatedRoutes} />}
         <Route path="/login" component={Login} />
         <Route path="/" component={Landing} />
